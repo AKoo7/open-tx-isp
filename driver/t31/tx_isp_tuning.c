@@ -20873,6 +20873,57 @@ static void tisp_ccm_fill_forced_reg_data(int32_t *reg_data)
     reg_data[8] = tisp_ccm_encode_forced_coeff(tisp_force_ccm_b);
 }
 
+/* ccm_ctrl layout (40 bytes, as exchanged with SetCCMAttr/GetCCMAttr):
+ * byte 0 = manual flag (signed char, 1 = manual), byte 1 = saturation flag,
+ * bytes 4..39 = nine matrix words used in manual mode. */
+static inline int8_t tisp_ccm_ctrl_byte(int idx)
+{
+    return ((const int8_t *)&ccm_ctrl)[idx];
+}
+
+/* Load the six CCM matrices and both saturation lists from the tuning bank
+ * (or the built-in fallback). */
+static void tiziano_ccm_load_matrices(void)
+{
+    const u8 *params = (const u8 *)(tparams_active ? tparams_active : tparams_day);
+    bool use_tuning = params && tuning_bin_loaded;
+
+    if (use_tuning) {
+        memcpy(tiziano_ccm_a_linear, params + CCM_TPARAMS_A_LINEAR_OFF,
+               sizeof(tiziano_ccm_a_linear));
+        memcpy(tiziano_ccm_t_linear, params + CCM_TPARAMS_T_LINEAR_OFF,
+               sizeof(tiziano_ccm_t_linear));
+        memcpy(tiziano_ccm_d_linear, params + CCM_TPARAMS_D_LINEAR_OFF,
+               sizeof(tiziano_ccm_d_linear));
+        memcpy(cm_sat_list, params + CCM_TPARAMS_SAT_LIST_OFF,
+               sizeof(cm_sat_list));
+        memcpy(tiziano_ccm_a_wdr, params + CCM_TPARAMS_A_WDR_OFF,
+               sizeof(tiziano_ccm_a_wdr));
+        memcpy(tiziano_ccm_t_wdr, params + CCM_TPARAMS_T_WDR_OFF,
+               sizeof(tiziano_ccm_t_wdr));
+        memcpy(tiziano_ccm_d_wdr, params + CCM_TPARAMS_D_WDR_OFF,
+               sizeof(tiziano_ccm_d_wdr));
+        memcpy(cm_sat_list_wdr, params + CCM_TPARAMS_SAT_LIST_WDR_OFF,
+               sizeof(cm_sat_list_wdr));
+    } else {
+        memcpy(tiziano_ccm_a_linear, oem_ccm_a_linear,
+               sizeof(tiziano_ccm_a_linear));
+        memcpy(tiziano_ccm_t_linear, oem_ccm_t_linear,
+               sizeof(tiziano_ccm_t_linear));
+        memcpy(tiziano_ccm_d_linear, oem_ccm_d_linear,
+               sizeof(tiziano_ccm_d_linear));
+        memcpy(cm_sat_list, oem_cm_sat_list, sizeof(cm_sat_list));
+        memcpy(tiziano_ccm_a_wdr, oem_ccm_a_wdr,
+               sizeof(tiziano_ccm_a_wdr));
+        memcpy(tiziano_ccm_t_wdr, oem_ccm_t_wdr,
+               sizeof(tiziano_ccm_t_wdr));
+        memcpy(tiziano_ccm_d_wdr, oem_ccm_d_wdr,
+               sizeof(tiziano_ccm_d_wdr));
+        memcpy(cm_sat_list_wdr, oem_cm_sat_list_wdr,
+               sizeof(cm_sat_list_wdr));
+    }
+}
+
 /* tiziano_ccm_params_refresh - refresh CCM from the active sensor IQ block.
  * Matrix/saturation tables are only refreshed while ccm_ctrl[0] == 0; DP
  * config, EV lists, and AWB thresholds are always copied, matching OEM. */
@@ -20887,42 +20938,8 @@ void tiziano_ccm_params_refresh(void)
     if (ourISPdev && ourISPdev->sensor_name[0])
         sensor_name = ourISPdev->sensor_name;
 
-    if (ccm_ctrl.params[0] == 0) {
-        if (use_tuning) {
-            memcpy(tiziano_ccm_a_linear, params + CCM_TPARAMS_A_LINEAR_OFF,
-                   sizeof(tiziano_ccm_a_linear));
-            memcpy(tiziano_ccm_t_linear, params + CCM_TPARAMS_T_LINEAR_OFF,
-                   sizeof(tiziano_ccm_t_linear));
-            memcpy(tiziano_ccm_d_linear, params + CCM_TPARAMS_D_LINEAR_OFF,
-                   sizeof(tiziano_ccm_d_linear));
-            memcpy(cm_sat_list, params + CCM_TPARAMS_SAT_LIST_OFF,
-                   sizeof(cm_sat_list));
-            memcpy(tiziano_ccm_a_wdr, params + CCM_TPARAMS_A_WDR_OFF,
-                   sizeof(tiziano_ccm_a_wdr));
-            memcpy(tiziano_ccm_t_wdr, params + CCM_TPARAMS_T_WDR_OFF,
-                   sizeof(tiziano_ccm_t_wdr));
-            memcpy(tiziano_ccm_d_wdr, params + CCM_TPARAMS_D_WDR_OFF,
-                   sizeof(tiziano_ccm_d_wdr));
-            memcpy(cm_sat_list_wdr, params + CCM_TPARAMS_SAT_LIST_WDR_OFF,
-                   sizeof(cm_sat_list_wdr));
-        } else {
-            memcpy(tiziano_ccm_a_linear, oem_ccm_a_linear,
-                   sizeof(tiziano_ccm_a_linear));
-            memcpy(tiziano_ccm_t_linear, oem_ccm_t_linear,
-                   sizeof(tiziano_ccm_t_linear));
-            memcpy(tiziano_ccm_d_linear, oem_ccm_d_linear,
-                   sizeof(tiziano_ccm_d_linear));
-            memcpy(cm_sat_list, oem_cm_sat_list, sizeof(cm_sat_list));
-            memcpy(tiziano_ccm_a_wdr, oem_ccm_a_wdr,
-                   sizeof(tiziano_ccm_a_wdr));
-            memcpy(tiziano_ccm_t_wdr, oem_ccm_t_wdr,
-                   sizeof(tiziano_ccm_t_wdr));
-            memcpy(tiziano_ccm_d_wdr, oem_ccm_d_wdr,
-                   sizeof(tiziano_ccm_d_wdr));
-            memcpy(cm_sat_list_wdr, oem_cm_sat_list_wdr,
-                   sizeof(cm_sat_list_wdr));
-        }
-    }
+    if (tisp_ccm_ctrl_byte(0) == 0)
+        tiziano_ccm_load_matrices();
 
     if (use_tuning) {
         memcpy(dp_blob, params + CCM_TPARAMS_DP_CFG_OFF, sizeof(dp_blob));
@@ -20943,7 +20960,7 @@ void tiziano_ccm_params_refresh(void)
     pr_info("tiziano_ccm_params_refresh: sensor=%s source=%s ctrl0=%u "
         "D=%04x,%04x,%04x T=%04x,%04x,%04x A=%04x,%04x,%04x "
         "sat0=%u ev0=%u awb=%u,%u\n",
-        sensor_name, source, ccm_ctrl.params[0],
+        sensor_name, source, ccm_ctrl.params[0] & 0xff,
         (uint32_t)tiziano_ccm_d_linear[0] & 0x3fff,
         (uint32_t)tiziano_ccm_d_linear[1] & 0x3fff,
         (uint32_t)tiziano_ccm_d_linear[2] & 0x3fff,
@@ -21182,88 +21199,100 @@ int tisp_ccm_get_attr(void *out)
     return 0;
 }
 
-/* OEM EXACT: tisp_ccm_set_attr — set CCM matrices from user or identity.
- * Decompiled at 0x278dc. If ccm_ctrl[0]==1 (manual), loads identity matrix.
- * Otherwise reloads from tuning binary originals. */
+/* tisp_ccm_set_attr - SetCCMAttr core.
+ *
+ * Stock stores the 40-byte attribute, then in manual mode (byte 0 == 1)
+ * installs the user matrix from bytes 4..39 as all six CCMs (linear and
+ * WDR, A/T/D) and, unless byte 1 requests keeping the saturation curve,
+ * flattens both saturation lists to 0x100.  Any other mode reloads the
+ * matrices and saturation lists from the tuning bank.  It finishes with a
+ * forced CCM update.  The old code compared whole words instead of bytes
+ * and copied the tuned D matrix instead of the user matrix (B10). */
 int tisp_ccm_set_attr(const void *in)
 {
     int i;
+
     memcpy(&ccm_ctrl, in, 0x28);
 
-    if ((int32_t)ccm_ctrl.params[0] != 1) {
-        /* Auto mode: reload original CCM matrices from tuning binary */
-        tiziano_ccm_params_refresh();
-    } else {
-        /* Manual mode: set all CCM matrices to identity-like values
-         * OEM copies from a fixed BSS array (0xb52f8) */
-        memcpy(tiziano_ccm_a_linear, tiziano_ccm_d_linear, 0x24);
-        memcpy(tiziano_ccm_t_linear, tiziano_ccm_d_linear, 0x24);
-        memcpy(tiziano_ccm_a_wdr, tiziano_ccm_d_linear, 0x24);
-        memcpy(tiziano_ccm_t_wdr, tiziano_ccm_d_linear, 0x24);
-        memcpy(tiziano_ccm_d_wdr, tiziano_ccm_d_linear, 0x24);
+    if (tisp_ccm_ctrl_byte(0) == 1) {
+        const int32_t *user = (const int32_t *)&ccm_ctrl.params[1];
 
-        if ((int32_t)ccm_ctrl.params[1] == 0) {
+        memcpy(tiziano_ccm_a_linear, user, 0x24);
+        memcpy(tiziano_ccm_t_linear, user, 0x24);
+        memcpy(tiziano_ccm_d_linear, user, 0x24);
+        memcpy(tiziano_ccm_a_wdr, user, 0x24);
+        memcpy(tiziano_ccm_t_wdr, user, 0x24);
+        memcpy(tiziano_ccm_d_wdr, user, 0x24);
+
+        if (tisp_ccm_ctrl_byte(1) == 0) {
             for (i = 0; i < 9; i++) {
                 cm_sat_list_wdr[i] = 0x100;
                 cm_sat_list[i] = 0x100;
             }
         }
+    } else {
+        tiziano_ccm_load_matrices();
     }
 
     ccm_real = 1;
     return jz_isp_ccm();
 }
 
-/* OEM EXACT: tisp_g_ccm_attr — get CCM attr routing based on bypass bits.
- * Decompiled at 0x63b34. Routes to CCM or BCSH get based on bypass state. */
+/* tisp_g_ccm_attr - GetCCMAttr (0x8000100), routed on the top bypass word:
+ * bit 16 set -> CCM attribute only; bit 9 set -> BCSH attribute only;
+ * otherwise the CCM attribute with byte 1 raised to 1 when BCSH reports its
+ * own byte-1 flag set. */
 int tisp_g_ccm_attr(void *out)
 {
     uint32_t reg_0c = system_reg_read(0xc);
 
     if ((reg_0c & 0x10000) != 0) {
-        /* MDNS bypassed: use CCM directly */
         tisp_ccm_get_attr(out);
-    } else if ((reg_0c & 0x200) == 0) {
-        /* CCM enabled: get CCM, check BCSH for manual flag */
-        tisp_ccm_get_attr(out);
-        {
-            uint8_t bcsh_buf[0x28];
-            tisp_bcsh_get_attr(bcsh_buf);
-            if ((int8_t)bcsh_buf[1] == 1)
-                ((uint8_t *)out)[4] = 1; /* copy manual flag */
-        }
-    } else {
-        /* CCM bypassed: get from BCSH */
+    } else if ((reg_0c & 0x200) != 0) {
         tisp_bcsh_get_attr(out);
+    } else {
+        uint8_t bcsh_buf[0x28];
+
+        tisp_ccm_get_attr(out);
+        tisp_bcsh_get_attr(bcsh_buf);
+        if ((int8_t)bcsh_buf[1] == 1)
+            ((uint8_t *)out)[1] = 1;
     }
     return 0;
 }
 
-/* OEM EXACT: tisp_s_ccm_attr — set CCM attr routing based on bypass bits.
- * Decompiled at 0x63be0. Routes to CCM and/or BCSH set based on bypass state. */
+/* tisp_s_ccm_attr - SetCCMAttr (0x8000100), routed on the top bypass word
+ * like the getter.  In the combined case stock hands BCSH a copy of the
+ * attribute whose matrix is replaced by the identity, and moves a set
+ * byte-1 (saturation) flag from the CCM attribute to the BCSH copy.  The
+ * previous version tested and cleared the wrong bytes (5 and 4) and left
+ * the user matrix in the BCSH copy. */
 int tisp_s_ccm_attr(const void *in)
 {
+    static const int32_t ccm_identity[9] = {	/* Q10 unity */
+        0x400, 0, 0,
+        0, 0x400, 0,
+        0, 0, 0x400,
+    };
     uint32_t reg_0c = system_reg_read(0xc);
+    uint8_t ccm_buf[0x28];
+    uint8_t bcsh_buf[0x28];
 
-    if ((reg_0c & 0x10000) == 0) {
-        /* MDNS not bypassed */
-        if ((reg_0c & 0x200) == 0) {
-            /* CCM enabled: set CCM, then set BCSH too */
-            uint8_t buf[0x28];
-            memcpy(buf, in, 0x28);
-            if ((int8_t)buf[4+1] != 0) {
-                buf[4+1] = 1;
-                ((uint8_t *)in)[4] = 0; /* clear in original */
-            }
-            tisp_ccm_set_attr(in);
-            tisp_bcsh_set_attr(buf);
-        } else {
-            /* CCM bypassed: route to BCSH only */
-            tisp_bcsh_set_attr(in);
-        }
+    memcpy(ccm_buf, in, sizeof(ccm_buf));
+
+    if ((reg_0c & 0x10000) != 0) {
+        tisp_ccm_set_attr(ccm_buf);
+    } else if ((reg_0c & 0x200) != 0) {
+        tisp_bcsh_set_attr(ccm_buf);
     } else {
-        /* MDNS bypassed: set CCM directly */
-        tisp_ccm_set_attr(in);
+        memcpy(bcsh_buf, ccm_buf, sizeof(bcsh_buf));
+        memcpy(bcsh_buf + 4, ccm_identity, sizeof(ccm_identity));
+        if ((int8_t)ccm_buf[1] != 0) {
+            bcsh_buf[1] = 1;
+            ccm_buf[1] = 0;
+        }
+        tisp_ccm_set_attr(ccm_buf);
+        tisp_bcsh_set_attr(bcsh_buf);
     }
     return 0;
 }
