@@ -8474,7 +8474,7 @@ static int apical_isp_core_ops_g_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
             case 0x80000e0: { // GET FPS
                 uint32_t fps_packed = tisp_si_fps(&sensor_info);
 
-                pr_info("Get FPS\n");
+                pr_debug("Get FPS\n");
 
                 /* The OEM control returns the packed rational directly in
                  * the eight-byte G_CTRL payload.  Prefer the live sensor's
@@ -8520,7 +8520,6 @@ static int apical_isp_core_ops_g_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
     }
 
     switch (ctrl->cmd) {
-        pr_info("Get control: cmd=0x%x value=%d\n", ctrl->cmd, ctrl->value);
         case 0x980900:  // Brightness
             ctrl->value = tuning->brightness;
             break;
@@ -8846,10 +8845,11 @@ static int apical_isp_core_ops_s_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
         pr_err("No ISP device or tuning data\n");
         return -EINVAL;
     }
-    pr_info("Set control: cmd=0x%x value=%d\n", ctrl->cmd, ctrl->value);
+    /* Called for every tuning write (timps' AE supervisor polls through
+     * this path), so keep it out of the default kernel log. */
+    pr_debug("Set control: cmd=0x%x value=%d\n", ctrl->cmd, ctrl->value);
 
     switch (ctrl->cmd) {
-        pr_info("Set control: cmd=0x%x value=%d\n", ctrl->cmd, ctrl->value);
         case 0x980900:  // Brightness
             ret = tisp_set_brightness((uint8_t)ctrl->value);
             if (ret)
