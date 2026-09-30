@@ -30570,7 +30570,10 @@ EXPORT_SYMBOL(tisp_event_cleanup);
 
 /**************** Parameter operation init (align with BN) ****************/
 static void *tisp_opmsg = NULL;
+static void *tisp_ipmsg = NULL;	/* zero-padded copy of the netlink request */
+static DEFINE_MUTEX(tisp_opmsg_lock);
 static bool tisp_param_oper_inited = false;
+#define TISP_OPMSG_SIZE 0x10018
 
 /* Forward declarations */
 extern int tisp_netlink_init(void);
@@ -30585,7 +30588,7 @@ extern int netlink_send_msg(const void *data, size_t len);
  *   [3] = data start (for set)
  *   [4] = extra
  * Dispatches to the appropriate param_array_get/set handler by param_id range. */
-static void tisp_param_operate_process(const void *data, size_t len)
+static void tisp_param_operate_process_locked(const void *data, size_t len)
 {
     int *arg1 = (int *)data;
     int msg_type = arg1[0];
@@ -30771,8 +30774,28 @@ static void tisp_param_operate_process(const void *data, size_t len)
         return;
     }
 
+    /* arg1[2] is caller-controlled when a handler rejects the id. */
+    if (reply_len < 0 || reply_len > TISP_OPMSG_SIZE)
+        return;
+
     /* Send reply via netlink */
     netlink_send_msg(tisp_opmsg, reply_len);
+}
+
+/* The handlers read fixed-size parameter blocks behind the header, so
+ * run them on a zero-padded bounce copy instead of the raw skb payload. */
+static void tisp_param_operate_process(const void *data, size_t len)
+{
+    if (!data || len < 5 * sizeof(int) || !tisp_opmsg || !tisp_ipmsg)
+        return;
+    if (len > TISP_OPMSG_SIZE)
+        len = TISP_OPMSG_SIZE;
+
+    mutex_lock(&tisp_opmsg_lock);
+    memcpy(tisp_ipmsg, data, len);
+    memset((u8 *)tisp_ipmsg + len, 0, TISP_OPMSG_SIZE - len);
+    tisp_param_operate_process_locked(tisp_ipmsg, len);
+    mutex_unlock(&tisp_opmsg_lock);
 }
 
 /* forward declaration to avoid implicit declaration */
@@ -30793,6 +30816,13 @@ int tisp_param_operate_init(void)
                 return -ENOMEM;
             }
             memset(tisp_opmsg, 0, 0x10018);
+        }
+        if (!tisp_ipmsg) {
+            tisp_ipmsg = kzalloc(TISP_OPMSG_SIZE, GFP_KERNEL);
+            if (!tisp_ipmsg) {
+                pr_err("tisp_param_operate_init: kmalloc ipmsg failed\n");
+                return -ENOMEM;
+            }
         }
 
         /* OEM EXACT ordering: netlink init THEN callback THEN tuning node.

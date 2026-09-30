@@ -716,10 +716,19 @@ static void netlink_rcv_msg(struct sk_buff *skb)
     void *payload;
     size_t plen;
 
-    if (!skb)
+    if (!skb || skb->len < NLMSG_HDRLEN)
         return;
+    /* Unicasts to a kernel netlink socket need no privilege: gate the
+     * tuning channel and never trust nlmsg_len beyond the skb. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 15, 0)
+    if (!netlink_capable(skb, CAP_NET_ADMIN))
+        return;
+#else
+    if (!capable(CAP_NET_ADMIN))
+        return;
+#endif
     nlh = nlmsg_hdr(skb);
-    if (!nlh)
+    if (!nlh || nlh->nlmsg_len < NLMSG_HDRLEN || nlh->nlmsg_len > skb->len)
         return;
     payload = nlmsg_data(nlh);
     plen = nlmsg_len(nlh);
