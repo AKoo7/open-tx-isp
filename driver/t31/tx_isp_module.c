@@ -4734,8 +4734,15 @@ static long frame_channel_ioctl_locked(struct file *file, unsigned int cmd,
          * The ISR's frame_chan_event path gates on state->streaming,
          * so init_completion must finish before the ISR can race with
          * complete(&state->frame_done).
+         * Only reset the count: a 0x400456bf caller may already sleep on
+         * the completion, and init_completion() would re-initialise the
+         * wait queue under it.
          */
-        init_completion(&state->frame_done);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 13, 0)
+        reinit_completion(&state->frame_done);
+#else
+        INIT_COMPLETION(state->frame_done);
+#endif
         atomic_set(&state->frame_ready_count, 0);
         wmb();
         state->streaming = true;
@@ -4913,11 +4920,12 @@ static long frame_channel_ioctl_locked(struct file *file, unsigned int cmd,
 
         pr_debug("Channel %d: 0x400456bf frame completion wait\n", channel);
 
-        /* Auto-start streaming if needed */
-        if (!state->streaming) {
-            state->streaming = true;
-            state->enabled = true;
-        }
+        /* No implicit stream start here (stock has none). Marking the
+         * channel streaming without STREAMON made STREAMON and REQBUFS fail
+         * with -EBUSY, hid the POLLERR that tells a poller the stream
+         * stopped, and let DQBUF sleep forever after a STREAMOFF. Before
+         * STREAMON this simply waits; after STREAMOFF the completion is
+         * complete_all()ed and it returns at once. */
 
         /* OEM: private_wait_for_completion_interruptible($s0 + 0x2d4).
          * Not under buffer_mutex: STREAMOFF must be able to complete_all(). */
