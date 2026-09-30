@@ -9417,7 +9417,7 @@ static int apical_isp_core_ops_s_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
         /* ---- OEM commands added for parity (previously missing) ---- */
 
         case 0x8000008: { /* OEM: tisp_s_rgb_coefft — set RGB coefficients (6 bytes) */
-            int32_t rgb_buf[3];
+            int32_t rgb_buf[3] = { 0 };	/* only 6 of 12 bytes come from user */
             if (copy_from_user(rgb_buf, (void __user *)(unsigned long)ctrl->value, 6)) {
                 ret = -EFAULT;
                 goto out;
