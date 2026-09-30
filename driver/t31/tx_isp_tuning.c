@@ -2682,9 +2682,16 @@ static int tisp_set_active_param_block(const void *src, const char *name)
 	if (!src)
 		return -EINVAL;
 
-	ret = tisp_alloc_param_block(&tparams_active, "active params");
-	if (ret)
-		return ret;
+	/*
+	 * tisp_init allocates the active block. Only allocate here if that
+	 * has not happened: zeroing an existing block is wasted work, as the
+	 * copy below overwrites all of it.
+	 */
+	if (!tparams_active) {
+		ret = tisp_alloc_param_block(&tparams_active, "active params");
+		if (ret)
+			return ret;
+	}
 
 	memcpy(tparams_active, src, TISP_PARAM_BLOCK_SIZE);
 	tisp_sync_active_ae_scene_controls(src);
