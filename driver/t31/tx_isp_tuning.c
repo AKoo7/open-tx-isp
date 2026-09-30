@@ -34405,11 +34405,15 @@ int ae1_interrupt_static(void)
     uint32_t ae1_status = system_reg_read(0xa850);
     void *buffer_addr = (void *)((ae1_status << 8) & 0x3000) + data_b2f54;
 
-    /* OEM invalidates the selected DMA bank before reading its statistics. */
-    private_dma_cache_sync(NULL, buffer_addr, 0x1000, DMA_BIDIRECTIONAL);
+    /* AE1 statistics feed only the WDR engine; without wdr_ready
+     * tisp_ae1_get_statistics() ignores the bank, so do not sync it. */
+    if (ACCESS_ONCE(wdr_ready)) {
+        /* OEM invalidates the selected DMA bank before reading it. */
+        private_dma_cache_sync(NULL, buffer_addr, 0x1000, DMA_BIDIRECTIONAL);
 
-    /* Binary Ninja: tisp_ae1_get_statistics($s0 + data_b2f54, 0xf001f001) */
-    tisp_ae1_get_statistics(buffer_addr, 0xf001f001);
+        /* Binary Ninja: tisp_ae1_get_statistics($s0 + data_b2f54, 0xf001f001) */
+        tisp_ae1_get_statistics(buffer_addr, 0xf001f001);
+    }
 
     /* Binary Ninja: data_b0dfc = 1 */
     data_b0dfc = 1;
@@ -34432,8 +34436,15 @@ int ae1_interrupt_hist(void)
     uint32_t ae1_status = system_reg_read(0xa850);
     uint32_t buffer_offset = (ae1_status & 3) << 11;
 
-    /* Binary Ninja: private_dma_cache_sync(0, $s0 + data_b2f60, 0x800, 0) */
     void *buffer_addr = (void *)(buffer_offset + data_b2f60);
+
+    /* AE1 histogram feeds only the WDR engine (tisp_ae1_get_hist() ignores
+     * it without wdr_ready) and the event 6 callback, tisp_ae1_process(),
+     * is empty. In linear mode skip the sync and the event thread wakeup. */
+    if (!ACCESS_ONCE(wdr_ready))
+        return 2;
+
+    /* Binary Ninja: private_dma_cache_sync(0, $s0 + data_b2f60, 0x800, 0) */
     private_dma_cache_sync(NULL, buffer_addr, 0x800, 0);
 
     /* Binary Ninja: tisp_ae1_get_hist($s0 + data_b2f60) */
