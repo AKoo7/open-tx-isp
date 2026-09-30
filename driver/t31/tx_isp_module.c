@@ -1196,11 +1196,22 @@ static struct resource tx_isp_resources[] = {
     },
 };
 
+/* The ISP platform devices are static module data that live exactly as long
+ * as the module, so there is nothing to free on the last put.  Without a
+ * release() the driver core WARNs "does not have a release() function" for
+ * every platform_device_unregister() during rmmod. */
+static void tx_isp_static_pdev_release(struct device *dev)
+{
+}
+
 struct platform_device tx_isp_platform_device = {
     .name = "tx-isp",
     .id = -1,
     .num_resources = ARRAY_SIZE(tx_isp_resources),
     .resource = tx_isp_resources,
+    .dev = {
+        .release = tx_isp_static_pdev_release,
+    },
 };
 
 /* VIC platform device resources - CORRECTED IRQ */
@@ -1239,6 +1250,7 @@ struct platform_device tx_isp_vic_platform_device = {
     .num_resources = ARRAY_SIZE(tx_isp_vic_resources),
     .resource = tx_isp_vic_resources,
     .dev = {
+        .release = tx_isp_static_pdev_release,
         .platform_data = &vic_pdata,  /* CRITICAL: Provide platform data */
     },
 };
@@ -1296,6 +1308,7 @@ struct platform_device tx_isp_csi_platform_device = {
     .num_resources = ARRAY_SIZE(tx_isp_csi_resources),
     .resource = tx_isp_csi_resources,
     .dev = {
+        .release = tx_isp_static_pdev_release,
         .platform_data = &csi_pdata,  /* CSI needs platform data for register mapping */
     },
 };
@@ -1317,6 +1330,7 @@ struct platform_device tx_isp_vin_platform_device = {
     .num_resources = ARRAY_SIZE(tx_isp_vin_resources),
     .resource = tx_isp_vin_resources,
     .dev = {
+        .release = tx_isp_static_pdev_release,
         .platform_data = &vin_pdata,
     },
 };
@@ -1378,6 +1392,7 @@ struct platform_device tx_isp_fs_platform_device = {
     .num_resources = ARRAY_SIZE(tx_isp_fs_resources),
     .resource = tx_isp_fs_resources,
     .dev = {
+        .release = tx_isp_static_pdev_release,
         .platform_data = &fs_pdata,  /* Provide channel configuration */
     },
 };
@@ -1422,6 +1437,7 @@ struct platform_device tx_isp_core_platform_device = {
     .num_resources = ARRAY_SIZE(tx_isp_core_resources),
     .resource = tx_isp_core_resources,
     .dev = {
+        .release = tx_isp_static_pdev_release,
         .platform_data = &core_pdata,
     },
 };
