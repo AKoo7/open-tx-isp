@@ -11400,8 +11400,11 @@ int tisp_gamma_param_array_set(int param_id, void *in_buf, int *size_buf)
     memcpy(dst, in_buf, len);
     *size_buf = len;
 
-    /* Apply to hardware; BN also refreshes ADR/WDR gamma; we drive the primary LUT write */
+    /* Like stock: program the selected LUT, then let ADR and WDR rebuild
+     * the tables they derive from the gamma curve. */
     tiziano_gamma_lut_parameter();
+    tiziano_adr_gamma_refresh();
+    tiziano_wdr_gamma_refresh();
     return 0;
 }
 
@@ -19613,7 +19616,7 @@ int tiziano_gamma_lut_parameter(void)
         return -EINVAL;
     }
 
-    pr_info("tiziano_gamma_lut_parameter: Writing gamma LUT to registers\n");
+    pr_debug("tiziano_gamma_lut_parameter: Writing gamma LUT to registers\n");
 
     /* OEM EXACT: Loop from byte offset 2 to 0x102, step 2.
      * Packs pairs of 12-bit gamma values into 32-bit registers.
@@ -19636,7 +19639,7 @@ int tiziano_gamma_lut_parameter(void)
 		}
 	}
 
-    pr_info("tiziano_gamma_lut_parameter: Gamma LUT written to R/G/B channels\n");
+    pr_debug("tiziano_gamma_lut_parameter: Gamma LUT written to R/G/B channels\n");
     return 0;
 }
 
@@ -33642,35 +33645,29 @@ int tisp_s_Hilightdepress(int depress_level)
 }
 EXPORT_SYMBOL(tisp_s_Hilightdepress);
 
-/* tisp_s_Gamma - Gamma curve control */
+/* tisp_s_Gamma - SetGamma (0x800002b), 0x102 bytes = 129 u16 LUT entries.
+ *
+ * Stock installs the curve as the linear gamma LUT through
+ * tisp_gamma_param_array_set(0x3c), which programs the LUT registers at once
+ * and refreshes the ADR/WDR tables derived from it, and then stores the
+ * curve in both day and night banks so a later mode switch keeps it.  The
+ * previous version only updated the banks, so a new curve took effect on
+ * the next day/night switch at the earliest (B11). */
 int tisp_s_Gamma(void *gamma_data)
 {
     int gamma_size = 0x102;
-
-    pr_info("tisp_s_Gamma: Setting gamma curve\n");
 
     if (!gamma_data) {
         pr_err("tisp_s_Gamma: NULL gamma data\n");
         return -EINVAL;
     }
 
-    /* Binary Ninja implementation:
-     * memcpy(0x97364, arg1, 0x102);
-     * tisp_gamma_param_array_set(0x3c, arg1, &var_18);
-     * memcpy(tparams_day + 0x2844, arg1, var_18);
-     * memcpy(tparams_night + 0x2844, arg1, var_18);
-     */
+    tisp_gamma_param_array_set(0x3c, gamma_data, &gamma_size);
 
-    /* Apply gamma parameters - simplified implementation */
-    pr_info("tisp_s_Gamma: Applied gamma curve parameters\n");
-
-    /* Copy to day and night parameter sets if available */
-    if (tparams_day) {
-        memcpy((uint8_t*)tparams_day + 0x2844, gamma_data, gamma_size);
-    }
-    if (tparams_night) {
-        memcpy((uint8_t*)tparams_night + 0x2844, gamma_data, gamma_size);
-    }
+    if (tparams_day)
+        memcpy((uint8_t *)tparams_day + 0x2844, gamma_data, gamma_size);
+    if (tparams_night)
+        memcpy((uint8_t *)tparams_night + 0x2844, gamma_data, gamma_size);
 
     return 0;
 }
