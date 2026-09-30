@@ -841,6 +841,19 @@ static uint32_t dn_transition_active;
 EXPORT_SYMBOL(isp_day_night_switch_drop_frame_cnt);
 EXPORT_SYMBOL(isp_day_night_switch_drop_frame_cnt_pdq_interrupt);
 
+/*
+ * The day/night parameter switch (tisp_day_or_night_s_ctrl: ~80 KB copy
+ * into the active parameter block, top bypass, 19 module refreshes) runs
+ * from this work item instead of the ISP core IRQ. The ISR keeps the
+ * frame-boundary part: drop counters and night UV fill when it takes the
+ * request, day UV fill one frame after the worker has made the new
+ * parameters live. t31_daynight_lock orders the ISR's queueing against the
+ * worker closing the transition (dn_transition_active, drop counters).
+ */
+static void t31_daynight_work_fn(struct work_struct *work);
+static DECLARE_WORK(t31_daynight_work, t31_daynight_work_fn);
+static DEFINE_SPINLOCK(t31_daynight_lock);
+
 int isp_memopt;
 module_param(isp_memopt, int, S_IRUGO);
 MODULE_PARM_DESC(isp_memopt, "isp memory optimize");
@@ -1255,6 +1268,10 @@ int ispcore_video_s_stream(struct tx_isp_subdev *sd, int enable)
     }
     if (enable == 0 || ispcore_bypass_enabled(isp_dev)) {
         tx_isp_disable_irq(isp_dev);
+        /* With the core IRQ off no new day/night switch is queued; let a
+         * queued one finish before the stream goes down. */
+        if (enable == 0)
+            flush_work(&t31_daynight_work);
     } else {
         tx_isp_enable_irq(isp_dev);
         /* OEM BN: only tx_isp_enable_irq here. VIC IRQ is already
@@ -1360,6 +1377,11 @@ static void t31_daynight_prepare(void *opaque, u32 mode)
     isp_day_night_switch_drop_frame_cnt_pdq_interrupt = drop_n;
 }
 
+/*
+ * Called from the ISR with t31_daynight_lock held. Returns 1: the switch
+ * is deferred to t31_daynight_work, which applies the mode latched in the
+ * tuning block (ISP_TUNING_OEM_RUNNING_MODE_OFFSET) when it runs.
+ */
 static int t31_daynight_notify(void *opaque, u32 mode)
 {
     struct t31_daynight_context *context = opaque;
@@ -1367,7 +1389,32 @@ static int t31_daynight_notify(void *opaque, u32 mode)
     (void)mode;
     if (!context->isp->tuning_data)
         return -ENODEV;
-    return tx_isp_tuning_notify(context->isp, ISP_TUNING_EVENT_DN);
+    schedule_work(&t31_daynight_work);
+    return 1;
+}
+
+static void t31_daynight_work_fn(struct work_struct *work)
+{
+    struct tx_isp_dev *isp = ourISPdev;
+    unsigned long flags;
+    int ret = -ENODEV;
+
+    (void)work;
+    if (isp && isp->tuning_data)
+        ret = tx_isp_tuning_notify(isp, ISP_TUNING_EVENT_DN);
+    if (ret)
+        pr_warn_ratelimited("T31 day/night switch failed: %d\n", ret);
+
+    spin_lock_irqsave(&t31_daynight_lock, flags);
+    /* If a newer request re-queued the work, that run closes it. */
+    if (!work_pending(&t31_daynight_work)) {
+        /* Next frame: day restores the UV fill (tx_isp_daynight_apply). */
+        dn_transition_active = 1;
+        /* Drop the frames after the new parameters are live, not only
+         * those after the request (no-op for the default of 0). */
+        t31_daynight_prepare(NULL, 0);
+    }
+    spin_unlock_irqrestore(&t31_daynight_lock, flags);
 }
 
 /*
@@ -1535,10 +1582,12 @@ irqreturn_t ispcore_interrupt_service_routine(int irq, void *dev_id)
         }
     }
 
-    /* OEM EXACT 0x69a34-0x69aec: Day/night transition handler.
+    /* OEM 0x69a34-0x69aec: Day/night transition handler.
      * RUNNING_MODE writes the requested mode into tuning[0x40a4] and queues
-     * dn_pending=1; the ISR then applies that deferred mode through the tuning
-     * callback. dn_pending=2/3 remain fill-only transitions used by custom mode. */
+     * dn_pending=1; the ISR takes it at the next interrupt (drop counters,
+     * night UV fill) and hands the parameter switch to t31_daynight_work.
+     * Stock runs that switch inside this IRQ.  dn_pending=2/3 remain
+     * fill-only transitions used by custom mode. */
     {
         struct t31_daynight_context context = {
             .isp = isp_dev,
@@ -1565,7 +1614,14 @@ irqreturn_t ispcore_interrupt_service_routine(int irq, void *dev_id)
         runtime.opaque = &context;
         runtime.notify_result = &notify_ret;
 
+        spin_lock(&t31_daynight_lock);
         dn_ret = tx_isp_daynight_apply(&runtime);
+        /* A deferred switch stays open until the worker has made the new
+         * parameters live, so day mode does not get its UV fill back over
+         * the old parameters. */
+        if (dn_ret == TX_ISP_DAYNIGHT_SWITCH && notify_ret > 0)
+            dn_transition_active = 0;
+        spin_unlock(&t31_daynight_lock);
         if (dn_ret < 0)
             pr_warn_ratelimited("T31 day/night apply failed: %d\n",
                                 dn_ret);
@@ -2651,6 +2707,8 @@ int ispcore_core_ops_init(struct tx_isp_subdev *sd, int on)
             /* CRITICAL: Cancel any pending frame sync work before deinit */
             pr_info("ispcore_core_ops_init: Canceling frame sync work during deinit");
             cancel_work_sync(&fs_work);
+            /* The day/night worker uses the tuning state tisp_deinit frees. */
+            flush_work(&t31_daynight_work);
 
             /* Binary Ninja: tisp_deinit() */
             tisp_deinit();
@@ -4472,6 +4530,9 @@ int tx_isp_core_remove(struct platform_device *pdev)
 
     /* Reset tisp initialization flag for clean restart */
     tisp_reset_initialization_flag();
+
+    /* The day/night work item lives in this module. */
+    cancel_work_sync(&t31_daynight_work);
 
     /* Cleanup frame sync workqueue */
     if (fs_workqueue) {
