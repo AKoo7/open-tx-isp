@@ -1000,10 +1000,17 @@ static void frame_channel_fifo_clear(struct frame_channel_device *fcd)
     if (ourISPdev && channel >= 0 && channel < ISP_MAX_CHAN)
         tx_isp_send_event_to_remote(&ourISPdev->channels[channel].subdev,
                                     TX_ISP_FRAME_EVENT_FIFO_CLEAR, NULL);
+    /* Like __vb2_queue_cancel, every buffer goes back to userspace: ACTIVE
+     * ones lost their FIFO entry, DONE ones were never dequeued and would
+     * otherwise be delivered as stale frames after the next STREAMON, and
+     * QBUF refuses a slot that is not FREE. */
     spin_lock_irqsave(&fcd->oem_buf_lock, flags);
-    for (i = 0; i < 64; i++)
-        if (fcd->oem_bufs[i].state == TX_ISP_FRAME_SLOT_ACTIVE)
+    for (i = 0; i < 64; i++) {
+        if (fcd->oem_bufs[i].state != TX_ISP_FRAME_SLOT_FREE) {
             fcd->oem_bufs[i].state = TX_ISP_FRAME_SLOT_FREE;
+            fcd->oem_bufs[i].done_sequence = 0;
+        }
+    }
     spin_unlock_irqrestore(&fcd->oem_buf_lock, flags);
 }
 
@@ -4310,6 +4317,26 @@ static long frame_channel_ioctl_locked(struct file *file, unsigned int cmd,
 
         pr_debug("*** Channel %d: QBUF - Buffer %d: phys_addr=0x%x, sizeimage=%u, memory=%d, userptr=0x%lx ***\n",
                 channel, buffer.index, buffer_phys_addr, buffer_size, buffer.memory, buffer.m.userptr);
+
+        /* Stock rejects a QBUF of a buffer the driver still owns ("qbuf:
+         * buffer already in use"). A second QBUF of an ACTIVE slot would put
+         * the same address into the MSCA FIFO twice; one of a DONE slot would
+         * overwrite a frame userspace has not dequeued yet. Only QBUF moves a
+         * slot away from FREE and QBUFs are serialised by buffer_mutex, so
+         * the check stays valid until the slot is marked ACTIVE below. */
+        {
+            unsigned long oem_flags;
+            u32 slot_state;
+
+            spin_lock_irqsave(&fcd->oem_buf_lock, oem_flags);
+            slot_state = fcd->oem_bufs[buffer.index].state;
+            spin_unlock_irqrestore(&fcd->oem_buf_lock, oem_flags);
+            if (slot_state != TX_ISP_FRAME_SLOT_FREE) {
+                pr_err_ratelimited("qbuf: ch%d buffer %u already in use (state %u)\n",
+                                   channel, buffer.index, slot_state);
+                return -EINVAL;
+            }
+        }
 
         if (frame_channel_track_buffer(fcd, &buffer) == 0) {
             unsigned long buffer_flags;
