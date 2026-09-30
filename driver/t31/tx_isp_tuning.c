@@ -7740,7 +7740,15 @@ static uint32_t tisp_day_or_night_g_ctrl(void)
 	return 0;
 }
 
-static int tisp_day_or_night_s_ctrl(uint32_t mode)
+/*
+ * Serializes the parameter bank switches (day/night, custom bank). All
+ * callers run in process context: the day/night worker, the V4L2 controls
+ * and the tuning ioctl. Two of them interleaving would leave a mix of two
+ * banks in tparams_active and in the module state refreshed from it.
+ */
+static DEFINE_MUTEX(tisp_bank_switch_lock);
+
+static int tisp_day_or_night_s_ctrl_locked(uint32_t mode)
 {
 	uint32_t bypass_val;
 	uint32_t active_mode = mode ? 1 : 0;
@@ -7805,6 +7813,16 @@ static int tisp_day_or_night_s_ctrl(uint32_t mode)
 	tispPollValue = 1;
 	wake_up_interruptible(&dumpQueue);
 	return 0;
+}
+
+static int tisp_day_or_night_s_ctrl(uint32_t mode)
+{
+	int ret;
+
+	mutex_lock(&tisp_bank_switch_lock);
+	ret = tisp_day_or_night_s_ctrl_locked(mode);
+	mutex_unlock(&tisp_bank_switch_lock);
+	return ret;
 }
 
 /* Additional tuning event definitions not yet in tx_libimp.h */
@@ -15644,7 +15662,7 @@ int tisp_cust_mode_g_ctrl(void)
 /* OEM EXACT: tisp_cust_mode_s_ctrl — set custom tuning mode.
  * Decompiled from OEM at 0x625ec. Switches tuning params between
  * day/night/custom and refreshes all DN-dependent blocks. */
-int tisp_cust_mode_s_ctrl(uint32_t mode)
+static int tisp_cust_mode_s_ctrl_locked(uint32_t mode)
 {
 	int ret;
 
@@ -15687,6 +15705,16 @@ int tisp_cust_mode_s_ctrl(uint32_t mode)
     /* OEM EXACT call order: all 18 _dn_ refresh functions */
 	tisp_refresh_daynight_pipeline();
     return 0;
+}
+
+int tisp_cust_mode_s_ctrl(uint32_t mode)
+{
+	int ret;
+
+	mutex_lock(&tisp_bank_switch_lock);
+	ret = tisp_cust_mode_s_ctrl_locked(mode);
+	mutex_unlock(&tisp_bank_switch_lock);
+	return ret;
 }
 
 /* OEM EXACT: tiziano_isp_ae_manual_attr_g_ctrl — get AE manual attributes.
