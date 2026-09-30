@@ -4169,6 +4169,12 @@ static uint32_t again_old = 0;
 /* AE control state flags */
 static uint32_t _ae_ev = 0;        /* Current exposure value (output of ae0_tune2) */
 static uint32_t ae_scene_luma = 0;  /* Scene luminance output */
+/* Per-frame AE diagnostics (AE_CONV, AE0_AG, alloc_again) run with IRQs
+ * disabled; off unless asked for: echo 1 > /sys/module/tx_isp_t31/parameters/isp_ae_log */
+static int isp_ae_log;
+module_param(isp_ae_log, int, 0644);
+MODULE_PARM_DESC(isp_ae_log, "Log per-frame AE diagnostics (0 = off)");
+
 static uint32_t IspAeFlag = 1;     /* AE initial convergence flag — OEM sets to 1 during init */
 
 /* OEM analog/digital gain state for tisp_set_ae0_ag */
@@ -6401,7 +6407,8 @@ static void tisp_set_ae0_ag(uint32_t ag, uint32_t dg)
 
     {
         static int ae0ag_log_cnt;
-        if (ae0ag_log_cnt < 20 || (ae0ag_log_cnt & 0xff) == 0) {
+        if (isp_ae_log &&
+            (ae0ag_log_cnt < 20 || (ae0ag_log_cnt & 0xff) == 0)) {
             pr_info("AE0_AG[%d]: req_ag=0x%x req_dg=0x%x actual_ag=0x%x actual_dg=0x%x "
                     "dg_comp=0x%x (max_dg=0x%x)\n",
                     ae0ag_log_cnt, ag, dg, actual_ag, actual_dg, dg_comp, max_dg);
@@ -6689,7 +6696,7 @@ static int tiziano_ae0_fpga_run(void)
     {
         static int ae_frame_diag;
         ae_frame_diag++;
-        if ((ae_frame_diag % 30) == 0) {
+        if (isp_ae_log && (ae_frame_diag % 30) == 0) {
             uint32_t ae_tgt = tisp_ae_target(_ae_ev, q);
             pr_info("AE_CONV[%d]: wmean=%u flat=%u solver=%u target=%u ev=0x%x "
                     "zone[0]=%u zone[112]=%u zone[224]=%u ratios=%d/%d "
@@ -35290,8 +35297,9 @@ static uint32_t data_b2ee0(uint32_t log_val, unsigned int *var_ptr)
         unsigned int sensor_again = 0;
         uint32_t result = ourISPdev->sensor->attr.sensor_ctrl.alloc_again(log_val, TX_ISP_GAIN_FIXED_POINT, &sensor_again);
         if (var_ptr) *var_ptr = sensor_again;
-        pr_info_ratelimited("alloc_again: log_val=%u result=%u sensor_again=0x%x\n",
-                log_val, result, sensor_again);
+        if (isp_ae_log)
+            pr_info_ratelimited("alloc_again: log_val=%u result=%u sensor_again=0x%x\n",
+                    log_val, result, sensor_again);
         return result;
     }
 
