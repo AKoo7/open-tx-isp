@@ -2564,7 +2564,27 @@ static int tiziano_wdr_dn_params_refresh(void);
 void tx_isp_t31_wdr_stop(void);
 extern int tisp_gb_dn_params_refresh(void);
 
+/*
+ * A module refresh rewrites that module's working tables and registers,
+ * which the ISP core IRQ handlers and the event thread's callbacks (run with
+ * IRQs off) use too. Run each refresh with local IRQs off, so neither sees a
+ * half-refreshed module when a switch runs in process context. Between
+ * modules IRQs are allowed again, so the IRQ-off window is the longest single
+ * module, not the whole pipeline.
+ */
 #define T31_REFRESH_ADAPTER(name)					\
+	static void t31_refresh_##name(void *opaque)			\
+	{								\
+		unsigned long flags;					\
+									\
+		(void)opaque;						\
+		local_irq_save(flags);					\
+		name();							\
+		local_irq_restore(flags);				\
+	}
+
+/* For a refresh that takes a mutex and so must not run with IRQs off. */
+#define T31_REFRESH_ADAPTER_SLEEPING(name)				\
 	static void t31_refresh_##name(void *opaque)			\
 	{								\
 		(void)opaque;						\
@@ -2589,7 +2609,8 @@ T31_REFRESH_ADAPTER(tiziano_af_dn_params_refresh)
 T31_REFRESH_ADAPTER(tiziano_bcsh_dn_params_refresh)
 T31_REFRESH_ADAPTER(tiziano_rdns_dn_params_refresh)
 T31_REFRESH_ADAPTER(tiziano_ydns_dn_params_refresh)
-T31_REFRESH_ADAPTER(tiziano_wdr_dn_params_refresh)
+/* Serialized with the WDR worker by wdr_control_lock (a mutex). */
+T31_REFRESH_ADAPTER_SLEEPING(tiziano_wdr_dn_params_refresh)
 
 #define T31_REFRESH_STEP(name) { t31_refresh_##name }
 
