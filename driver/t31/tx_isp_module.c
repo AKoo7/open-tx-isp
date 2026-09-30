@@ -3203,7 +3203,19 @@ static int tx_isp_init_hardware_interrupts(struct tx_isp_dev *isp_dev)
     return ret;
 }
 
-/* isp_vic_interrupt_service_routine - EXACT Binary Ninja implementation */
+/*
+ * VIC error bits can be set on every frame (sensor timing, MIPI noise), and
+ * each line was printed with interrupts off in this hard IRQ, costing a few
+ * microseconds per line and flushing the 64 KB log within seconds. All error
+ * lines of the VIC ISR share this limit; __ratelimit() reports how many it
+ * suppressed.
+ */
+static DEFINE_RATELIMIT_STATE(vic_irq_err_rs, 5 * HZ, 20);
+#define vic_irq_err(fmt, ...)						\
+	do {								\
+		if (__ratelimit(&vic_irq_err_rs))			\
+			pr_err(fmt, ##__VA_ARGS__);			\
+	} while (0)
 
 /* isp_vic_interrupt_service_routine - EXACT Binary Ninja implementation */
 static irqreturn_t isp_vic_interrupt_service_routine(int irq, void *dev_id)
@@ -3275,99 +3287,99 @@ static irqreturn_t isp_vic_interrupt_service_routine(int irq, void *dev_id)
 
         /* Binary Ninja: Error handling for frame asfifo overflow */
         if ((v1_7 & 0x200) != 0) {
-            pr_err("Err [VIC_INT] : frame asfifo ovf!!!!!\n");
+            vic_irq_err("Err [VIC_INT] : frame asfifo ovf!!!!!\n");
         }
 
         /* Binary Ninja: Error handling for horizontal errors */
         if ((v1_7 & 0x400) != 0) {
             u32 reg_3a8 = readl(vic_regs + 0x3a8);
-            pr_err("Err [VIC_INT] : hor err ch0 !!!!! 0x3a8 = 0x%08x\n", reg_3a8);
+            vic_irq_err("Err [VIC_INT] : hor err ch0 !!!!! 0x3a8 = 0x%08x\n", reg_3a8);
         }
 
         if ((v1_7 & 0x800) != 0) {
-            pr_err("Err [VIC_INT] : hor err ch1 !!!!!\n");
+            vic_irq_err("Err [VIC_INT] : hor err ch1 !!!!!\n");
         }
 
         if ((v1_7 & 0x1000) != 0) {
-            pr_err("Err [VIC_INT] : hor err ch2 !!!!!\n");
+            vic_irq_err("Err [VIC_INT] : hor err ch2 !!!!!\n");
         }
 
         if ((v1_7 & 0x2000) != 0) {
-            pr_err("Err [VIC_INT] : hor err ch3 !!!!!\n");
+            vic_irq_err("Err [VIC_INT] : hor err ch3 !!!!!\n");
         }
 
         /* Binary Ninja: Error handling for vertical errors */
         if ((v1_7 & 0x4000) != 0) {
-            pr_err("Err [VIC_INT] : ver err ch0 !!!!!\n");
+            vic_irq_err("Err [VIC_INT] : ver err ch0 !!!!!\n");
         }
 
         if ((v1_7 & 0x8000) != 0) {
-            pr_err("Err [VIC_INT] : ver err ch1 !!!!!\n");
+            vic_irq_err("Err [VIC_INT] : ver err ch1 !!!!!\n");
         }
 
         if ((v1_7 & 0x10000) != 0) {
-            pr_err("Err [VIC_INT] : ver err ch2 !!!!!\n");
+            vic_irq_err("Err [VIC_INT] : ver err ch2 !!!!!\n");
         }
 
         if ((v1_7 & 0x20000) != 0) {
-            pr_err("Err [VIC_INT] : ver err ch3 !!!!!\n");
+            vic_irq_err("Err [VIC_INT] : ver err ch3 !!!!!\n");
         }
 
         /* Binary Ninja: Additional error handling */
         if ((v1_7 & 0x40000) != 0) {
-            pr_err("Err [VIC_INT] : hvf err !!!!!\n");
+            vic_irq_err("Err [VIC_INT] : hvf err !!!!!\n");
         }
 
         if ((v1_7 & 0x80000) != 0) {
-            pr_err("Err [VIC_INT] : dvp hcomp err!!!!\n");
+            vic_irq_err("Err [VIC_INT] : dvp hcomp err!!!!\n");
         }
 
         if ((v1_7 & 0x100000) != 0) {
-            pr_err("Err [VIC_INT] : dma syfifo ovf!!!\n");
+            vic_irq_err("Err [VIC_INT] : dma syfifo ovf!!!\n");
         }
 
         if ((v1_7 & 0x200000) != 0) {
-            pr_err("Err2 [VIC_INT] : control limit err!!!\n");
+            vic_irq_err("Err2 [VIC_INT] : control limit err!!!\n");
         }
 
         if ((v1_7 & 0x400000) != 0) {
-            pr_err("Err [VIC_INT] : image syfifo ovf !!!\n");
+            vic_irq_err("Err [VIC_INT] : image syfifo ovf !!!\n");
         }
 
         if ((v1_7 & 0x800000) != 0) {
-            pr_err("Err [VIC_INT] : mipi fid asfifo ovf!!!\n");
+            vic_irq_err("Err [VIC_INT] : mipi fid asfifo ovf!!!\n");
         }
 
         if ((v1_7 & 0x1000000) != 0) {
-            pr_err("Err [VIC_INT] : mipi ch0 hcomp err !!!\n");
+            vic_irq_err("Err [VIC_INT] : mipi ch0 hcomp err !!!\n");
         }
 
         if ((v1_7 & 0x2000000) != 0) {
-            pr_err("Err [VIC_INT] : mipi ch1 hcomp err !!!\n");
+            vic_irq_err("Err [VIC_INT] : mipi ch1 hcomp err !!!\n");
         }
 
         if ((v1_7 & 0x4000000) != 0) {
-            pr_err("Err [VIC_INT] : mipi ch2 hcomp err !!!\n");
+            vic_irq_err("Err [VIC_INT] : mipi ch2 hcomp err !!!\n");
         }
 
         if ((v1_7 & 0x8000000) != 0) {
-            pr_err("Err [VIC_INT] : mipi ch3 hcomp err !!!\n");
+            vic_irq_err("Err [VIC_INT] : mipi ch3 hcomp err !!!\n");
         }
 
         if ((v1_7 & 0x10000000) != 0) {
-            pr_err("Err [VIC_INT] : mipi ch0 vcomp err !!!\n");
+            vic_irq_err("Err [VIC_INT] : mipi ch0 vcomp err !!!\n");
         }
 
         if ((v1_7 & 0x20000000) != 0) {
-            pr_err("Err [VIC_INT] : mipi ch1 vcomp err !!!\n");
+            vic_irq_err("Err [VIC_INT] : mipi ch1 vcomp err !!!\n");
         }
 
         if ((v1_7 & 0x40000000) != 0) {
-            pr_err("Err [VIC_INT] : mipi ch2 vcomp err !!!\n");
+            vic_irq_err("Err [VIC_INT] : mipi ch2 vcomp err !!!\n");
         }
 
         if ((v1_7 & 0x80000000) != 0) {
-            pr_err("Err [VIC_INT] : mipi ch3 vcomp err !!!\n");
+            vic_irq_err("Err [VIC_INT] : mipi ch3 vcomp err !!!\n");
         }
 
         /* OEM HLIL: if (($v1_10 & 1) != 0) → MDMA ch0 done */
@@ -3379,11 +3391,11 @@ static irqreturn_t isp_vic_interrupt_service_routine(int irq, void *dev_id)
             vic_mdma_irq_function(vic_dev, 1);
 
         if ((v1_10 & 4) != 0) {
-            pr_err("Err [VIC_INT] : dma arb trans done ovf!!!\n");
+            vic_irq_err("Err [VIC_INT] : dma arb trans done ovf!!!\n");
         }
 
         if ((v1_10 & 8) != 0) {
-            pr_err("Err [VIC_INT] : dma chid ovf  !!!\n");
+            vic_irq_err("Err [VIC_INT] : dma chid ovf  !!!\n");
         }
 
 		/* OEM HLIL: Error recovery — if (($v1_7 & 0xde00) != 0 && vic_start_ok != 0) */
@@ -3425,8 +3437,9 @@ static irqreturn_t isp_vic_interrupt_service_routine(int irq, void *dev_id)
          */
 
     } else {
-        pr_warn("*** VIC INTERRUPT IGNORED: vic_start_ok=0, interrupts disabled (v1_7=0x%x, v1_10=0x%x) ***\n", v1_7, v1_10);
-        pr_warn("*** This means VIC interrupts are firing but being ignored! ***\n");
+        if (__ratelimit(&vic_irq_err_rs))
+            pr_warn("VIC interrupt ignored: vic_start_ok=0 (v1_7=0x%x, v1_10=0x%x)\n",
+                    v1_7, v1_10);
     }
 
     /* Binary Ninja: return 1 */
