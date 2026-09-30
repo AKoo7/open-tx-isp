@@ -4191,7 +4191,6 @@ static uint32_t ae0_req_dg = 0x400;  /* Carried AE-requested digital gain */
 static uint32_t ae_requested_ag = 0x400; /* Last REQUESTED AG (before sensor quantization) */
 static uint32_t data_c46a8 = 0x400; /* Max integration time (tuning param) */
 static uint32_t data_c46b0 = 0x157fe; /* Max analog gain in Q10 (OEM: set by tisp_s_max_again) */
-static uint32_t data_c46b8;       /* Integration time cache */
 static uint32_t data_c46bc = 0x400; /* Max ISP digital gain in Q10 (OEM: set by tisp_s_max_isp_dgain) */
 static uint32_t data_c4714 = 0; /* Minimum integration time */
 static uint32_t data_c470c = 0; /* Minimum analog gain */
@@ -7592,11 +7591,17 @@ static int tisp_g_ev_attr(uint32_t *ev_buffer, struct isp_tuning_data *tuning)
 	ev_buffer[11] = tisp_log2_fixed_to_fixed(0x400, 10, 5);
 	ev_buffer[12] = data_c46d0;
 
-	/* Preserve the OEM sparse halfword layout at offsets 0x6c/0x6e/0x7c. */
+	/* Preserve the OEM sparse halfword layout at offsets 0x6c/0x6e/0x7c.
+	 * Stock reads the AE integration-time window straight from the AE
+	 * control object: minimum at ctrls[30] (+0x78), maximum at ctrls[7]
+	 * (+0x1c).  These are the fields SetAeMin (0x800002f) and
+	 * SetAe_IT_MAX (0x8000032) write and tisp_ae0_ctrls_update() feeds
+	 * into the AE solver, so GetExpr reports the cap actually in force.
+	 * The previous separate static was never written and read back 0. */
 	*(uint16_t *)((uint8_t *)ev_buffer + 0x6c) =
-		(uint16_t)data_c4714;
+		(uint16_t)tisp_ae_ctrls[30];
 	*(uint16_t *)((uint8_t *)ev_buffer + 0x6e) =
-		(uint16_t)data_c46b8;
+		(uint16_t)tisp_ae_ctrls[7];
 	*(uint16_t *)((uint8_t *)ev_buffer + 0x7c) =
 		(uint16_t)div_u64((uint64_t)fps_den * 1000000U,
 				  (uint64_t)fps_num * total_height);
@@ -8244,6 +8249,10 @@ static int isp_get_af_zone(struct tx_isp_dev *dev, struct isp_core_ctrl *ctrl)
 }
 
 /* Forward declarations needed by g_ctrl/s_ctrl before main declaration block */
+int tisp_s_ae_it_max(uint32_t it_max);
+int tisp_g_ae_it_max(uint32_t *it_max);
+int tisp_ae_s_min(uint32_t it_min, uint32_t ag_min, uint32_t it_short_min, uint32_t ag_short_min);
+int tisp_ae_g_min(uint32_t *out);
 int tisp_g_ae_hist(void *buffer);
 int tisp_s_ae_hist(void *hist_data);
 int tisp_ae_g_scene_luma(uint32_t *out);
@@ -8643,13 +8652,15 @@ static int apical_isp_core_ops_g_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
 
         case 0x800002f: { /* OEM: tisp_g_ae_min — get AE min (0x10 bytes) */
             uint32_t ae_min[4] = {0};
+            tisp_ae_g_min(ae_min);
             if (copy_to_user((void __user *)(unsigned long)ctrl->value, ae_min, 0x10))
                 ret = -EFAULT;
             break;
         }
 
-        case 0x8000032: { /* OEM: tisp_g_ae_it_max */
+        case 0x8000032: { /* OEM: tisp_g_ae_it_max — ctrls[7], sensor lines */
             uint32_t it_max = 0;
+            tisp_g_ae_it_max(&it_max);
             ctrl->value = it_max;
             break;
         }
@@ -9268,19 +9279,18 @@ static int apical_isp_core_ops_s_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
             break;
         }
 
-        case 0x800002f: { /* OEM: tisp_s_ae_min — set AE minimum params (0x10 bytes) */
+        case 0x800002f: { /* OEM: tisp_s_ae_min — {it_min, ag_min, it_short_min, ag_short_min} */
             uint32_t ae_min[4];
             if (copy_from_user(ae_min, (void __user *)(unsigned long)ctrl->value, 0x10)) {
                 ret = -EFAULT;
                 goto out;
             }
-            /* OEM: tisp_s_ae_min(ae_min[0], ae_min[1], ae_min[2], ae_min[3]) */
-            ret = 0;
+            ret = tisp_ae_s_min(ae_min[0], ae_min[1], ae_min[2], ae_min[3]);
             break;
         }
 
-        case 0x8000032: /* OEM: tisp_s_ae_it_max */
-            ret = 0; /* OEM calls tisp_s_ae_it_max() with no args */
+        case 0x8000032: /* OEM: tisp_s_ae_it_max — scalar, sensor lines */
+            ret = tisp_s_ae_it_max((uint32_t)ctrl->value);
             break;
 
         case 0x8000034: /* OEM: tisp_set_ae_freeze */
@@ -16273,6 +16283,37 @@ int tiziano_ae_s_max_isp_dgain(uint32_t value)
 {
     data_c46bc = tisp_math_exp2(value, 5, 0xa);
     data_a0dfc = 0;
+    return 0;
+}
+
+/* Stock tisp_s_ae_it_max (SetAe_IT_MAX, 0x8000032): copy the AE control
+ * object, replace the maximum integration time (ctrls[7], in sensor lines)
+ * and commit it through tisp_ae_min_max_set(), whose only other effect is to
+ * clear the AE "converging" flag so the next frame re-evaluates.
+ *
+ * Data flow to the solver: tisp_ae0_process() -> tisp_ae0_ctrls_update()
+ * copies ctrls[7] into ae_exp_th.data[0] as long as it does not exceed the
+ * sensor's max_integration_time (otherwise ctrls[7] is restored from
+ * ae_exp_th.data[0]), and ae0_tune2() takes its IT limit from
+ * ae_exp_th.data[0] via tisp_ae_effective_max_it().  As in stock, a sensor
+ * attribute sync or a day/night parameter refresh re-seeds ctrls[7] from the
+ * sensor/tuning limit, so the cap has to be re-applied after those. */
+int tisp_s_ae_it_max(uint32_t it_max)
+{
+    /* Stock stores any value.  A zero cap would hand the solver a zero
+     * integration-time limit, so refuse that one value. */
+    if (it_max == 0)
+        return -EINVAL;
+
+    tisp_ae_ctrls[7] = it_max;
+    data_a0dfc = 0;
+    return 0;
+}
+EXPORT_SYMBOL(tisp_s_ae_it_max);
+
+int tisp_g_ae_it_max(uint32_t *it_max)
+{
+    *it_max = tisp_ae_ctrls[7];
     return 0;
 }
 
@@ -33645,39 +33686,6 @@ int tisp_s_ae_hist(void *hist_data)
 }
 EXPORT_SYMBOL(tisp_s_ae_hist);
 
-/* tisp_s_ae_it_max - AE integration time maximum control */
-int tisp_s_ae_it_max(void)
-{
-    uint8_t param_buffer[0x98];
-    uint8_t temp_buffer[0x88];
-    int i;
-
-    pr_info("tisp_s_ae_it_max: Setting AE integration time maximum\n");
-
-    /* Binary Ninja implementation:
-     * memcpy(&var_a0, &dmsc_sp_d_w_stren_wdr_array, 0x98);
-     * for (int32_t i = 0; i u< 0x88; i += 1)
-     *     var_128[i] = var_90[i];
-     * tisp_ae_min_max_set(var_a0, var_9c, var_98, var_94);
-     */
-
-    /* Copy from WDR strength array if available */
-    memset(param_buffer, 0, sizeof(param_buffer));
-    if (dmsc_sp_d_w_stren_wdr_array) {
-        memcpy(param_buffer, dmsc_sp_d_w_stren_wdr_array, sizeof(param_buffer));
-    }
-
-    /* Initialize temp buffer */
-    for (i = 0; i < 0x88; i++) {
-        temp_buffer[i] = param_buffer[i % 0xc];  /* Cycle through first 0xc bytes */
-    }
-
-    /* Apply AE min/max settings - simplified implementation */
-    pr_info("tisp_s_ae_it_max: Applied AE integration time maximum settings\n");
-
-    return 0;
-}
-EXPORT_SYMBOL(tisp_s_ae_it_max);
 
 
 
@@ -34584,18 +34592,43 @@ int tisp_ae_g_comp(uint32_t *out)
 /* OEM EXACT: tisp_ae_g_min (0x512a8) */
 int tisp_ae_g_min(uint32_t *out)
 {
-    out[0] = data_c4714;
-    out[1] = data_c470c;
+    /* Stock returns the reconciled minimum IT and analog gain (the values
+     * tisp_ae0_ctrls_update() copied out of ctrls[30]/ctrls[28]). */
+    out[0] = ae_exp_th.data[4];
+    out[1] = ae_exp_th.data[5];
     return 0;
 }
 
 /* OEM EXACT: tisp_ae_s_min (0x512d0) */
 int tisp_ae_s_min(uint32_t it_min, uint32_t ag_min, uint32_t it_short_min, uint32_t ag_short_min)
 {
-    if (it_min != 0 && _ae_reg.data[0] >= it_min)
+    /* Stock accepts each minimum only inside [1 line .. current max IT] and
+     * [1.0x (0x400) .. current max again]; an out-of-range field is logged
+     * and skipped, the call still succeeds.  Accepted values go into the AE
+     * control object (ctrls[30] IT, ctrls[28] again, ctrls[33]/[32] for the
+     * WDR short frame) and reach ae_exp_th.data[4]/[5] on the next
+     * tisp_ae0_ctrls_update().  This driver's AE solver takes its minimum
+     * tuple from data_c4714/data_c470c, so keep those in step. */
+    if (it_min != 0 && it_min <= ae_exp_th.data[0]) {
+        tisp_ae_ctrls[30] = it_min;
         data_c4714 = it_min;
-    if (ag_min >= 0x400)
+    } else {
+        pr_warn("tisp_ae_s_min: it_min %u out of range (max %u)\n",
+                it_min, ae_exp_th.data[0]);
+    }
+    if (ag_min >= 0x400 && ag_min <= ae_exp_th.data[1]) {
+        tisp_ae_ctrls[28] = ag_min;
         data_c470c = ag_min;
+    } else {
+        pr_warn("tisp_ae_s_min: ag_min %u out of range (max %u)\n",
+                ag_min, ae_exp_th.data[1]);
+    }
+    if (tisp_si_wdr_cache(&sensor_info) == 1) {
+        if (it_short_min != 0 && it_short_min <= ae_exp_th.data[8])
+            tisp_ae_ctrls[33] = it_short_min;
+        if (ag_short_min >= 0x400 && ag_short_min <= ae_exp_th.data[9])
+            tisp_ae_ctrls[32] = ag_short_min;
+    }
     data_a0dfc = 0;
     return 0;
 }
