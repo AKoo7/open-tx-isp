@@ -4266,16 +4266,106 @@ module_param_named(ae_freeze_gain, ae_freeze_gain, int,
 MODULE_PARM_DESC(ae_freeze_gain,
 		 "Hold only the current sensor and ISP gain tuple (0 = auto, 1 = frozen)");
 
+/* AE control object fields written by SetAeAttr (tisp_ae_manual_set):
+ * ctrls[0] = manual for the whole tuple; with ctrls[0] == 0 the individual
+ * flags ctrls[13] (IT), ctrls[14] (sensor again), ctrls[15] (ISP dgain) and
+ * ctrls[36] (sensor dgain) pin one field each. */
 static bool tisp_ae_integration_hold_active(void)
 {
-	return tisp_ae_ctrls[0] != 0 || ae_freeze != 0 ||
-	       ae_freeze_integration != 0;
+	return tisp_ae_ctrls[0] != 0 || tisp_ae_ctrls[13] != 0 ||
+	       ae_freeze != 0 || ae_freeze_integration != 0;
 }
 
 static bool tisp_ae_gain_hold_active(void)
 {
-	return tisp_ae_ctrls[0] != 0 || ae_freeze != 0 ||
-	       ae_freeze_gain != 0;
+	return tisp_ae_ctrls[0] != 0 || tisp_ae_ctrls[14] != 0 ||
+	       tisp_ae_ctrls[15] != 0 || tisp_ae_ctrls[36] != 0 ||
+	       ae_freeze != 0 || ae_freeze_gain != 0;
+}
+
+static inline uint32_t tisp_ae_gain_floor(uint32_t v)
+{
+	return v < 0x400 ? 0x400 : v;
+}
+
+/* tisp_ae_manual_set - SetAeAttr (0x8000035), 0x98-byte AE attribute.
+ *
+ * Mirrors the stock field handling: word 0 selects full manual, in which
+ * case IT (word 3), sensor again (word 1), sensor dgain (word 2) and ISP
+ * dgain (word 4) are all taken, gains floored at 1.0x (0x400).  Otherwise
+ * the per-field flags in words 13/14/15/36 each take their own value.  The
+ * short-frame (WDR) fields follow the same pattern through words 24, 16,
+ * 17, 26 and 37 and are only stored.  The converging flag is cleared.
+ *
+ * The stock AE reads the held tuple straight from the control object.
+ * This driver's hold path (tisp_set_sensor_integration_time and
+ * tisp_set_ae0_ag) applies data_c46a8/c46a0/c46a4/c46ac instead, so the
+ * accepted values are copied there too.  A gain flag without full manual
+ * holds the other gains at their current values, since this AE holds all
+ * gains together.  Previously only ctrls[0] was set, which froze AE at the
+ * old values without applying anything (B13). */
+static int tisp_ae_manual_set(const uint32_t *w)
+{
+	tisp_ae_ctrls[0] = w[0];
+	if (w[0] != 0) {
+		tisp_ae_ctrls[1] = tisp_ae_gain_floor(w[1]);
+		tisp_ae_ctrls[2] = tisp_ae_gain_floor(w[2]);
+		tisp_ae_ctrls[3] = w[3];
+		tisp_ae_ctrls[4] = tisp_ae_gain_floor(w[4]);
+		data_c46a8 = tisp_ae_ctrls[3];
+		data_c46a0 = tisp_ae_ctrls[1];
+		data_c46a4 = tisp_ae_ctrls[2];
+		data_c46ac = tisp_ae_ctrls[4];
+	} else {
+		tisp_ae_ctrls[13] = w[13];
+		if (w[13]) {
+			tisp_ae_ctrls[3] = w[3];
+			data_c46a8 = w[3];
+		}
+		tisp_ae_ctrls[14] = w[14];
+		if (w[14]) {
+			tisp_ae_ctrls[1] = tisp_ae_gain_floor(w[1]);
+			data_c46a0 = tisp_ae_ctrls[1];
+		}
+		tisp_ae_ctrls[15] = w[15];
+		if (w[15]) {
+			tisp_ae_ctrls[4] = tisp_ae_gain_floor(w[4]);
+			data_c46ac = tisp_ae_ctrls[4];
+		}
+		tisp_ae_ctrls[36] = w[36];
+		if (w[36]) {
+			tisp_ae_ctrls[2] = tisp_ae_gain_floor(w[2]);
+			data_c46a4 = tisp_ae_ctrls[2];
+		}
+	}
+
+	/* Short (WDR) frame: stored only; AE1 is not implemented here. */
+	tisp_ae_ctrls[24] = w[24];
+	if (w[24] != 0) {
+		tisp_ae_ctrls[18] = tisp_ae_gain_floor(w[18]);
+		tisp_ae_ctrls[27] = tisp_ae_gain_floor(w[27]);
+		tisp_ae_ctrls[25] = tisp_ae_gain_floor(w[25]);
+		tisp_ae_ctrls[19] = w[19];
+	} else {
+		tisp_ae_ctrls[16] = w[16];
+		if (w[16])
+			tisp_ae_ctrls[19] = tisp_ae_gain_floor(w[19]);
+		tisp_ae_ctrls[17] = w[17];
+		if (w[17])
+			tisp_ae_ctrls[18] = tisp_ae_gain_floor(w[18]);
+		tisp_ae_ctrls[26] = w[26];
+		if (w[26])
+			tisp_ae_ctrls[27] = tisp_ae_gain_floor(w[27]);
+		tisp_ae_ctrls[37] = w[37];
+		if (w[37])
+			tisp_ae_ctrls[25] = tisp_ae_gain_floor(w[25]);
+	}
+
+	data_a0dfc = 0;
+	pr_debug("tisp_ae_manual_set: manual=%u it=%u ag=0x%x sdg=0x%x dg=0x%x flags=%u/%u/%u/%u\n",
+		 w[0], tisp_ae_ctrls[3], tisp_ae_ctrls[1], tisp_ae_ctrls[2],
+		 tisp_ae_ctrls[4], w[13], w[14], w[15], w[36]);
+	return 0;
 }
 
 static bool tisp_ae_manual_active(void)
@@ -9071,12 +9161,9 @@ static int apical_isp_core_ops_s_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
                 ret = -EFAULT;
                 goto out;
             }
-            /* OEM: tisp_set_ae_attr copies bytes 16..151 to local buffer,
-             * then calls tisp_ae_manual_set(ae_attr[0], ae_attr[1], ae_attr[2], ae_attr[3]).
-             * ae_attr[0] sets tisp_ae_ctrls[0] (AE manual mode flag). */
-            tisp_ae_ctrls[0] = ae_attr[0];
-            pr_debug("tisp_set_ae_attr: ae_manual=%u ag=%u sdg=%u it=%u\n",
-                     ae_attr[0], ae_attr[1], ae_attr[2], ae_attr[3]);
+            /* OEM: tisp_set_ae_attr passes the whole 0x98-byte attribute
+             * by value to tisp_ae_manual_set. */
+            ret = tisp_ae_manual_set(ae_attr);
             break;
         }
 
