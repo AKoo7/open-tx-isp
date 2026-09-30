@@ -3254,26 +3254,30 @@ void private_spin_unlock_irqrestore(spinlock_t *lock, unsigned long flags)
  * ispcore_frame_channel_streamoff - EXACT Binary Ninja implementation
  * This function handles channel stream off operations
  */
-void ispcore_frame_channel_streamoff(int32_t* arg1)
+/* Returns tisp_channel_stop()'s result (-ETIMEDOUT if the MSCA channel
+ * was still busy after ~3 s); the channel counts as stopped either way. */
+int ispcore_frame_channel_streamoff(int32_t* arg1)
 {
     struct tx_isp_channel_config *dispatch = (struct tx_isp_channel_config *)arg1;
     struct tx_isp_dev *isp_dev = ourISPdev;
     extern int tisp_channel_stop(uint32_t channel_id);
+    int ret = 0;
 
     if (!isp_dev || !dispatch)
-        return;
+        return 0;
 
     /* Use dispatch->state instead of raw OEM pointer offsets into
      * event_priv.  The OEM's *(priv+0x74) hw_state and *(priv+0x9c)
      * spinlock hit wrong memory in our isp_channel struct layout. */
     if (!ispcore_bypass_enabled(isp_dev)) {
         if (dispatch->state == 4) {
-            tisp_channel_stop(dispatch->channel_id);
+            ret = tisp_channel_stop(dispatch->channel_id);
             dispatch->state = 3;
-            pr_info("*** ispcore_frame_channel_streamoff: stopped channel %u ***\n",
-                    dispatch->channel_id);
+            pr_info("*** ispcore_frame_channel_streamoff: stopped channel %u (%d) ***\n",
+                    dispatch->channel_id, ret);
         }
     }
+    return ret;
 }
 
 /**
@@ -3533,20 +3537,23 @@ int tisp_channel_stop(uint32_t channel_id)
         timeout--;
         msleep(1);
 
+        if ((channel_mask & status) == 0)
+            break;
+
         if (timeout == 0) {
             /* Binary Ninja: isp_printf(2, "error(%s,%d): wait ch%d stop too…", "tisp_channel_stop") */
             pr_err("*** tisp_channel_stop: TIMEOUT waiting for channel %d to stop! ***\n", channel_id);
             pr_err("*** tisp_channel_stop: reg 0x9808 = 0x%08x, expected bit %d clear ***\n",
                    status, channel_id);
             isp_printf(2, "error(%s,%d): wait ch%d stop timeout\n", "tisp_channel_stop", __LINE__, channel_id);
-            break;
+            /* Stock returns 0 here. Report it so STREAMOFF and release can
+             * say that the channel may still be writing its last frame. */
+            return -ETIMEDOUT;
         }
-    } while ((channel_mask & status) != 0);
+    } while (1);
 
-    if (timeout > 0) {
-        pr_info("*** tisp_channel_stop: Channel %d stopped successfully (waited %d ms) ***\n",
-                channel_id, 0xbb9 - timeout);
-    }
+    pr_info("*** tisp_channel_stop: Channel %d stopped successfully (waited %d ms) ***\n",
+            channel_id, 0xbb9 - timeout);
 
     /* Binary Ninja: return 0 */
     return 0;
@@ -3851,8 +3858,7 @@ static int ispcore_pad_event_handle(int32_t* arg1, int32_t arg2, void* arg3)
         case TX_ISP_FRAME_EVENT_STREAM_OFF: {
             /* Stream stop */
             ISP_INFO("ispcore_pad_event_handle: case 0x3000004 (stream stop)");
-            ispcore_frame_channel_streamoff(arg1);
-            return 0;
+            return ispcore_frame_channel_streamoff(arg1);
         }
 
         case TX_ISP_FRAME_EVENT_QUEUE_BUFFER: {

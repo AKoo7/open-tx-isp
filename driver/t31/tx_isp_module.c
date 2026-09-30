@@ -1014,6 +1014,33 @@ static void frame_channel_fifo_clear(struct frame_channel_device *fcd)
     spin_unlock_irqrestore(&fcd->oem_buf_lock, flags);
 }
 
+/*
+ * Stop the channel's MSCA output (event 0x3000004 -> tisp_channel_stop).
+ * tisp_channel_stop waits up to ~3 s for the busy bit in 0x9808; if it is
+ * still set, the frame in flight may still be written into its buffer.
+ * The stop is not undone and the caller still clears the address FIFO, so
+ * no further frame starts; the log line is the marker for the device test.
+ * STREAMOFF still returns 0: userspace has no way to keep the pool alive on
+ * an error (OpenIMP ignores it) and an error would leave a stock libimp
+ * channel half disabled.
+ */
+static int frame_channel_stop_msca(struct frame_channel_device *fcd,
+                                   const char *why)
+{
+    int channel = fcd->channel_num;
+    int ret;
+
+    if (!ourISPdev || channel < 0 || channel >= ISP_MAX_CHAN)
+        return 0;
+
+    ret = tx_isp_send_event_to_remote(&ourISPdev->channels[channel].subdev,
+                                      TX_ISP_FRAME_EVENT_STREAM_OFF, NULL);
+    if (ret == -ETIMEDOUT)
+        pr_err("Channel %d: %s: MSCA channel still busy after 3 s, clearing its address FIFO anyway\n",
+               channel, why);
+    return ret;
+}
+
 static void frame_channel_drain_deliverability_queues(struct tx_isp_channel_state *state)
 {
     unsigned long qf;
@@ -2564,11 +2591,7 @@ int frame_channel_release(struct inode *inode, struct file *file)
         /* Closed without STREAMOFF (crash, kill -9): stop the MSCA channel
          * as STREAMOFF does (stock streams off in release), or it keeps
          * writing into memory of the dead process. */
-        if (ourISPdev && fcd->channel_num >= 0 &&
-            fcd->channel_num < ISP_MAX_CHAN)
-            tx_isp_send_event_to_remote(
-                &ourISPdev->channels[fcd->channel_num].subdev,
-                TX_ISP_FRAME_EVENT_STREAM_OFF, NULL);
+        frame_channel_stop_msca(fcd, "release");
         state->streaming = false;
         state->enabled = false;
         state->capture_active = false;
@@ -4771,8 +4794,7 @@ static long frame_channel_ioctl_locked(struct file *file, unsigned int cmd,
 
         /* Stop only the MSCA output channel.  VIC input lifetime is owned by
          * the sensor pipeline rather than by an individual frame channel. */
-        if (ourISPdev && channel >= 0 && channel < ISP_MAX_CHAN)
-            tx_isp_send_event_to_remote(&ourISPdev->channels[channel].subdev, TX_ISP_FRAME_EVENT_STREAM_OFF, NULL);
+        frame_channel_stop_msca(fcd, "STREAMOFF");
         /* OEM __vb2_queue_cancel: drop the queued MSCA addresses. */
         frame_channel_fifo_clear(fcd);
 
