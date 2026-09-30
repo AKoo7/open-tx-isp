@@ -11552,6 +11552,9 @@ static inline void le32_put(uint8_t *arr, int i, uint32_t v) {
     p[3] = (uint8_t)((v >> 24) & 0xFF);
 }
 
+static void tisp_defog_trsy_apply(uint32_t str);
+static uint32_t defog_strength_attr;
+
 /* OEM tiziano_defog_params_refresh — load ROM defaults into defog parameter arrays.
  * OEM copies from embedded ROM constants at addresses 0x95778..0x95988.
  * We inline the extracted values here. */
@@ -11764,6 +11767,10 @@ static void tiziano_defog_params_refresh(void)
         defog_block_air_light_b[i] = 0xC8;
         defog_block_transmit_t[i] = 0xE6;
     }
+
+    /* Rebuild the working transmission lists from the refreshed source,
+     * keeping the user's strength (identity at 128). */
+    tisp_defog_trsy_apply(defog_strength_attr);
 }
 
 /* Bulk writer: mirrors OEM tiziano_defog_set_reg_params() */
@@ -11870,13 +11877,27 @@ int tisp_defog_update_block_stats(const uint8_t *r, const uint8_t *g, const uint
 }
 
 
-/* NOW pointers reseated by tisp_defog_wdr_en */
+/* NOW pointers reseated by tisp_defog_wdr_en.
+ *
+ * The transmission-strength lists are split into an immutable source and a
+ * working copy.  defog_trsyN_list / defog_trsyN_list_wdr hold the tuned
+ * values (filled by tiziano_defog_params_refresh() and the parameter API);
+ * defog_trsy_src[] selects the linear or WDR set.  The strength control
+ * scales that source into defog_trsy_work[], which is what the refresh path
+ * reads through defog_trsyN_list_now.  Stock does the same with the tuning
+ * bank as source, so repeated SetDefog_Strength calls do not compound and
+ * strength 128 restores the tuned lists. */
+static uint8_t defog_trsy_work[5][0x24];
+static uint8_t *defog_trsy_src[5] = {
+    defog_trsy0_list, defog_trsy1_list, defog_trsy2_list,
+    defog_trsy3_list, defog_trsy4_list,
+};
 static uint8_t *defog_ev_list_now = defog_ev_list;
-static uint8_t *defog_trsy0_list_now = defog_trsy0_list;
-static uint8_t *defog_trsy1_list_now = defog_trsy1_list;
-static uint8_t *defog_trsy2_list_now = defog_trsy2_list;
-static uint8_t *defog_trsy3_list_now = defog_trsy3_list;
-static uint8_t *defog_trsy4_list_now = defog_trsy4_list;
+static uint8_t *const defog_trsy0_list_now = defog_trsy_work[0];
+static uint8_t *const defog_trsy1_list_now = defog_trsy_work[1];
+static uint8_t *const defog_trsy2_list_now = defog_trsy_work[2];
+static uint8_t *const defog_trsy3_list_now = defog_trsy_work[3];
+static uint8_t *const defog_trsy4_list_now = defog_trsy_work[4];
 static uint8_t *param_defog_main_para_now = defog_main_para_array;
 static uint8_t *param_defog_fpga_para_now = param_defog_fpga_para_array;
 static uint8_t *param_defog_block_t_x_now = defog_block_t_x_array;
@@ -11900,33 +11921,30 @@ static int32_t defog_itp(uint32_t strength, int32_t max_val, int32_t param)
 /* OEM EXACT: tisp_s_defog_str_internal — interpolate 5 defog trsy arrays
  * based on strength (0-255). Decompiled from OEM at 0x4736c.
  * Interpolates defog_trsy0..4_list_now using defog_itp per entry. */
-static void tisp_s_defog_str_internal(uint8_t *strength_ptr)
+static void tisp_defog_trsy_apply(uint32_t str)
 {
     int32_t max_val;
-    uint32_t str = *strength_ptr;
-    int i;
-    uint8_t *lists[5];
+    int i, j;
 
     max_val = (int32_t)le32_at(param_defog_main_para_now);
     if (max_val < 0x1f)
         max_val = 0x1f;
 
-    defog_strength_attr = str;
-
-    lists[0] = defog_trsy0_list_now;
-    lists[1] = defog_trsy1_list_now;
-    lists[2] = defog_trsy2_list_now;
-    lists[3] = defog_trsy3_list_now;
-    lists[4] = defog_trsy4_list_now;
-
     for (i = 0; i < 9; i++) {
-        int j;
         for (j = 0; j < 5; j++) {
-            int32_t param = (int32_t)le32_at(lists[j] + i * 4);
+            int32_t param = (int32_t)le32_at(defog_trsy_src[j] + i * 4);
             int32_t result = defog_itp(str, max_val, param);
-            le32_put(lists[j], i, (uint32_t)result);
+            le32_put(defog_trsy_work[j], i, (uint32_t)result);
         }
     }
+}
+
+static void tisp_s_defog_str_internal(uint8_t *strength_ptr)
+{
+    uint32_t str = *strength_ptr;
+
+    defog_strength_attr = str;
+    tisp_defog_trsy_apply(str);
 }
 
 /* OEM EXACT: tisp_set_defog_strength wrapper (0x660c0) */
@@ -12419,6 +12437,11 @@ static int tisp_defog_param_array_set(int param_id, void *in_buf, int *size_buf)
 
     if (param_id == 0x37f)
         tiziano_defog_params_init();
+    /* Transmission lists are the strength source; rebuild the working set. */
+    if ((param_id >= 0x363 && param_id <= 0x367) ||
+        (param_id >= 0x377 && param_id <= 0x37b) ||
+        param_id == 0x369 || param_id == 0x37c)
+        tisp_defog_trsy_apply(defog_strength_attr);
 
     return 0;
 }
@@ -30048,21 +30071,21 @@ int tisp_defog_wdr_en(int enable)
 
 	if (defog_wdr_en) {
 		defog_ev_list_now = defog_ev_list_wdr;
-		defog_trsy0_list_now = defog_trsy0_list_wdr;
-		defog_trsy1_list_now = defog_trsy1_list_wdr;
-		defog_trsy2_list_now = defog_trsy2_list_wdr;
-		defog_trsy3_list_now = defog_trsy3_list_wdr;
-		defog_trsy4_list_now = defog_trsy4_list_wdr;
+		defog_trsy_src[0] = defog_trsy0_list_wdr;
+		defog_trsy_src[1] = defog_trsy1_list_wdr;
+		defog_trsy_src[2] = defog_trsy2_list_wdr;
+		defog_trsy_src[3] = defog_trsy3_list_wdr;
+		defog_trsy_src[4] = defog_trsy4_list_wdr;
 		param_defog_block_t_x_now = param_defog_block_t_x_wdr_array;
 		param_defog_fpga_para_now = param_defog_fpga_para_wdr_array;
 		param_defog_main_para_now = param_defog_main_para_wdr_array;
 	} else {
 		defog_ev_list_now = defog_ev_list;
-		defog_trsy0_list_now = defog_trsy0_list;
-		defog_trsy1_list_now = defog_trsy1_list;
-		defog_trsy2_list_now = defog_trsy2_list;
-		defog_trsy3_list_now = defog_trsy3_list;
-		defog_trsy4_list_now = defog_trsy4_list;
+		defog_trsy_src[0] = defog_trsy0_list;
+		defog_trsy_src[1] = defog_trsy1_list;
+		defog_trsy_src[2] = defog_trsy2_list;
+		defog_trsy_src[3] = defog_trsy3_list;
+		defog_trsy_src[4] = defog_trsy4_list;
 		param_defog_block_t_x_now = defog_block_t_x_array;
 		param_defog_fpga_para_now = param_defog_fpga_para_array;
 		param_defog_main_para_now = defog_main_para_array;
