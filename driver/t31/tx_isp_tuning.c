@@ -14806,12 +14806,27 @@ int tisp_awb_get_par_cfg(void *out_buf, void *size_buf)
 
 /* OEM EXACT: tisp_reg_map_get — reads ISP register via system_reg_read.
  * Output layout: buf+0xc = raw offset, buf+0x10 = value, *size = 8. */
+/* Tuning register map access: accept an ISP-core offset or the stock
+ * physical address inside the 1 MiB ISP window, nothing else. */
+static int tisp_reg_map_offset(u32 reg, u32 *offset)
+{
+    if (reg - 0x13300000U < 0x100000U)
+        reg -= 0x13300000U;
+    if (reg >= 0x100000U || (reg & 3U))
+        return -EINVAL;
+    *offset = reg;
+    return 0;
+}
+
 int tisp_reg_map_get(int reg_addr, void *reg_val, void *size_buf)
 {
     uint32_t *out = (uint32_t *)reg_val;
     uint32_t val;
+    u32 offset;
 
-    val = system_reg_read(reg_addr);
+    if (tisp_reg_map_offset((u32)reg_addr, &offset))
+        return -EINVAL;
+    val = system_reg_read(offset);
     out[3] = reg_addr;   /* buf + 0xc: store the register offset */
     out[4] = val;        /* buf + 0x10: store the read value */
     *(int *)size_buf = 8;
@@ -15796,6 +15811,9 @@ int tisp_reg_map_set(void *in_buf)
     /* Binary Ninja: memcpy(&var_18, arg1 + 0x10, 4) - read value to write */
     uint32_t reg_value;
     memcpy(&reg_value, (char*)in_buf + 0x10, 4);
+
+    if (tisp_reg_map_offset(reg_offset, &reg_offset))
+        return -EINVAL;
 
     /* Binary Ninja: system_reg_write(0xecd00000 + var_14, var_18) */
     /* Note: 0xecd00000 is subtracted from physical address 0x13300000 to get offset */
