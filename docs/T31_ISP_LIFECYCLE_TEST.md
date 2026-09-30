@@ -298,3 +298,204 @@ Nach dem Neustart `pidof timpsd` und `bytes 5` prüfen.
 - Die Y/UV-Atomarität zeigt sich nur als seltene Farbvertauschung zwischen zwei
   Frames. Ohne Bildprüfung ist sie hier nicht nachweisbar.
 - Der Bypass-Pfad (`ISP_CTRL_BYPASS`) wird von timps nicht benutzt.
+
+## Latenz-Messung (Branch `claude/t31-isp-latency`)
+
+Dieser Abschnitt misst, ob der Latenz-Branch die langen Phasen mit
+abgeschalteten Interrupts beseitigt. Er baut auf den Abschnitten 0 bis 3 auf
+(Regeln, Modul laden, `start_timps`, `stop_timps`, `bytes`, `post`, `check`).
+Verglichen werden zwei Module mit gleicher Kamera, Szene und Konfiguration:
+
+- **alt**: Stand `claude/t31-isp-all` (Commit `999a62b`)
+- **neu**: Stand `claude/t31-isp-latency`
+
+| Commit (Titel) | Was sich messen lässt |
+|---|---|
+| do not zero the active parameter block before overwriting it | kürzerer Tag/Nacht-Wechsel |
+| refresh each day/night module with local IRQs off | kein eigener Messwert |
+| run the day/night parameter switch from a work item | keine ms-Spitze pro Tag/Nacht-Wechsel (L2, L3) |
+| serialize the day/night and custom bank switches | kein Hänger (`blocked for more than`) |
+| cancel the day/night work on module exit before tisp_deinit_free | kein Oops beim `rmmod` (L1) |
+| stop logging every poll of the VIC error-recovery loop | nur bei VIC-Fehlern: keine `addr ctl is`-Flut |
+| bound the release-ack poll of the WDR exception reset | nur im WDR-Modus bei Fehlern, sonst nicht erreichbar |
+| rate-limit the VIC interrupt error lines | nur bei VIC-Fehlern: höchstens 20 `Err [VIC_INT]` pro 5 s |
+| let the AE0 solver read the unpacked statistics planes directly | wenige µs pro Frame, nicht einzeln messbar |
+| clear only the unused tail of the AE0 statistics planes | wenige µs pro Frame, nicht einzeln messbar |
+| skip the AE1 statistics work in linear mode | `ctxt`/s in `/proc/stat` sinkt um etwa die Bildrate (L4) |
+
+### L0: Module und Messprogramm bauen (PC)
+
+Beide Module wie in Abschnitt 0 bauen und als `/tmp/tx-isp-alt.ko` und
+`/tmp/tx-isp-neu.ko` auf die Kamera kopieren. Dazu ein kleines Messprogramm im
+Stil von `cyclictest`: Es schläft in einer Schleife 1 ms mit SCHED_FIFO und
+misst, wie spät es aufwacht. Jede Phase mit abgeschalteten Interrupts verzögert
+den Timer-Interrupt und damit das Aufwachen um genau diese Zeit.
+
+```sh
+cat > /tmp/latprobe.c <<'EOF'
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <sched.h>
+#include <sys/mman.h>
+
+int main(int argc, char **argv)
+{
+	int secs = argc > 1 ? atoi(argv[1]) : 60, s = 0;
+	struct sched_param sp = { .sched_priority = 90 };
+	struct timespec next, now;
+	long lat, max = 0, smax = 0, n = 0, b[4] = { 0 };
+
+	if (sched_setscheduler(0, SCHED_FIFO, &sp))
+		perror("sched_setscheduler");
+	mlockall(MCL_CURRENT | MCL_FUTURE);
+	clock_gettime(CLOCK_MONOTONIC, &next);
+	while (s < secs) {
+		next.tv_nsec += 1000000;
+		if (next.tv_nsec >= 1000000000) {
+			next.tv_nsec -= 1000000000;
+			next.tv_sec++;
+		}
+		clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, NULL);
+		clock_gettime(CLOCK_MONOTONIC, &now);
+		lat = (now.tv_sec - next.tv_sec) * 1000000L +
+		      (now.tv_nsec - next.tv_nsec) / 1000;
+		if (lat > max)
+			max = lat;
+		if (lat > smax)
+			smax = lat;
+		b[lat >= 2000 ? 3 : lat >= 1000 ? 2 : lat >= 500 ? 1 : 0]++;
+		next = now; /* eine Spitze nur einmal zählen */
+		if (++n % 1000 == 0) {
+			printf("t=%d max_us=%ld\n", ++s, smax);
+			fflush(stdout);
+			smax = 0;
+		}
+	}
+	printf("gesamt n=%ld max_us=%ld <500:%ld 500-999:%ld 1000-1999:%ld >=2000:%ld\n",
+	       n, max, b[0], b[1], b[2], b[3]);
+	return 0;
+}
+EOF
+$ROOT/host/bin/mipsel-linux-gcc -static -O2 -Wall -o /tmp/latprobe /tmp/latprobe.c
+ssh root@$CAM 'cat > /tmp/latprobe && chmod +x /tmp/latprobe' < /tmp/latprobe
+```
+
+Der Kernel der Kamera hat `CONFIG_HIGH_RES_TIMERS=y`, 1 ms Periode geht also.
+Die Zeile `t=N max_us=M` ist etwa eine pro Sekunde. Sie zeigt die größte
+Verspätung dieser Sekunde.
+
+### L1: Modul wechseln (Kamera)
+
+Wie Abschnitt 2, aber mit dem jeweiligen Modul und **ohne**
+`isp_day_night_switch_drop_frame_num` (Standard 0), damit nur die Latenz
+gemessen wird:
+
+```sh
+KO=/tmp/tx-isp-alt.ko      # zweiter Durchlauf: /tmp/tx-isp-neu.ko
+/etc/init.d/S95timps stop; sleep 2
+set -- $(cat /etc/modules.d/30-sensor*); rmmod $1; rmmod tx_isp_t31
+set -- $(cat /etc/modules.d/20-isp); shift; insmod $KO "$@"
+set -- $(cat /etc/modules.d/30-sensor*); modprobe "$@"
+dmesg -c >/dev/null; start_timps; bytes 5
+```
+
+Höchstens zwei, drei Modulwechsel pro Neustart (Speicherverlust beim Entladen,
+siehe Regeln). Sicherer ist: alt messen, neu starten, neu messen.
+
+### L2: Grundlast und Tag/Nacht-Schleife mit Latenz-Sonde
+
+```sh
+# 60 s Grundlast: Stream läuft, keine Wechsel
+curl -s -m 70 -o /dev/null http://127.0.0.1:8880/stream.mp4 &
+/tmp/latprobe 60 > /tmp/lat-ruhe.txt; wait
+tail -1 /tmp/lat-ruhe.txt
+
+# 120 s mit Tag/Nacht-Wechsel alle 5 s
+curl -s -m 130 -o /dev/null http://127.0.0.1:8880/stream.mp4 &
+/tmp/latprobe 120 > /tmp/lat-dn.txt &
+for r in $(seq 12); do
+  post '{"image":{"running_mode":1}}'; sleep 5
+  post '{"image":{"running_mode":0}}'; sleep 5
+done
+wait
+tail -1 /tmp/lat-dn.txt
+sort -t= -k3 -n /tmp/lat-dn.txt | tail -5      # die fünf größten Sekunden
+check L2
+```
+
+Auswertung: Die Zahl der Sekunden mit `max_us` über 1000 in `lat-dn.txt` mit der
+Zahl der Wechsel (24) vergleichen, jeweils für alt und neu. Erwartung: Mit
+**alt** hat fast jede Sekunde mit einem Wechsel eine Spitze in der
+Größenordnung 1 bis 5 ms. Mit **neu** liegen die Spitzen während der Wechsel
+nahe an der Grundlast aus `lat-ruhe.txt`, höchstens einige 100 µs darüber
+(längstes einzelnes Modul). Die Grundlast selbst ändert sich kaum, denn die
+AE/AWB-Algorithmen laufen weiterhin mit abgeschalteten Interrupts.
+
+In `L2.dmesg` pro Wechsel eine Zeile `Day/night mode updated: 0` bzw. `: 1`
+(etwa 24). FAIL-Treffer sind zusätzlich zu Abschnitt 3:
+`T31 day/night switch failed`, `T31 day/night apply failed`.
+
+Danach `running_mode` auf den Wert aus `/tmp/timps-test.conf` zurücksetzen.
+
+### L3: Frame-Abstände (nur mit Zustimmung)
+
+Die Frame-Zeitstempel entstehen im ISP-Interrupt. Beim alten Modul lief der
+Tag/Nacht-Wechsel im selben Interrupt **vor** der Frame-Abholung, der
+Zeitstempel des Frames wurde also um die Dauer des Wechsels verschoben. Das
+zeigt sich als Ausreißer im Frame-Abstand. Die Messung holt Stream-Daten auf den
+PC. Deshalb nur, wenn der Mensch zugestimmt hat. Es werden nur Zeitstempel
+ausgegeben, keine Bilder gespeichert.
+
+```sh
+# PC, während auf der Kamera die Schleife aus L2 läuft (ohne latprobe)
+ffprobe -v error -rtsp_transport tcp -select_streams v:0 \
+  -show_entries packet=pts_time -of csv=p=0 -read_intervals '%+120' \
+  "rtsp://<user>:<pass>@$CAM:554/ch0" > /tmp/pts.txt
+awk 'NR>1 { d = ($1 - p) * 1000; if (d > m) m = d; s += d; n++;
+            if (d > 1.5 * 1000 / 25) big++ } { p = $1 }
+     END { printf "n=%d mittel=%.2f ms max=%.2f ms lange=%d\n", n, s/n, m, big }' /tmp/pts.txt
+```
+
+Pfad (`video0.rtsp_path`) und Zugangsdaten aus der timps-Konfiguration nehmen. `25` durch die
+Bildrate von `video0.fps` ersetzen. Erwartung: Bei alt ist die Streuung um die
+Wechsel sichtbar größer als bei neu. Mittelwert und Frame-Zahl bleiben gleich.
+
+### L4: Interrupts und Kontextwechsel (linearer Modus)
+
+```sh
+snap() { grep -E 'isp-m0|isp-w02' /proc/interrupts; grep -E '^ctxt' /proc/stat; }
+curl -s -m 70 -o /dev/null http://127.0.0.1:8880/stream.mp4 &
+sleep 5; snap > /tmp/s0; sleep 60; snap > /tmp/s1; wait
+paste /tmp/s0 /tmp/s1
+```
+
+Differenzen durch 60 teilen. Erwartung: Die Interrupt-Raten von `isp-m0` (37)
+und `isp-w02` (38) sind bei alt und neu gleich. `ctxt`/s ist bei neu etwa um die
+Bildrate kleiner (AE1-Ereignis entfällt ohne WDR). Läuft die Kamera im
+WDR-Modus, bleibt `ctxt`/s gleich.
+
+### L5: Drop-Frames nach dem Wechsel
+
+T2 aus Abschnitt 4 mit dem neuen Modul und
+`isp_day_night_switch_drop_frame_num=6` wiederholen. Erwartung wie dort: Der
+Stream läuft nach jedem Wechsel weiter. Neu gilt der Zählwert ab dem Moment, in
+dem die neuen Parameter aktiv sind. Pro Wechsel fehlen also mindestens 6 Frames,
+gelegentlich einer mehr.
+
+### L6: Fehlerpfade (nur beobachten)
+
+VIC-Fehler und die WDR-Ausnahme lassen sich nicht gezielt auslösen. Treten sie
+auf, gilt:
+
+| Marker | Bedeutung | Erwartet |
+|---|---|---|
+| `Err [VIC_INT] : …` | VIC-Fehlerbit | höchstens 20 Zeilen pro 5 s, danach `… callbacks suppressed` |
+| `VIC error handler: status 0x…, restarting VIC` | VIC-Neustart nach Fehler | vereinzelt; `addr ctl is` gibt es nicht mehr pro Schleifendurchlauf |
+| `VIC error handler: VIC did not stop, addr ctl is 0x…` | VIC blieb 1 ms lang aktiv, Neustart trotzdem | nie; sonst Befund |
+| `ispcore: WDR exception reset: no release ack` | ISP bestätigte die Freigabe 1 ms lang nicht | nie; sonst Befund (vorher: Hänger) |
+| `scheduling while atomic` / `sleeping function called from invalid context` | u. a. WDR-Refresh im Interrupt (alt) | nie mit neu |
+
+Im Bericht zu L2 bis L5 die Zahlen für alt und neu nebeneinander angeben
+(`gesamt`-Zeile von `latprobe`, Anzahl der Sekunden über 1 ms, `ctxt`/s,
+Interrupt-Raten, bei Zustimmung die `ffprobe`-Zeile).
