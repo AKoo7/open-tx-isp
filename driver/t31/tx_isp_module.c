@@ -2358,7 +2358,9 @@ static void frame_channel_bootstrap_slot(struct frame_channel_device *fcd,
 
     if (fcd->magic != FRAME_CHANNEL_MAGIC || fcd->channel_num != channel_num) {
         fcd->channel_num = channel_num;
-        mutex_init(&fcd->buffer_mutex);
+        /* buffer_mutex is not initialised here: open calls this with the
+         * mutex held. tx_isp_init and tx_isp_create_framechan_devices
+         * initialise it before any file can reach the channel. */
         spin_lock_init(&fcd->buffer_queue_lock);
         fcd->buffer_queue_head = &fcd->buffer_queue_base;
         fcd->buffer_queue_base = &fcd->buffer_queue_base;
@@ -2496,7 +2498,9 @@ int frame_channel_open(struct inode *inode, struct file *file)
         return -ENODEV;
     }
 
+    mutex_lock(&fcd->buffer_mutex);
     frame_channel_prepare(fcd, channel_num, minor);
+    mutex_unlock(&fcd->buffer_mutex);
 
     file->private_data = fcd;
 
@@ -2520,6 +2524,9 @@ int frame_channel_release(struct inode *inode, struct file *file)
     state = &fcd->state;
 
     pr_info("*** FRAME CHANNEL %d RELEASED ***\n", fcd->channel_num);
+
+    /* Serialise against ioctls on other fds of the same channel. */
+    mutex_lock(&fcd->buffer_mutex);
 
     /* OEM-style release: tear down active queueing/stream state back to activate. */
     if (state->state == 4 || state->streaming) {
@@ -2547,6 +2554,7 @@ int frame_channel_release(struct inode *inode, struct file *file)
     /* OEM __vb2_queue_free on release: no stale address may survive the
      * close, userspace frees the buffers right after. */
     frame_channel_fifo_clear(fcd);
+    mutex_unlock(&fcd->buffer_mutex);
 
     file->private_data = NULL;
     return 0;
@@ -3848,7 +3856,49 @@ EXPORT_SYMBOL(tx_isp_hardware_frame_done_handler);
 
 /* Frame channel implementations removed - handled by FS probe instead */
 
+/*
+ * Frame-channel locking. Lock order, outermost first:
+ *
+ *  1. fcd->buffer_mutex - process context only (ioctl, open, release).
+ *     Serialises the frame-channel ioctls of one channel (QBUF, DQBUF,
+ *     STREAMON, STREAMOFF, REQBUFS, formats) and open/release; stock holds
+ *     a per-queue mutex for the same purpose. Sleeping under it is fine
+ *     (copy_*_user, the up to 3 s msleep loop of tisp_channel_stop). It is
+ *     dropped while DQBUF and the 0x400456bf wait sleep, so STREAMOFF and
+ *     release can take it and wake them.
+ *  2. Spinlocks, all irqsave and all leaves (nothing is taken under them,
+ *     no two of them are nested, nothing sleeps under them):
+ *     fcd->oem_buf_lock (slot states, shared with frame_chan_event in the
+ *     ISP interrupt), state->buffer_lock, state->queue_lock, and
+ *     msca_fifo_lock[ch] in tx_isp_core.c (MSCA Y/UV pair and FIFO clear).
+ *
+ * The ISP interrupt (frame_chan_event, the dropped-frame resubmission) and
+ * the workqueues only take the spinlocks, never buffer_mutex.
+ */
+static long frame_channel_ioctl_locked(struct file *file, unsigned int cmd,
+                                       unsigned long arg);
+
 long frame_channel_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+    struct frame_channel_device *fcd = file ? file->private_data : NULL;
+    long ret;
+
+    if (!fcd || fcd < &frame_channels[0] ||
+        fcd >= &frame_channels[ARRAY_SIZE(frame_channels)]) {
+        pr_err("frame channel ioctl 0x%x: no channel bound to file\n", cmd);
+        return -EINVAL;
+    }
+
+    if (mutex_lock_interruptible(&fcd->buffer_mutex))
+        return -ERESTARTSYS;
+    ret = frame_channel_ioctl_locked(file, cmd, arg);
+    mutex_unlock(&fcd->buffer_mutex);
+    return ret;
+}
+
+/* Called and returns with fcd->buffer_mutex held. */
+static long frame_channel_ioctl_locked(struct file *file, unsigned int cmd,
+                                       unsigned long arg)
 {
     void __user *argp = (void __user *)arg;
     struct frame_channel_device *fcd;
@@ -4061,9 +4111,16 @@ long frame_channel_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned 
             state->state = 3;   /* OEM ready state after buffers are prepared */
             state->flags = 0;
             frame_channel_clear_tracked_buffers(fcd);
-            /* Reset OEM buffer rotation state for new allocation */
-            memset(fcd->oem_bufs, 0, sizeof(fcd->oem_bufs));
-            fcd->oem_buf_count = reqbuf.count;
+            /* Reset OEM buffer rotation state for new allocation. The ISP
+             * interrupt reads the slots under oem_buf_lock. */
+            {
+                unsigned long oem_flags;
+
+                spin_lock_irqsave(&fcd->oem_buf_lock, oem_flags);
+                memset(fcd->oem_bufs, 0, sizeof(fcd->oem_bufs));
+                fcd->oem_buf_count = reqbuf.count;
+                spin_unlock_irqrestore(&fcd->oem_buf_lock, oem_flags);
+            }
             {
                 unsigned long buffer_flags;
 
@@ -4446,10 +4503,14 @@ long frame_channel_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned 
             }
         }
 
-        /* OEM-aligned DQBUF: wait for frame_ready_count > 0 or streaming stop */
+        /* OEM-aligned DQBUF: wait for frame_ready_count > 0 or streaming stop.
+         * Sleep without buffer_mutex so STREAMOFF/release can run and wake
+         * us; state is re-checked below with the mutex held again. */
+        mutex_unlock(&fcd->buffer_mutex);
         ret = wait_event_interruptible(state->frame_wait,
                                        atomic_read(&state->frame_ready_count) > 0 ||
                                        !state->streaming);
+        mutex_lock(&fcd->buffer_mutex);
         if (ret < 0)
             return ret; /* -ERESTARTSYS */
         if (!state->streaming)
@@ -4773,8 +4834,11 @@ long frame_channel_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned 
             state->enabled = true;
         }
 
-        /* OEM: private_wait_for_completion_interruptible($s0 + 0x2d4) */
+        /* OEM: private_wait_for_completion_interruptible($s0 + 0x2d4).
+         * Not under buffer_mutex: STREAMOFF must be able to complete_all(). */
+        mutex_unlock(&fcd->buffer_mutex);
         ret = wait_for_completion_interruptible(&state->frame_done);
+        mutex_lock(&fcd->buffer_mutex);
 
         if (ret >= 0) {
             /* OEM: var_78 = *($s0 + 0x2d4) + 1 — return frame count.
@@ -5823,6 +5887,15 @@ static int tx_isp_init(void)
     if (gpio_mode_check != 0) {
         pr_err("VIC_CTRL : %08x\n", gpio_mode_check);
         return gpio_mode_check;
+    }
+
+    /* The frame-channel mutex must be usable before any channel node is
+     * registered, whichever path registers it. */
+    {
+        int fc;
+
+        for (fc = 0; fc < ARRAY_SIZE(frame_channels); fc++)
+            mutex_init(&frame_channels[fc].buffer_mutex);
     }
 
     /* Allocate ISP device structure */

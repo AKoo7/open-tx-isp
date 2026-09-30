@@ -4020,6 +4020,9 @@ static int tx_isp_create_framechan_devices(struct tx_isp_dev *isp_dev)
         /* Set up device name */
         snprintf(dev_name, sizeof(dev_name), "framechan%d", i);
         memset(&frame_channels[i], 0, sizeof(frame_channels[i]));
+        /* The memset wiped buffer_mutex (a zeroed mutex reads as locked);
+         * no file can reach the channel before misc_register() below. */
+        mutex_init(&frame_channels[i].buffer_mutex);
         fs_miscdev->name = kstrdup(dev_name, GFP_KERNEL);
         if (!fs_miscdev->name) {
             pr_err("Failed to allocate device name for framechan%d\n", i);
