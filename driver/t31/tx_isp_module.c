@@ -980,6 +980,33 @@ static void frame_channel_clear_tracked_buffers(struct frame_channel_device *fcd
         kfree(stale[i]);
 }
 
+/*
+ * Stock sends 0x3000007 (FIFO clear) from __vb2_queue_cancel and
+ * __vb2_queue_free. QBUF writes each address straight into the MSCA FIFO,
+ * so without the clear, addresses of a pool userspace freed after STREAMOFF
+ * stay in the hardware FIFO and the next STREAMON writes frames into that
+ * memory, which by then may belong to someone else.
+ */
+#define TX_ISP_FRAME_EVENT_FIFO_CLEAR 0x3000007
+
+static void frame_channel_fifo_clear(struct frame_channel_device *fcd)
+{
+    unsigned long flags;
+    int channel, i;
+
+    if (!fcd)
+        return;
+    channel = fcd->channel_num;
+    if (ourISPdev && channel >= 0 && channel < ISP_MAX_CHAN)
+        tx_isp_send_event_to_remote(&ourISPdev->channels[channel].subdev,
+                                    TX_ISP_FRAME_EVENT_FIFO_CLEAR, NULL);
+    spin_lock_irqsave(&fcd->oem_buf_lock, flags);
+    for (i = 0; i < 64; i++)
+        if (fcd->oem_bufs[i].state == TX_ISP_FRAME_SLOT_ACTIVE)
+            fcd->oem_bufs[i].state = TX_ISP_FRAME_SLOT_FREE;
+    spin_unlock_irqrestore(&fcd->oem_buf_lock, flags);
+}
+
 static void frame_channel_drain_deliverability_queues(struct tx_isp_channel_state *state)
 {
     unsigned long qf;
@@ -2505,6 +2532,9 @@ int frame_channel_release(struct inode *inode, struct file *file)
 
     frame_channel_drain_deliverability_queues(state);
     frame_channel_clear_tracked_buffers(fcd);
+    /* OEM __vb2_queue_free on release: no stale address may survive the
+     * close, userspace frees the buffers right after. */
+    frame_channel_fifo_clear(fcd);
 
     file->private_data = NULL;
     return 0;
@@ -3937,6 +3967,11 @@ long frame_channel_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned 
             return -EFAULT;
 
         pr_info("*** Channel %d: REQBUFS - MEMORY-AWARE implementation ***\n", channel);
+
+        /* OEM __vb2_queue_free: a new buffer set starts with an empty MSCA
+         * address FIFO. */
+        if (!state->streaming)
+            frame_channel_fifo_clear(fcd);
         pr_info("Channel %d: Request %d buffers, type=%d memory=%d\n",
                 channel, reqbuf.count, reqbuf.type, reqbuf.memory);
 
@@ -4602,6 +4637,8 @@ long frame_channel_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned 
          * the sensor pipeline rather than by an individual frame channel. */
         if (ourISPdev && channel >= 0 && channel < ISP_MAX_CHAN)
             tx_isp_send_event_to_remote(&ourISPdev->channels[channel].subdev, TX_ISP_FRAME_EVENT_STREAM_OFF, NULL);
+        /* OEM __vb2_queue_cancel: drop the queued MSCA addresses. */
+        frame_channel_fifo_clear(fcd);
 
         pr_info("Channel %d: Streaming stopped\n", channel);
         return 0;
