@@ -7261,10 +7261,7 @@ static int __submit_buffer_to_msca(int channel, u32 phys_addr)
         return ret;
     }
 
-    writel(dma_buffer.y_dma,
-           ourISPdev->core_regs + (channel << 8) + 0x996c);
-    writel(dma_buffer.uv_dma,
-           ourISPdev->core_regs + (channel << 8) + 0x9984);
+    tx_isp_msca_fifo_push(channel, dma_buffer.y_dma, dma_buffer.uv_dma);
 
     return 0;
 }

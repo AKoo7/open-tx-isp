@@ -3451,6 +3451,41 @@ int tisp_channel_attr_set(uint32_t channel_id, void* attr)
     return 0;
 }
 
+/*
+ * One MSCA output address is two writes: Y to +0x996c, then UV to +0x9984.
+ * Both are FIFO push ports, so a pair written by one caller must not be
+ * interleaved with a pair from another one (Y_a, Y_b, UV_b, UV_a swaps the
+ * chroma of two frames). Writers are QBUF in process context and the
+ * dropped-frame resubmission in frame_chan_event, which runs in the ISP
+ * interrupt. Stock holds the channel spinlock across the pair and across
+ * the FIFO clear (ispcore_pad_event_handle 0x3000005/0x3000007).
+ *
+ * Leaf lock: nothing else is taken while it is held, and it is never taken
+ * while fcd->oem_buf_lock is held (see the frame-channel lock order in
+ * tx_isp_module.c).
+ */
+/* Not ARRAY_SIZE(): spinlock_t is zero-sized on a non-debug UP kernel. */
+#define MSCA_FIFO_CHANNELS 3
+static spinlock_t msca_fifo_lock[MSCA_FIFO_CHANNELS] = {
+    [0 ... MSCA_FIFO_CHANNELS - 1] = __SPIN_LOCK_UNLOCKED(msca_fifo_lock),
+};
+
+void tx_isp_msca_fifo_push(u32 channel, u32 y_addr, u32 uv_addr)
+{
+    void __iomem *regs;
+    unsigned long flags;
+
+    if (channel >= MSCA_FIFO_CHANNELS || !ourISPdev ||
+        !ourISPdev->core_regs)
+        return;
+
+    regs = ourISPdev->core_regs + (channel << 8);
+    spin_lock_irqsave(&msca_fifo_lock[channel], flags);
+    writel(y_addr, regs + 0x996c);
+    writel(uv_addr, regs + 0x9984);
+    spin_unlock_irqrestore(&msca_fifo_lock[channel], flags);
+}
+
 /**
  * tisp_channel_fifo_clear - EXACT Binary Ninja implementation
  * Clear channel FIFOs by writing to control registers
@@ -3872,10 +3907,7 @@ static int ispcore_pad_event_handle(int32_t* arg1, int32_t arg2, void* arg3)
              * OEM: *(base + (ch_id << 8) + 0x996c) = Y
              *      *(base + (ch_id << 8) + 0x9984) = UV */
             if (isp_dev->core_regs && ch_id < 3) {
-                writel(y_addr,
-                       isp_dev->core_regs + (ch_id << 8) + 0x996c);
-                writel(uv_addr,
-                       isp_dev->core_regs + (ch_id << 8) + 0x9984);
+                tx_isp_msca_fifo_push(ch_id, y_addr, uv_addr);
                 ISP_INFO("ispcore QBUF: ch%u Y=0x%x UV=0x%x (%ux%u)",
                          ch_id, y_addr, uv_addr, ch_w, ch_h);
             }
@@ -3895,8 +3927,17 @@ static int ispcore_pad_event_handle(int32_t* arg1, int32_t arg2, void* arg3)
                 return 0;
 
             result = 0;
-            if ((dispatch->enabled & 0x20) == 0) {
+            if ((dispatch->enabled & 0x20) == 0 &&
+                dispatch->channel_id < MSCA_FIFO_CHANNELS) {
+                unsigned long fifo_flags;
+
+                /* Stock clears under the channel lock: no QBUF pair may
+                 * land half before and half after the clear. */
+                spin_lock_irqsave(&msca_fifo_lock[dispatch->channel_id],
+                                  fifo_flags);
                 tisp_channel_fifo_clear(dispatch->channel_id);
+                spin_unlock_irqrestore(&msca_fifo_lock[dispatch->channel_id],
+                                       fifo_flags);
                 ISP_INFO("ispcore_pad_event_handle: channel %u fifo cleared",
                          dispatch->channel_id);
             }

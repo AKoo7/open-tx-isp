@@ -664,6 +664,8 @@ extern struct frame_channel_device frame_channels[4]; /* Shared frame channel ar
 extern int num_channels; /* Shared frame channel count */
 void frame_channel_prepare(struct frame_channel_device *fcd,
 			   int channel_num, int minor);
+/* Push one Y/UV address pair into an MSCA output FIFO (tx_isp_core.c). */
+void tx_isp_msca_fifo_push(u32 channel, u32 y_addr, u32 uv_addr);
 
 /*
  * Internal ops. Never call this from drivers, only the tx isp device can call
