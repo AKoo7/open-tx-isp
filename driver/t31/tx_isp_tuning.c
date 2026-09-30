@@ -8905,7 +8905,9 @@ static int apical_isp_core_ops_s_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
             int8_t hz;
             int i;
 
-            if (ctrl->value > 2) {
+            /* Stock compares unsigned (< 3); a signed test let negative
+             * values index before antiflick_hz[]. */
+            if ((uint32_t)ctrl->value > 2) {
                 ret = -EINVAL;
                 goto out;
             }
@@ -8946,7 +8948,7 @@ static int apical_isp_core_ops_s_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
             break;
 
         case 0x8000023:  // AE Compensation — OEM: tisp_set_ae_comp → tisp_ae_s_comp
-            if (ctrl->value < 256) {
+            if ((uint32_t)ctrl->value < 256) {
                 tuning->ae_comp = ctrl->value;
                 tisp_ae_s_comp((uint8_t)ctrl->value);
             }
@@ -9001,14 +9003,14 @@ static int apical_isp_core_ops_s_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
             break;
 
         case 0x8000085:  // 3DNS/Temper Ratio — OEM: tisp_s_3dns_ratio
-            if (ctrl->value < 256) {
+            if ((uint32_t)ctrl->value < 256) {
                 tuning->temper_strength = ctrl->value;
                 tisp_s_3dns_ratio(ctrl->value);
             }
             break;
 
         case 0x8000086:  // 2DNS/Sinter Ratio — OEM: tisp_s_2dns_ratio
-            if (ctrl->value < 256) {
+            if ((uint32_t)ctrl->value < 256) {
                 tuning->sinter_strength = ctrl->value;
                 tisp_s_2dns_ratio(ctrl->value);
             }
@@ -9042,7 +9044,7 @@ static int apical_isp_core_ops_s_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
 
         case 0x8000101: {  // BCSH Hue — OEM: tisp_set_bcsh_hue → tisp_bcsh_s_hue
             /* OEM passes value as single byte to tisp_bcsh_s_hue */
-            if (ctrl->value < 256) {
+            if ((uint32_t)ctrl->value < 256) {
                 tisp_bcsh_s_hue((uint8_t)ctrl->value);
             }
             break;
