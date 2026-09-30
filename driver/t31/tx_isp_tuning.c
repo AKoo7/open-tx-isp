@@ -4098,15 +4098,6 @@ static struct ae_ev_list ae1_comp_ev_list = { .data = {
 
 static uint32_t IspAeStatic[AE_ZONE_COUNT_MAX * AE_STATS_PLANE_COUNT];
 
-/* OEM: Separate R/G/B per-zone arrays — ae0_weight_mean2 takes these as
- * arg1/arg2/arg3 (via Tiziano_ae0_fpga args 1-3).  ae0_interrupt_static
- * extracts R/G/B from the 4-word AE DMA entries per zone. */
-static uint32_t ae0_zone_r[225];   /* Per-zone R channel sum */
-static uint32_t ae0_zone_g[225];   /* Per-zone G channel sum */
-static uint32_t ae0_zone_b[225];   /* Per-zone B channel sum */
-static uint32_t ae0_zone_dark[225];
-static uint32_t ae0_zone_bright[225];
-
 /* Global data pointers for parameter addressing.
  * IspAe0WmeanParam remains an OEM-era wrapper handle; do not assume its
  * runtime layout matches the decoded AE plane arrays. */
@@ -5037,11 +5028,6 @@ static int tisp_ae0_get_statistics(void *buffer, uint32_t flags)
         return -EINVAL;
 
     memset(IspAeStatic, 0, sizeof(IspAeStatic));
-    memset(ae0_zone_r, 0, sizeof(ae0_zone_r));
-    memset(ae0_zone_g, 0, sizeof(ae0_zone_g));
-    memset(ae0_zone_b, 0, sizeof(ae0_zone_b));
-    memset(ae0_zone_dark, 0, sizeof(ae0_zone_dark));
-    memset(ae0_zone_bright, 0, sizeof(ae0_zone_bright));
 
     for (idx = 0; idx < zones; idx++, src += 4) {
         uint32_t w0 = src[0];
@@ -5057,13 +5043,6 @@ static int tisp_ae0_get_statistics(void *buffer, uint32_t flags)
         plane_dark[idx] = dark_raw;
         plane_bright[idx] = bright_raw;
         plane_extra[idx] = ((w3 & 0x3fff) << 7) | (w2 >> 25);
-
-        ae0_zone_r[idx] = plane_r[idx];
-        ae0_zone_g[idx] = plane_g[idx];
-        ae0_zone_b[idx] = plane_b[idx];
-        ae0_zone_dark[idx] = plane_dark[idx];
-        ae0_zone_bright[idx] = plane_bright[idx];
-
     }
 
     pr_debug("AE0 statistics unpacked: rows=%u cols=%u zones=%u flags=0x%x\n",
@@ -6547,12 +6526,6 @@ static void tisp_set_ae0_ag(uint32_t ag, uint32_t dg)
  *   6. Pushes event 7 (EV update), event 4 (total gain), event 5 (analog gain)
  *
  * This implementation follows the OEM control flow used by the stock firmware. */
-/* OEM: dark/bright pixel count arrays per zone.
- * Populated by ae0_interrupt_static from HW stats.  Default zero
- * (GC2053 doesn't report per-zone over/under-exposed pixel counts). */
-static uint32_t ae0_zone_dark[225];
-static uint32_t ae0_zone_bright[225];
-
 /* OEM: zone copy buffer for spinlock-protected output.
  * ae0_weight_mean2 copies the per-zone brightness here under lock;
  * tisp_ae_get_y_zone reads from this buffer for ioctl. */
@@ -6588,12 +6561,13 @@ static int tiziano_ae0_fpga_run(void)
 
     /* Keep IspAe0WmeanParam as an opaque OEM wrapper handle.
      * The proven local mapping for ae0_weight_mean2 inputs is the decoded
-     * per-plane arrays populated by tisp_ae0_get_statistics(). */
-    zone_r_plane = ae0_zone_r;
-    zone_g_plane = ae0_zone_g;
-    zone_b_plane = ae0_zone_b;
-    zone_dark_plane = ae0_zone_dark;
-    zone_bright_plane = ae0_zone_bright;
+     * per-plane arrays populated by tisp_ae0_get_statistics(); it reads
+     * them only. */
+    zone_r_plane = &IspAeStatic[AE_STATS_PLANE_R * AE_ZONE_COUNT_MAX];
+    zone_g_plane = &IspAeStatic[AE_STATS_PLANE_G * AE_ZONE_COUNT_MAX];
+    zone_b_plane = &IspAeStatic[AE_STATS_PLANE_B * AE_ZONE_COUNT_MAX];
+    zone_dark_plane = &IspAeStatic[AE_STATS_PLANE_DARK * AE_ZONE_COUNT_MAX];
+    zone_bright_plane = &IspAeStatic[AE_STATS_PLANE_BRIGHT * AE_ZONE_COUNT_MAX];
 
     tiziano_ae0_select_mix_weights(&mix_r, &mix_b);
     tiziano_ae0_select_wrapper_inputs(&awb_cfg, &corr_cfg,
