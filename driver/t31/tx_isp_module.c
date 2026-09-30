@@ -1728,13 +1728,24 @@ int frame_chan_event(void *priv, int event, void *data)
         bool drop = false;
         int ch = fcd->channel_num;
 
-        /* OEM EXACT: Day/night switch drop-frame logic.
-         * During DN transitions, the ISR sets per-channel counters.
-         * While counter > 0, recycle the frame (don't deliver to userspace)
-         * but still enqueue the buffer back for the next capture. */
+        /* A real completion carries the MSCA Y FIFO value at +8.  A wake
+         * without an address is not a completion and must not reuse the
+         * previous frame's address, nor count against the drop windows
+         * below (frame_channel_wakeup_waiters pokes with NULL). */
+        if (!data)
+            return -EAGAIN;
+        y_done = ((u32 *)data)[2];
+        if (!y_done)
+            return -EAGAIN;
+
+        /* OEM: day/night switch drop-frame logic. While the per-channel
+         * counter is set, the frame is not delivered, but its buffer goes
+         * straight back to the MSCA FIFO (stock re-enqueues it in the
+         * driver). Returning without that lost one buffer per dropped
+         * frame; with drop_frame_num=6 the stream froze after a switch. */
         if (ch >= 0 && ch < 3 && isp_day_night_switch_drop_frame_cnt[ch] > 0) {
             isp_day_night_switch_drop_frame_cnt[ch]--;
-            /* Recycle buffer via __enqueue_in_driver instead of delivery */
+            __submit_buffer_to_msca(ch, y_done);
             return 0;
         }
 
@@ -1744,17 +1755,10 @@ int frame_chan_event(void *priv, int event, void *data)
             u32 pos = state->drop_counter++ % period;
             drop = ((mask >> pos) & 0x1) != 0;
         }
-        if (drop)
+        if (drop) {
+            __submit_buffer_to_msca(ch, y_done);
             return 0;
-
-        /* A real completion carries the MSCA Y FIFO value at +8.  A wake
-         * without an address is not a completion and must not reuse the
-         * previous frame's address. */
-        if (!data)
-            return -EAGAIN;
-        y_done = ((u32 *)data)[2];
-        if (!y_done)
-            return -EAGAIN;
+        }
         state->last_done_phys = y_done;
 
         /*
