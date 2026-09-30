@@ -10159,19 +10159,21 @@ EXPORT_SYMBOL(tisp_code_tuning_open);
 
 
 /* tisp_code_tuning_ioctl - EXACT Binary Ninja reference implementation */
-long tisp_code_tuning_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+static DEFINE_MUTEX(tisp_par_mutex);
+
+static long tisp_code_tuning_ioctl_locked(struct file *file, unsigned int cmd, unsigned long arg)
 {
     /* Binary Ninja: Complete IOCTL handler with all parameter operations */
 
     void __user *argp = (void __user *)arg;
     int ret = 0;
+    /* Use this descriptor's own 0x500c buffer.  The shared global could be
+     * freed by another descriptor's release() while this ioctl slept in
+     * copy_from_user(), and it leaked one client's data to another. */
+    void *tisp_par_ioctl = file ? file->private_data : NULL;
 
     if (((cmd >> 8) & 0xFF) == 0x74)
         pr_info("tisp_code_tuning_ioctl: cmd=0x%x\n", cmd);
-
-    /* Ensure global tuning buffer is available; fall back to this file's buffer */
-    if (!tisp_par_ioctl && file && file->private_data)
-        tisp_par_ioctl = file->private_data;
 
 
     /* Binary Ninja: if (zx.d((arg2 u>> 8).b) == 0x74) */
@@ -10542,6 +10544,20 @@ long tisp_code_tuning_ioctl(struct file *file, unsigned int cmd, unsigned long a
 
 	    /* Non-0x74 commands (V4L2 controls etc) — delegate to the V4L2 handler */
     return isp_core_tunning_unlocked_ioctl(file, cmd, (void __user *)arg);
+}
+
+long tisp_code_tuning_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+    long ret;
+
+    if (((cmd >> 8) & 0xFF) != 0x74)
+        return isp_core_tunning_unlocked_ioctl(file, cmd, (void __user *)arg);
+
+    /* Serialise parameter-block access against concurrent tuning ioctls. */
+    mutex_lock(&tisp_par_mutex);
+    ret = tisp_code_tuning_ioctl_locked(file, cmd, arg);
+    mutex_unlock(&tisp_par_mutex);
+    return ret;
 }
 EXPORT_SYMBOL(tisp_code_tuning_ioctl);
 
