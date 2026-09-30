@@ -32418,6 +32418,13 @@ int tisp_s_mdns_ratio(int ratio)
     /* OEM EXACT: data_8aaf0 = arg1 */
     data_9ab00 = ratio;
 
+    /* The active tables are bound by tiziano_mdns_init(); an S_CTRL
+     * 0x8000085 before the pipeline is up must not scale into NULL. */
+    if (!mdns_y_sad_ave_thres_array_now || !mdns_y_sta_ave_thres_array_now ||
+        !mdns_y_sad_ass_thres_array_now || !mdns_y_sta_ass_thres_array_now ||
+        !mdns_y_ref_wei_b_min_array_now)
+        return 0;
+
     /* Always derive the active state from the immutable tuning-file bank.
      * The active pointers must never alias these sources: Raptor reapplies
      * image settings on startup, and a ratio must be idempotent. */
