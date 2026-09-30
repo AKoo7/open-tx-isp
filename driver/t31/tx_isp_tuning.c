@@ -32302,17 +32302,17 @@ int tisp_code_destroy_tuning_node(void)
         tuning_class = NULL;
     }
 
-    /* Unregister cdev and region */
-    cdev_del(&tuning_cdev);
-    unregister_chrdev_region(tuning_devno, 2);
+    /* Unregister cdev and region (only if create completed; its error
+     * paths undo themselves) */
+    if (tuning_device_created) {
+        cdev_del(&tuning_cdev);
+        unregister_chrdev_region(tuning_devno, 2);
+    }
     tuning_device_created = false;
     tisp_compat_created = false;
 
-    /* Binary Ninja: cdev_del(&tuning_cdev) */
-    cdev_del(&tuning_cdev);
-
-    /* Binary Ninja: unregister_chrdev_region(tuning_devno, 1) */
-    unregister_chrdev_region(tuning_devno, 1);
+    /* The cdev and both minors are released exactly once above; a second
+     * cdev_del() dropped the static cdev's kobject reference below zero. */
 
     /* Binary Ninja: tuning_major = 0 */
     tuning_major = 0;

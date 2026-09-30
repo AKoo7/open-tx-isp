@@ -3420,8 +3420,11 @@ int tx_isp_vic_remove(struct platform_device *pdev)
 
     platform_set_drvdata(pdev, NULL);
 
-    if (vic_dev->sd_irq_info.irq > 0)
+    if (vic_dev->sd_irq_info.irq > 0) {
+        pr_info("tx_isp_vic_remove: free_irq %d (dev_id=%p)\n",
+                vic_dev->sd_irq_info.irq, &vic_dev->sd_irq_info);
         tx_isp_free_irq(&vic_dev->sd_irq_info);
+    }
     vic_dev->sd.irqdev.irq = 0;
     vic_dev->irq_enabled = 0;
 

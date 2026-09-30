@@ -1029,20 +1029,26 @@ void tx_isp_subdev_deinit(struct tx_isp_subdev *sd)
     if (!sd)
         return;
 
+    /* tx_isp_subdev_init_pads() stores the kzalloc()ed pad arrays only in
+     * the OEM raw slots +0xcc (in) / +0xd0 (out).  The named members are the
+     * same two words with the roles swapped (sd->outpads is +0xcc,
+     * sd->inpads is +0xd0), so the old "raw, else named" fallback picked up
+     * the *other* slot whenever a subdev has only one pad direction (VIN:
+     * one input, CSI: one output) and kfree()d that array twice.  On SLUB
+     * the double free loops the freelist and a later unrelated kmalloc()
+     * oopses (rmmod: __kmalloc BadVA 0x40 in a usermodehelper).  Free each
+     * raw slot exactly once. */
     inpads = tx_isp_subdev_raw_inpads_get(sd);
     outpads = tx_isp_subdev_raw_outpads_get(sd);
-    if (!inpads)
-        inpads = sd->inpads;
-    if (!outpads)
-        outpads = sd->outpads;
-
-    kfree(inpads);
-    sd->inpads = NULL;
     tx_isp_subdev_raw_inpads_set(sd, NULL);
-
-    kfree(outpads);
-    sd->outpads = NULL;
     tx_isp_subdev_raw_outpads_set(sd, NULL);
+
+    if (inpads || outpads)
+        pr_info("tx_isp_subdev_deinit: %s: kfree inpads=%p outpads=%p\n",
+                sd->module.name ? sd->module.name : "?", inpads, outpads);
+    kfree(inpads);
+    if (outpads != inpads)
+        kfree(outpads);
 
     sd->num_inpads = 0;
     sd->num_outpads = 0;
@@ -1056,6 +1062,9 @@ void tx_isp_subdev_deinit(struct tx_isp_subdev *sd)
      * rebound to mappings owned by the wrapper objects, which tx_isp_exit()
      * releases (on MIPS32 these low-physical ioremaps are KSEG1 aliases). */
     if (sd->res) {
+        pr_info("tx_isp_subdev_deinit: %s: release_mem_region %08x-%08x\n",
+                sd->module.name ? sd->module.name : "?",
+                (u32)sd->res->start, (u32)sd->res->end);
         release_mem_region(sd->res->start, resource_size(sd->res));
         sd->res = NULL;
     }

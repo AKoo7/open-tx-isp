@@ -1810,6 +1810,18 @@ void tx_isp_frame_chan_deinit(struct tx_isp_frame_channel *chan)
     if (!chan)
         return;
 
+    /* OEM tx_isp_frame_chan_deinit() starts with misc_deregister(chan).
+     * tx_isp_fs_probe() registers each channel's misc device inside the
+     * kzalloc()ed channel array that tx_isp_fs_remove() frees right after
+     * this; without the deregister the misc list and sysfs keep pointing
+     * into freed memory. */
+    if (chan->misc.this_device) {
+        pr_info("tx_isp_frame_chan_deinit: misc_deregister %s\n",
+                chan->misc.name ? chan->misc.name : "?");
+        misc_deregister(&chan->misc);
+        chan->misc.this_device = NULL;
+    }
+
     spin_lock(&chan->slock);
     INIT_LIST_HEAD(&chan->queue_head);
     INIT_LIST_HEAD(&chan->done_head);
@@ -4572,6 +4584,8 @@ int tx_isp_core_remove(struct platform_device *pdev)
         platform_set_drvdata(pdev, NULL);
         isp_core_tuning_deinit(core_dev);
 
+        pr_info("tx_isp_core_remove: kfree subdev_list=%p (ourISPdev kept)\n",
+                isp_dev->subdev_list);
         kfree(isp_dev->subdev_list);
         isp_dev->subdev_list = NULL;
         isp_dev->subdev_count = 0;

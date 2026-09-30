@@ -6445,11 +6445,24 @@ static void tx_isp_exit(void)
          * stay alive until every remove has run.  Freeing vic_dev before
          * tx_isp_vic_remove() was the rmmod oops (mutex_lock on the freed
          * and never-initialised vic_frame_end_lock). */
-        platform_device_unregister(&tx_isp_core_platform_device);
+        /* isp-m0's MEM resource (0x13300000-0x133fffff) is inserted last and
+         * therefore becomes the parent of the isp-fs (0x13310000) and isp-w02
+         * (0x133e0000) resources, and of the busy regions their probes
+         * requested.  Unregistering isp-m0 first detached that whole subtree
+         * from iomem_resource, so the later release_mem_region() calls in
+         * the fs/vic removes found nothing ("Trying to free nonexistent
+         * resource") and leaked the region structs.  Remove the children
+         * first and the core last. */
+        pr_info("tx_isp_exit: unregister isp-fs\n");
         platform_device_unregister(&tx_isp_fs_platform_device);
+        pr_info("tx_isp_exit: unregister isp-w00 (vin)\n");
         platform_device_unregister(&tx_isp_vin_platform_device);
+        pr_info("tx_isp_exit: unregister isp-w02 (vic)\n");
         platform_device_unregister(&tx_isp_vic_platform_device);
+        pr_info("tx_isp_exit: unregister isp-w01 (csi)\n");
         platform_device_unregister(&tx_isp_csi_platform_device);
+        pr_info("tx_isp_exit: unregister isp-m0 (core)\n");
+        platform_device_unregister(&tx_isp_core_platform_device);
         pr_info("*** PLATFORM SUBDEVICES UNREGISTERED ***\n");
 
         /* *** CRITICAL: Cleanup subdev platform drivers *** */
@@ -6473,6 +6486,7 @@ static void tx_isp_exit(void)
                     continue;
                 list_for_each_safe(pos, n, vic_lists[l]) {
                     list_del(pos);
+                    pr_info("tx_isp_exit: kfree vic buffer entry %p (list %d)\n", pos, l);
                     kfree(pos);
                 }
             }
@@ -6484,6 +6498,7 @@ static void tx_isp_exit(void)
             vic_dev->vic_regs = NULL;
             vic_dev->vic_regs_secondary = NULL;
 
+            pr_info("tx_isp_exit: kfree vic_dev=%p\n", vic_dev);
             kfree(vic_dev);
             ourISPdev->vic_dev = NULL;
             pr_info("VIC device cleaned up\n");
@@ -6496,6 +6511,8 @@ static void tx_isp_exit(void)
         /* The CSI object and its +0x110 attr cache from csi_device_probe()
          * (adopted, not owned, by tx_isp_csi_probe()) were never freed. */
         if (ourISPdev->csi_dev) {
+            pr_info("tx_isp_exit: kfree csi_dev=%p attr_cache=%p\n",
+                    ourISPdev->csi_dev, csi_attr_cache_owned);
             kfree(ourISPdev->csi_dev);
             ourISPdev->csi_dev = NULL;
         }
@@ -6507,6 +6524,7 @@ static void tx_isp_exit(void)
         platform_device_unregister(&tx_isp_platform_device);
 
         /* Free device structure */
+        pr_info("tx_isp_exit: kfree ourISPdev=%p\n", ourISPdev);
         kfree(ourISPdev);
         ourISPdev = NULL;
     }

@@ -491,6 +491,21 @@ int tx_isp_fs_remove(struct platform_device *pdev)
         tx_isp_subdev_deinit(&fs_dev->subdev);
     }
 
+    /* tx_isp_core_bind_event_dispatch_tables() pointed the core channels'
+     * event_hdlr into channel_configs; drop those before freeing it. */
+    if (ourISPdev && fs_dev->channel_configs) {
+        struct tx_isp_channel_config *cfg = fs_dev->channel_configs;
+
+        for (i = 0; i < ISP_MAX_CHAN; i++) {
+            void *h = ourISPdev->channels[i].event_hdlr;
+
+            if (h >= (void *)cfg && h < (void *)(cfg + fs_dev->channel_count))
+                ourISPdev->channels[i].event_hdlr = NULL;
+        }
+    }
+    kfree(fs_dev->channel_configs);
+    fs_dev->channel_configs = NULL;
+    pr_info("*** tx_isp_fs_remove: kfree fs_dev=%p ***\n", fs_dev);
     kfree(fs_dev);
 
     pr_info("FS device removed successfully\n");

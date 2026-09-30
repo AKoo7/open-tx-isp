@@ -934,6 +934,7 @@ int tx_isp_vin_remove(struct platform_device *pdev)
 
     /* Free device structure */
     platform_set_drvdata(pdev, NULL);
+    pr_info("tx_isp_vin_remove: kfree vin=%p\n", vin);
     kfree(vin);
 
     mcp_log_info("vin_remove: VIN removal completed", 0);
