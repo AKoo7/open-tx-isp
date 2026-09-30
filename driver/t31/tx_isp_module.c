@@ -1480,6 +1480,7 @@ static int tx_isp_detect_and_register_sensors(struct tx_isp_dev *isp_dev);
 static int tx_isp_init_hardware_interrupts(struct tx_isp_dev *isp_dev);
 static int tx_isp_activate_sensor_pipeline(struct tx_isp_dev *isp_dev, const char *sensor_name);
 static int __submit_buffer_to_msca(int channel, u32 phys_addr);
+int tx_isp_core_wait_quiet(u32 frame_ms);
 
 void tx_isp_hardware_frame_done_handler(struct tx_isp_dev *isp_dev, int channel);
 static int tx_isp_ispcore_activate_module_complete(struct tx_isp_dev *isp_dev);
@@ -5241,6 +5242,16 @@ static long tx_isp_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned 
 
         pr_info("Sensor set input: index=%d\n", input_index);
 
+        /* Stock subdev_sensor_ops_set_input: deselecting a streaming sensor
+         * fails with "Please, streamoff sensor firstly!". IMP_ISP_DelSensor
+         * deselects (-1) and then frees the MDNS/WDR buffers the ISP is
+         * writing, so it must not pass while frames still flow. */
+        if (input_index == -1 &&
+            isp_dev->vin_state == TX_ISP_MODULE_RUNNING) {
+            pr_err("Please, streamoff sensor firstly!\n");
+            return -EPERM;
+        }
+
         /* Binary Ninja: Iterate through subdevs at offset 0x2c (isp_dev->subdevs) */
         for (i = 0; i < ISP_MAX_SUBDEVS; i++) {
             struct tx_isp_subdev *subdev = isp_dev->subdevs[i];
@@ -5284,6 +5295,29 @@ static long tx_isp_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned 
             return -EFAULT;
 
         pr_info("Sensor release request: name=%s\n", unreg_info.name);
+
+        /* Stock refuses to release the active sensor ("the sensor is
+         * active, please stop it firstly."). Right after this ioctl
+         * IMP_ISP_DelSensor frees the MDNS (0x7820..) and WDR (0x2004)
+         * buffers the ISP DMA writes, so refuse while the sensor streams
+         * and, once stopped, let the frame in flight finish first. */
+        if (isp_dev->vin_state == TX_ISP_MODULE_RUNNING) {
+            pr_err("the sensor is active, please stop it firstly.\n");
+            return -EINVAL;
+        }
+        {
+            u32 fps_q8 = 0;
+            u32 frame_ms = 100;
+            int quiet;
+
+            if (!tx_isp_sensor_fps_q8(isp_dev->sensor, &fps_q8) && fps_q8)
+                frame_ms = DIV_ROUND_UP(256U * 1000U, fps_q8);
+            quiet = tx_isp_core_wait_quiet(frame_ms);
+            if (quiet < 0)
+                pr_warn("Sensor release: ISP core still raising interrupts after 1 s; DMA buffers may still be in use\n");
+            else
+                pr_info("Sensor release: ISP core quiet after %d ms\n", quiet);
+        }
 
         /* Binary Ninja: Iterate through subdevs at offset 0x2c (isp_dev->subdevs) */
         for (i = 0; i < ISP_MAX_SUBDEVS; i++) {

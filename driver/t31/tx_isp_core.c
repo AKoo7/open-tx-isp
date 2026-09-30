@@ -1370,6 +1370,39 @@ static int t31_daynight_notify(void *opaque, u32 mode)
     return tx_isp_tuning_notify(context->isp, ISP_TUNING_EVENT_DN);
 }
 
+/*
+ * Count of ISP core interrupts that carried status bits. Written only by
+ * ispcore_interrupt_service_routine, read by tx_isp_core_wait_quiet().
+ */
+static u32 isp_core_irq_seq;
+
+/*
+ * Wait until the ISP core has raised no interrupt for two frame periods,
+ * at most ~1 s. DelSensor calls this after the sensor input is stopped and
+ * before userspace frees the buffers the MDNS (0x7820..0x786c) and WDR
+ * (0x2004) engines write: with no new input only the frame in flight can
+ * still complete, and its end-of-frame interrupt is the last one. The
+ * address registers are left as they are; 0 is a valid physical address
+ * (kernel memory), and the next AddSensor reprograms them via SET_BUF /
+ * WDR_SET_BUF before any stream starts.
+ */
+int tx_isp_core_wait_quiet(u32 frame_ms)
+{
+    u32 quiet_ms, waited = 0, seq, now;
+
+    quiet_ms = clamp_t(u32, frame_ms, 10, 500) * 2;
+    seq = ACCESS_ONCE(isp_core_irq_seq);
+    while (waited < 1000) {
+        msleep(quiet_ms);
+        waited += quiet_ms;
+        now = ACCESS_ONCE(isp_core_irq_seq);
+        if (now == seq)
+            return waited;
+        seq = now;
+    }
+    return -ETIMEDOUT;
+}
+
 /* ispcore_interrupt_service_routine - EXACT Binary Ninja implementation */
 irqreturn_t ispcore_interrupt_service_routine(int irq, void *dev_id)
 {
@@ -1415,6 +1448,7 @@ irqreturn_t ispcore_interrupt_service_routine(int irq, void *dev_id)
     if (interrupt_status) {
         writel(interrupt_status, isp_regs + 0xb8);
         wmb();
+        isp_core_irq_seq++;
     }
     hw_interrupt_status = interrupt_status;
     /* OEM does NOT force bit 0. Previous forced bit-0 was corrupting
