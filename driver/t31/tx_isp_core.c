@@ -1183,14 +1183,14 @@ int ispcore_video_s_stream(struct tx_isp_subdev *sd, int enable)
                         (struct tx_isp_channel_config *)fs_dev_reset->channel_configs;
                     int ch;
                     for (ch = 0; ch < fs_dev_reset->channel_count && ch < ISP_MAX_CHAN; ch++) {
-                        if (cfgs[ch].state == 4) {
+                        /* Stock's per-channel hw state at chan+0x74 is
+                         * modelled by dispatch->state here (see
+                         * ispcore_frame_channel_streamoff), so resetting
+                         * cfgs[].state is the whole reset. event_priv is a
+                         * struct isp_channel, where +0x74 is
+                         * subdev.module.submods[9], not a state word. */
+                        if (cfgs[ch].state == 4)
                             cfgs[ch].state = 3;
-                            /* Also reset *(event_priv + 0x74) — the channel
-                             * internal state checked by ispcore_pad_event_handle
-                             * before calling tisp_channel_start. */
-                            if (cfgs[ch].event_priv)
-                                *((uint32_t*)((char*)cfgs[ch].event_priv + 0x74)) = 3;
-                        }
                     }
                 }
             }
