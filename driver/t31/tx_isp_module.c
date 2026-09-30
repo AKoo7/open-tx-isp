@@ -4637,16 +4637,28 @@ static long frame_channel_ioctl_locked(struct file *file, unsigned int cmd,
             }
         }
 
-        /* OEM-aligned DQBUF: wait for frame_ready_count > 0 or streaming stop.
-         * Sleep without buffer_mutex so STREAMOFF/release can run and wake
-         * us; state is re-checked below with the mutex held again. */
-        mutex_unlock(&fcd->buffer_mutex);
-        ret = wait_event_interruptible(state->frame_wait,
-                                       atomic_read(&state->frame_ready_count) > 0 ||
-                                       !state->streaming);
-        mutex_lock(&fcd->buffer_mutex);
-        if (ret < 0)
-            return ret; /* -ERESTARTSYS */
+        /* O_NONBLOCK (as vb2_dqbuf): never sleep, -EAGAIN when no frame is
+         * ready. The stock driver ignores the flag, so a non-blocking
+         * reader could only be woken by STREAMOFF. The DONE-slot scan
+         * below still returns -EAGAIN if the count ran ahead of the slots.
+         *
+         * Blocking (OEM-aligned): wait for frame_ready_count > 0 or
+         * streaming stop. Sleep without buffer_mutex so STREAMOFF/release
+         * can run and wake us; state is re-checked below with the mutex
+         * held again. A signal returns before anything was consumed. */
+        if (file->f_flags & O_NONBLOCK) {
+            if (state->streaming &&
+                atomic_read(&state->frame_ready_count) <= 0)
+                return -EAGAIN;
+        } else {
+            mutex_unlock(&fcd->buffer_mutex);
+            ret = wait_event_interruptible(state->frame_wait,
+                                           atomic_read(&state->frame_ready_count) > 0 ||
+                                           !state->streaming);
+            mutex_lock(&fcd->buffer_mutex);
+            if (ret < 0)
+                return ret; /* -ERESTARTSYS */
+        }
         if (!state->streaming)
             return -EINVAL;
 
