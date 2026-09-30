@@ -3733,6 +3733,7 @@ static uint32_t ae_hist_bins[256];
 /* Custom AE algo interface buffers (allocated by ae_algo_open ioctl 0x800456dd) */
 static uint8_t *ae_info_mine;
 static uint8_t *ae_statis_mine;
+static DEFINE_MUTEX(ae_algo_mutex);	/* ae_info_mine/ae_statis_mine lifetime */
 
 /* AE parameter structures - from Binary Ninja */
 struct ae_parameter {
@@ -35238,12 +35239,21 @@ int tx_isp_get_ae_algo_handle(void __user *arg)
     uint32_t ae_attr[38]; /* tisp_get_ae_attr output: 0x98 bytes */
     uint32_t *statis;
     uint8_t *info;
+    int ret = 0;
 
     if (!ae_info_mine || !ae_statis_mine)
         return -ENOMEM;
 
     /* OEM: wait for AE frame processing to signal completion */
-    wait_for_completion_interruptible(&ae_algo_comp);
+    if (wait_for_completion_interruptible(&ae_algo_comp))
+        return -ERESTARTSYS;
+
+    /* SET_AE_ALGO_CLOSE may have freed the buffers while we slept. */
+    mutex_lock(&ae_algo_mutex);
+    if (!ae_info_mine || !ae_statis_mine) {
+        mutex_unlock(&ae_algo_mutex);
+        return -ENODEV;
+    }
 
     info = ae_info_mine;
     statis = (uint32_t *)ae_statis_mine;
@@ -35327,10 +35337,11 @@ int tx_isp_get_ae_algo_handle(void __user *arg)
     /* OEM: copy entire 0x7d8 bytes to userspace */
     if (copy_to_user(arg, info, 0x7d8)) {
         pr_err("[ %s:%d ] copy to user error\n", __func__, __LINE__);
-        return -EFAULT;
+        ret = -EFAULT;
     }
 
-    return 0;
+    mutex_unlock(&ae_algo_mutex);
+    return ret;
 }
 EXPORT_SYMBOL(tx_isp_get_ae_algo_handle);
 
@@ -35383,21 +35394,30 @@ int tx_isp_set_ae_algo_open(void __user *arg)
         buf[6] = system_reg_read(0x1030);
     }
 
-    /* OEM: allocate custom AE interface buffers */
-    ae_info_mine = kzalloc(0x800, GFP_KERNEL);
-    ae_statis_mine = kzalloc(0x800, GFP_KERNEL);
-
+    /* OEM: allocate custom AE interface buffers.  A repeated OPEN reuses
+     * them instead of leaking the previous pair (and must not re-init the
+     * completion under a sleeping GET_AE_ALGO_HANDLE caller). */
+    mutex_lock(&ae_algo_mutex);
     if (!ae_info_mine || !ae_statis_mine) {
         kfree(ae_info_mine);
         kfree(ae_statis_mine);
-        ae_info_mine = NULL;
-        ae_statis_mine = NULL;
-        kfree(buf);
-        return -ENOMEM;
-    }
+        ae_info_mine = kzalloc(0x800, GFP_KERNEL);
+        ae_statis_mine = kzalloc(0x800, GFP_KERNEL);
 
-    /* OEM: initialize completion for frame-sync signaling */
-    init_completion(&ae_algo_comp);
+        if (!ae_info_mine || !ae_statis_mine) {
+            kfree(ae_info_mine);
+            kfree(ae_statis_mine);
+            ae_info_mine = NULL;
+            ae_statis_mine = NULL;
+            mutex_unlock(&ae_algo_mutex);
+            kfree(buf);
+            return -ENOMEM;
+        }
+
+        /* OEM: initialize completion for frame-sync signaling */
+        init_completion(&ae_algo_comp);
+    }
+    mutex_unlock(&ae_algo_mutex);
 
     /* OEM: copy filled buffer back to userspace */
     if (copy_to_user(arg, buf, 0x80)) {
@@ -35432,10 +35452,12 @@ int tx_isp_set_ae_algo_close(void __user *arg)
     tisp_ae_algo_init(0, NULL);
 
     /* OEM: free buffers */
+    mutex_lock(&ae_algo_mutex);
     kfree(ae_info_mine);
     kfree(ae_statis_mine);
     ae_info_mine = NULL;
     ae_statis_mine = NULL;
+    mutex_unlock(&ae_algo_mutex);
 
     return 0;
 }
