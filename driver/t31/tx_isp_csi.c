@@ -397,7 +397,7 @@ int tx_isp_csi_start(struct tx_isp_subdev *sd)
     if (!sd)
         return -EINVAL;
 
-    { struct tx_isp_csi_device *__csi = container_of(sd, struct tx_isp_csi_device, sd); mutex_lock(&__csi->mutex); };
+    mutex_lock(&container_of(sd, struct tx_isp_csi_device, sd)->mlock);
 
     /* CRITICAL: Register CSI interrupt handler if not already registered */
     if (!csi_irq_registered) {
@@ -405,7 +405,7 @@ int tx_isp_csi_start(struct tx_isp_subdev *sd)
         irq = platform_get_irq(pdev, 0);
         if (irq < 0) {
             pr_err("*** CSI INTERRUPT: Failed to resolve platform IRQ: %d ***\n", irq);
-            mutex_unlock(&container_of(sd, struct tx_isp_csi_device, sd)->mutex);
+            mutex_unlock(&container_of(sd, struct tx_isp_csi_device, sd)->mlock);
             return irq;
         }
 
@@ -431,7 +431,7 @@ int tx_isp_csi_start(struct tx_isp_subdev *sd)
     pr_info("*** CSI INTERRUPT: CSI started with interrupts enabled (mask=0x%08x) ***\n",
             ~(INT_ERROR | INT_FRAME_DONE));
 
-    { struct tx_isp_csi_device *__csi = container_of(sd, struct tx_isp_csi_device, sd); mutex_unlock(&__csi->mutex); };
+    mutex_unlock(&container_of(sd, struct tx_isp_csi_device, sd)->mlock);
     return 0;
 }
 
@@ -441,7 +441,7 @@ int tx_isp_csi_stop(struct tx_isp_subdev *sd)
     if (!sd)
         return -EINVAL;
 
-    { struct tx_isp_csi_device *__csi = container_of(sd, struct tx_isp_csi_device, sd); mutex_lock(&__csi->mutex); };
+    mutex_lock(&container_of(sd, struct tx_isp_csi_device, sd)->mlock);
 
     /* Disable CSI */
     csi_write32(CSI_CTRL, 0);
@@ -449,7 +449,7 @@ int tx_isp_csi_stop(struct tx_isp_subdev *sd)
     /* Mask all interrupts */
     csi_write32(CSI_INT_MASK, 0xFFFFFFFF);
 
-    { struct tx_isp_csi_device *__csi = container_of(sd, struct tx_isp_csi_device, sd); mutex_unlock(&__csi->mutex); };
+    mutex_unlock(&container_of(sd, struct tx_isp_csi_device, sd)->mlock);
     return 0;
 }
 
@@ -464,7 +464,7 @@ int tx_isp_csi_set_format(struct tx_isp_subdev *sd, struct tx_isp_config *config
     if (config->lane_num < CSI_MIN_LANES || config->lane_num > CSI_MAX_LANES)
         return -EINVAL;
 
-    { struct tx_isp_csi_device *__csi = container_of(sd, struct tx_isp_csi_device, sd); mutex_lock(&__csi->mutex); };
+    mutex_lock(&container_of(sd, struct tx_isp_csi_device, sd)->mlock);
 
     /* Configure lane count */
     ctrl = csi_read32(CSI_CTRL);
@@ -480,12 +480,12 @@ int tx_isp_csi_set_format(struct tx_isp_subdev *sd, struct tx_isp_config *config
         ctrl |= CSI_CTRL_LANES_4;
         break;
     default:
-        { struct tx_isp_csi_device *__csi = container_of(sd, struct tx_isp_csi_device, sd); mutex_unlock(&__csi->mutex); };
+        mutex_unlock(&container_of(sd, struct tx_isp_csi_device, sd)->mlock);
         return -EINVAL;
     }
     csi_write32(CSI_CTRL, ctrl);
 
-    { struct tx_isp_csi_device *__csi = container_of(sd, struct tx_isp_csi_device, sd); mutex_unlock(&__csi->mutex); };
+    mutex_unlock(&container_of(sd, struct tx_isp_csi_device, sd)->mlock);
     return 0;
 }
 
@@ -1077,11 +1077,10 @@ int tx_isp_csi_probe(struct platform_device *pdev)
  * tx_isp_exit() after the platform devices are gone; the probe only adopts
  * it.  Undo only what the probe acquired.
  *
- * Do not call tx_isp_csi_stop() here: its csi_dev->mutex overlaps the raw
- * OEM +0x138 (mem_res) / +0x13c (wrapper regs) slots and is never
- * mutex_init()ed, so locking it oopses in __mutex_lock_slowpath() exactly
- * like the VIC frame-end lock did.  The OEM remove does not stop the CSI
- * either; the stream is off before rmmod.
+ * Do not call tx_isp_csi_stop() here: the OEM remove does not stop the CSI
+ * either; the stream is off before rmmod.  (Its lock is csi_dev->mlock, which
+ * csi_device_probe() initialises and which no longer overlaps the raw OEM
+ * +0x138/+0x13c slots, so calling it would at least be safe.)
  */
 int tx_isp_csi_remove(struct platform_device *pdev)
 {

@@ -507,7 +507,7 @@ static int tx_isp_csi_device_init(struct tx_isp_dev *isp)
         csi_dev->dev = isp->dev;
         *(u32 *)((char *)csi_dev + 0x128) = 1;
         csi_dev->state = 1; /* INIT state */
-        mutex_init(&csi_dev->mutex);
+        mutex_init(&csi_dev->mlock);
         spin_lock_init(&csi_dev->lock);
 
         isp->csi_dev = csi_dev;

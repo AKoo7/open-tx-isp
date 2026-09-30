@@ -80,31 +80,57 @@ int tx_isp_sensor_active_dimensions(const struct tx_isp_sensor *sensor,
 int tx_isp_sensor_fps_q8(const struct tx_isp_sensor *sensor, u32 *fps_q8);
 
 
-// CSI device structure for MIPI interface (based on Binary Ninja analysis)
+/*
+ * CSI device structure for the MIPI interface.
+ *
+ * The CSI code still addresses a handful of OEM (Binary Ninja) slots by raw
+ * byte offset: the sensor-attr cache at +0x110, the state word at +0x128,
+ * the mem resource at +0x138 and the wrapper register mapping at +0x13c
+ * (plus +0xd4, which is sd.dev_priv).  Those slots get explicit members here
+ * so that no named field can overlap them; tx_isp_csi_layout_check() turns
+ * any drift into a build error.  The object spans at least the OEM 0x148
+ * bytes (csi_device_probe() clears exactly that much).  Members whose size
+ * depends on the kernel config (mutex, spinlock) live behind the OEM area so
+ * they can never shift the raw slots.
+ */
 struct tx_isp_csi_device {
-    struct tx_isp_subdev sd;        // Base subdev at offset 0
-    struct clk *csi_clk;           // CSI clock
-    int state;                     // 1=init, 2=active, 3=streaming_off, 4=streaming_on
-    struct mutex mlock;            // Mutex for state changes
-    int interface_type;            // 1=MIPI interface
-    int lanes;                     // Number of MIPI lanes
-
-    char device_name[32];     // 0x00: Device name
-    struct device *dev;       // Device pointer
-    uint32_t offset_10;       // 0x10: Referenced in init
-    struct IspModule *module_info;  // Module info pointer
-
-    // CSI register access - changed to single pointer like VIC
-    void __iomem *cpm_regs;   // CPM registers
-    void __iomem *phy_regs;   // MIPI PHY registers
-    void __iomem *csi_regs;   // Single pointer to mapped csi regs
-    struct resource *phy_res;  // PHY memory resource
-
-    // State management
-    struct clk *clk;
-    struct mutex mutex;       // Synchronization
-    spinlock_t lock;         // Protect register access
+    struct tx_isp_subdev sd;        /* 0x000: base subdev (0xdc bytes; dev_priv at +0xd4) */
+    struct clk *csi_clk;            /* 0x0dc */
+    int state;                      /* 0x0e0: mirror of raw_state */
+    int interface_type;             /* 0x0e4: 1=MIPI interface */
+    int lanes;                      /* 0x0e8: number of MIPI lanes */
+    char device_name[32];           /* 0x0ec */
+    struct device *dev;             /* 0x10c */
+    struct tx_isp_sensor_attribute *raw_sensor_attr; /* 0x110: OEM sensor-attr cache */
+    uint32_t offset_10;             /* 0x114 */
+    struct IspModule *module_info;  /* 0x118 */
+    void __iomem *cpm_regs;         /* 0x11c: CPM registers */
+    void __iomem *phy_regs;         /* 0x120: MIPI PHY registers */
+    struct clk *clk;                /* 0x124 */
+    uint32_t raw_state;             /* 0x128: OEM state word, 1=init 2=active 3=off 4=on */
+    void __iomem *csi_regs;         /* 0x12c: CSI host ("basic") registers */
+    struct resource *phy_res;       /* 0x130: PHY memory resource */
+    uint32_t raw_134;               /* 0x134 */
+    struct resource *raw_mem_res;   /* 0x138: OEM mem resource slot */
+    void __iomem *raw_wrapper_regs; /* 0x13c: OEM wrapper register mapping */
+    uint32_t raw_140;               /* 0x140 */
+    uint32_t raw_144;               /* 0x144 */
+    /* ---- end of the 0x148-byte OEM area ---- */
+    struct mutex mlock;             /* the CSI lock (OEM keeps it at +0x12c) */
+    spinlock_t lock;                /* protects register access */
 };
+
+#define TX_ISP_CSI_OEM_SIZE 0x148
+
+static inline void tx_isp_csi_layout_check(void)
+{
+    BUILD_BUG_ON(offsetof(struct tx_isp_csi_device, sd.dev_priv) != 0xd4);
+    BUILD_BUG_ON(offsetof(struct tx_isp_csi_device, raw_sensor_attr) != 0x110);
+    BUILD_BUG_ON(offsetof(struct tx_isp_csi_device, raw_state) != 0x128);
+    BUILD_BUG_ON(offsetof(struct tx_isp_csi_device, raw_mem_res) != 0x138);
+    BUILD_BUG_ON(offsetof(struct tx_isp_csi_device, raw_wrapper_regs) != 0x13c);
+    BUILD_BUG_ON(offsetof(struct tx_isp_csi_device, mlock) < TX_ISP_CSI_OEM_SIZE);
+}
 
 /* Core ISP device structure */
 struct tx_isp_dev {
