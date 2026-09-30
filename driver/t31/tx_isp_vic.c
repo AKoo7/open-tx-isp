@@ -432,6 +432,7 @@ int tx_isp_create_vic_device(struct tx_isp_dev *isp_dev)
 {
     struct tx_isp_vic_device *vic_dev;
     int ret = 0;
+    int i;
 
     if (!isp_dev) {
         pr_err("tx_isp_create_vic_device: Invalid ISP device\n");
@@ -460,6 +461,10 @@ int tx_isp_create_vic_device(struct tx_isp_dev *isp_dev)
      * leaves wait_list NULL, so the first contended/zero-count lock walks a
      * NULL list head in __mutex_lock_slowpath(). */
     mutex_init(&vic_dev->vic_frame_end_lock);
+    /* Waited on by tx_isp_vic_wait_frame_done(); a zeroed completion has a
+     * NULL wait-list head, so the first wait would oops in the queue add. */
+    for (i = 0; i < VIC_MAX_CHAN; i++)
+        init_completion(&vic_dev->vic_frame_end_completion[i]);
     init_completion(&vic_dev->frame_complete);
     spin_lock_init(&vic_dev->buffer_mgmt_lock);
     spin_lock_init(&vic_dev->buffer_lock);
