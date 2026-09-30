@@ -710,6 +710,23 @@ static unsigned int tx_isp_v4l2_poll(struct file *file,
 	return 0;
 }
 
+/* A userspace mapping pins its buffer: REQBUFS after S_FMT may otherwise
+ * dma_free_coherent() pages that are still mapped into the process. */
+static void tx_isp_v4l2_vm_open(struct vm_area_struct *area)
+{
+	tx_isp_v4l2_buffer_get(area->vm_private_data);
+}
+
+static void tx_isp_v4l2_vm_close(struct vm_area_struct *area)
+{
+	tx_isp_v4l2_buffer_put(area->vm_private_data);
+}
+
+static const struct vm_operations_struct tx_isp_v4l2_vm_ops = {
+	.open = tx_isp_v4l2_vm_open,
+	.close = tx_isp_v4l2_vm_close,
+};
+
 static int tx_isp_v4l2_mmap(struct file *file, struct vm_area_struct *area)
 {
 	struct tx_isp_v4l2_device *video = video_drvdata(file);
@@ -725,11 +742,16 @@ static int tx_isp_v4l2_mmap(struct file *file, struct vm_area_struct *area)
 	if (index >= video->buffer_count)
 		return -EINVAL;
 	buffer = video->buffers[index];
-	if (area->vm_end - area->vm_start > buffer->size)
+	if (!buffer || area->vm_end - area->vm_start > buffer->size)
 		return -EINVAL;
 	area->vm_pgoff = 0;
 	ret = dma_mmap_coherent(buffer->device, area, buffer->cpu_address,
 				buffer->dma_address, buffer->size);
+	if (!ret) {
+		area->vm_private_data = buffer;
+		area->vm_ops = &tx_isp_v4l2_vm_ops;
+		tx_isp_v4l2_buffer_get(buffer);
+	}
 	return ret;
 }
 
