@@ -1049,14 +1049,15 @@ void tx_isp_subdev_deinit(struct tx_isp_subdev *sd)
     tx_isp_subdev_raw_num_inpads_set(sd, 0);
     tx_isp_subdev_raw_num_outpads_set(sd, 0);
 
-    /* Clean up secondary VIC register mapping if this is a VIC device */
-    if (ourISPdev && ourISPdev->vic_dev == sd) {
-        struct tx_isp_vic_device *vic_dev = container_of(sd, struct tx_isp_vic_device, sd);
-        if (vic_dev->vic_regs) {
-            iounmap(vic_dev->vic_regs);
-            vic_dev->vic_regs = NULL;
-            pr_info("*** Unmapped secondary VIC registers ***\n");
-        }
+    /* OEM tx_isp_subdev_deinit() releases the region tx_isp_subdev_init()
+     * requested.  Without this a reload fails in tx_isp_subdev_init() with
+     * "request_mem_region failed" for isp-w01/isp-w02/isp-fs.  The register
+     * mappings are not dropped here: on the VIC and CSI the +0xb8 base is
+     * rebound to mappings owned by the wrapper objects, which tx_isp_exit()
+     * releases (on MIPS32 these low-physical ioremaps are KSEG1 aliases). */
+    if (sd->res) {
+        release_mem_region(sd->res->start, resource_size(sd->res));
+        sd->res = NULL;
     }
 }
 EXPORT_SYMBOL(tx_isp_subdev_deinit);

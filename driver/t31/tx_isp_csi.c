@@ -381,6 +381,11 @@ static irqreturn_t tx_isp_csi_irq_handler(int irq, void *dev_id)
     return ret;
 }
 
+/* Set once tx_isp_csi_start() has installed tx_isp_csi_irq_handler (dev_id sd);
+ * tx_isp_csi_remove() frees the handler only in that case. */
+static int csi_irq_registered;
+static int csi_irq_number;
+
 /* CSI start operation */
 int tx_isp_csi_start(struct tx_isp_subdev *sd)
 {
@@ -395,7 +400,6 @@ int tx_isp_csi_start(struct tx_isp_subdev *sd)
     { struct tx_isp_csi_device *__csi = container_of(sd, struct tx_isp_csi_device, sd); mutex_lock(&__csi->mutex); };
 
     /* CRITICAL: Register CSI interrupt handler if not already registered */
-    static int csi_irq_registered = 0;
     if (!csi_irq_registered) {
         pdev = to_platform_device(sd->module.dev);
         irq = platform_get_irq(pdev, 0);
@@ -409,6 +413,7 @@ int tx_isp_csi_start(struct tx_isp_subdev *sd)
         if (ret == 0) {
             pr_info("*** CSI INTERRUPT: Handler registered for IRQ %d ***\n", irq);
             csi_irq_registered = 1;
+            csi_irq_number = irq;
         } else {
             pr_err("*** CSI INTERRUPT: Failed to register handler for IRQ %d: %d ***\n",
                    irq, ret);
@@ -1066,30 +1071,44 @@ int tx_isp_csi_probe(struct platform_device *pdev)
     return 0;
 }
 
-/* CSI remove function */
+/* CSI remove function
+ *
+ * csi_dev is created by tx_isp_init() (csi_device_probe) and freed by
+ * tx_isp_exit() after the platform devices are gone; the probe only adopts
+ * it.  Undo only what the probe acquired.
+ *
+ * Do not call tx_isp_csi_stop() here: its csi_dev->mutex overlaps the raw
+ * OEM +0x138 (mem_res) / +0x13c (wrapper regs) slots and is never
+ * mutex_init()ed, so locking it oopses in __mutex_lock_slowpath() exactly
+ * like the VIC frame-end lock did.  The OEM remove does not stop the CSI
+ * either; the stream is off before rmmod.
+ */
 int tx_isp_csi_remove(struct platform_device *pdev)
 {
     struct tx_isp_csi_device *csi_dev = platform_get_drvdata(pdev);
     struct tx_isp_subdev *sd;
-    struct resource *res = NULL;
 
-    if (!csi_dev)
-        return -EINVAL;
+    if (IS_ERR_OR_NULL(csi_dev))
+        return 0;
 
     sd = &csi_dev->sd;
 
     pr_info("*** tx_isp_csi_remove: Removing CSI device ***\n");
 
-    /* Free interrupt if it was requested */
-    res = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
-    if (res)
-        free_irq(res->start, sd);
+    platform_set_drvdata(pdev, NULL);
 
-    /* Disable CSI */
-    tx_isp_csi_stop(sd);
+    /* No IRQ is requested for isp-w01 by tx_isp_subdev_init(); only the
+     * optional tx_isp_csi_start() path installs a handler. */
+    if (csi_irq_registered) {
+        free_irq(csi_irq_number, sd);
+        csi_irq_registered = 0;
+        csi_irq_number = 0;
+    }
 
-    /* Deinitialize subdev */
+    /* Releases the mem region the probe requested (also cached in the raw
+     * +0x138 slot) and the pads. */
     tx_isp_subdev_deinit(sd);
+    *csi_mem_res_slot(csi_dev) = NULL;
 
     pr_info("*** tx_isp_csi_remove: CSI device removed ***\n");
     return 0;

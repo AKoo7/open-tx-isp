@@ -4561,9 +4561,20 @@ int tx_isp_core_remove(struct platform_device *pdev)
         pr_info("*** ISP CORE: Frame sync workqueue destroyed ***\n");
     }
 
+    /* The core drvdata is ourISPdev itself (see tx_isp_core_probe()), which
+     * tx_isp_init() allocated and tx_isp_exit() frees after every subdev
+     * platform device is gone.  Freeing it here left ourISPdev dangling for
+     * the fs/vin/vic/csi removes that tx_isp_exit() triggers next and made
+     * its final kfree(ourISPdev) a double free. */
     if (core_dev) {
+        struct tx_isp_dev *isp_dev = core_dev;
+
+        platform_set_drvdata(pdev, NULL);
         isp_core_tuning_deinit(core_dev);
-        kfree(core_dev);
+
+        kfree(isp_dev->subdev_list);
+        isp_dev->subdev_list = NULL;
+        isp_dev->subdev_count = 0;
     }
     return 0;
 }

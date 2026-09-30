@@ -2908,6 +2908,10 @@ static int tx_isp_activate_csi_subdev(struct tx_isp_dev *isp_dev)
     return tx_isp_csi_activate_subdev(&csi_dev->sd);
 }
 
+/* The +0x110 attr cache csi_device_probe() allocates; tx_isp_exit() frees
+ * this pointer rather than trusting the raw slot at unload. */
+static struct tx_isp_sensor_attribute *csi_attr_cache_owned;
+
 /* csi_device_probe - EXACT Binary Ninja implementation (tx_isp_csi_probe) */
 static int csi_device_probe(struct tx_isp_dev *isp_dev)
 {
@@ -2993,6 +2997,7 @@ static int csi_device_probe(struct tx_isp_dev *isp_dev)
     tx_isp_set_subdevdata(&csi_dev->sd, csi_dev);
     pr_info("*** CSI SUBDEV PRIVATE DATA SET: sd=%p -> csi_dev=%p ***\n", &csi_dev->sd, csi_dev);
 
+    csi_attr_cache_owned = csi_attr_cache;
     pr_info("*** csi_device_probe: Binary Ninja CSI device created successfully ***\n");
     return 0;
 
@@ -6339,6 +6344,7 @@ err_free_dev:
 extern void tx_isp_t31_wdr_stop(void);
 extern void tisp_deinit_free(void);
 extern void tx_isp_core_daynight_cancel(void);
+void tx_isp_free_irq(struct tx_isp_irq_info *irq_info);
 
 static void tx_isp_exit(void)
 {
@@ -6374,55 +6380,36 @@ static void tx_isp_exit(void)
         /* Clean up I2C infrastructure */
         cleanup_i2c_infrastructure(ourISPdev);
 
-        /* Free hardware interrupts if initialized.
-         * IRQ 38 (isp-w02) is freed by tx_isp_free_irq(&irq_info) during
-         * subdev deinit — the dev_id must match the registration, which
-         * used &sd.irqdev (irq_info), not ourISPdev.
-         */
-        if (ourISPdev->isp_irq > 0) {
-            free_irq(ourISPdev->isp_irq, ourISPdev);
-            pr_info("Hardware interrupt %d (isp-m0) freed\n", ourISPdev->isp_irq);
+        /* Free hardware interrupts.  IRQ 38 (isp-w02) is freed by
+         * tx_isp_vic_remove() when its platform device is unregistered
+         * below; isp-m0 was requested by tx_isp_subdev_init() with dev_id
+         * &ourISPdev->sd_irq_info, not ourISPdev: free_irq() with the wrong
+         * dev_id only WARNs and leaves isp_irq_handle installed on the
+         * shared line after the module text is gone. */
+        if (ourISPdev->sd_irq_info.irq > 0) {
+            int irq = ourISPdev->sd_irq_info.irq;
+
+            tx_isp_free_irq(&ourISPdev->sd_irq_info);
+            pr_info("Hardware interrupt %d (isp-m0) freed\n", irq);
         }
+        ourISPdev->sd.irqdev.irq = 0;
+        ourISPdev->isp_irq = 0;
 
         /* The ISP core IRQ queues the day/night work, and STREAMOFF (which
          * masks that IRQ) flushes it. Cancel it here too, so no switch runs
          * into the teardown below if the stream was never stopped. */
         tx_isp_core_daynight_cancel();
 
+        /* isp_fw_process normally stops in ispcore_core_ops_init(on=0) when
+         * the stream/sensor goes away.  If that path did not run, it would
+         * keep executing module text after unload; it polls
+         * kthread_should_stop() every <=200 ms, so stopping it is bounded. */
+        if (ourISPdev->fw_thread && !IS_ERR(ourISPdev->fw_thread)) {
+            kthread_stop(ourISPdev->fw_thread);
+            ourISPdev->fw_thread = NULL;
+        }
+
         tisp_deinit_free();
-
-        /* Clean up VIC device directly */
-        if (ourISPdev->vic_dev) {
-            struct tx_isp_vic_device *vic_dev = (struct tx_isp_vic_device *)ourISPdev->vic_dev;
-
-            // Clean up any remaining buffers
-            if (!list_empty(&vic_dev->queue_head)) {
-                struct list_head *pos, *n;
-                list_for_each_safe(pos, n, &vic_dev->queue_head) {
-                    list_del(pos);
-                    kfree(pos);
-                }
-            }
-
-            if (!list_empty(&vic_dev->done_head)) {
-                struct list_head *pos, *n;
-                list_for_each_safe(pos, n, &vic_dev->done_head) {
-                    list_del(pos);
-                    kfree(pos);
-                }
-            }
-
-            kfree(vic_dev);
-            ourISPdev->vic_dev = NULL;
-            pr_info("VIC device cleaned up\n");
-        }
-
-        /* Unmap hardware registers */
-        if (ourISPdev->vic_regs) {
-            iounmap(ourISPdev->vic_regs);
-            ourISPdev->vic_regs = NULL;
-            pr_info("VIC registers unmapped\n");
-        }
 
         /* Clean up sensor if present */
         if (ourISPdev->sensor) {
@@ -6436,7 +6423,12 @@ static void tx_isp_exit(void)
         /* Unregister misc device */
         misc_deregister(&tx_isp_miscdev);
 
-        /* *** CRITICAL: Unregister platform devices that were registered in init *** */
+        /* Unregister the subdev platform devices first.  Their remove
+         * callbacks (core, fs, vin, vic, csi) still dereference ourISPdev,
+         * ourISPdev->vic_dev and ourISPdev->csi_dev, so those objects must
+         * stay alive until every remove has run.  Freeing vic_dev before
+         * tx_isp_vic_remove() was the rmmod oops (mutex_lock on the freed
+         * and never-initialised vic_frame_end_lock). */
         platform_device_unregister(&tx_isp_core_platform_device);
         platform_device_unregister(&tx_isp_fs_platform_device);
         platform_device_unregister(&tx_isp_vin_platform_device);
@@ -6447,6 +6439,52 @@ static void tx_isp_exit(void)
         /* *** CRITICAL: Cleanup subdev platform drivers *** */
         tx_isp_subdev_platform_exit();
         pr_info("*** SUBDEV PLATFORM DRIVERS CLEANED UP ***\n");
+
+        /* Now free the VIC object created by tx_isp_create_vic_device(). */
+        if (ourISPdev->vic_dev) {
+            struct tx_isp_vic_device *vic_dev = (struct tx_isp_vic_device *)ourISPdev->vic_dev;
+            struct list_head *vic_lists[] = {
+                &vic_dev->queue_head, &vic_dev->done_head, &vic_dev->free_head,
+            };
+            int l;
+
+            /* Every entry is a kzalloc()ed struct vic_buffer_entry whose
+             * list member is at offset 0. */
+            for (l = 0; l < ARRAY_SIZE(vic_lists); l++) {
+                struct list_head *pos, *n;
+
+                if (!vic_lists[l]->next)
+                    continue;
+                list_for_each_safe(pos, n, vic_lists[l]) {
+                    list_del(pos);
+                    kfree(pos);
+                }
+            }
+
+            if (vic_dev->vic_regs)
+                iounmap(vic_dev->vic_regs);
+            if (vic_dev->vic_regs_secondary)
+                iounmap(vic_dev->vic_regs_secondary);
+            vic_dev->vic_regs = NULL;
+            vic_dev->vic_regs_secondary = NULL;
+
+            kfree(vic_dev);
+            ourISPdev->vic_dev = NULL;
+            pr_info("VIC device cleaned up\n");
+        }
+
+        /* ourISPdev->vic_regs/vic_regs2 only alias the VIC mappings above. */
+        ourISPdev->vic_regs = NULL;
+        ourISPdev->vic_regs2 = NULL;
+
+        /* The CSI object and its +0x110 attr cache from csi_device_probe()
+         * (adopted, not owned, by tx_isp_csi_probe()) were never freed. */
+        if (ourISPdev->csi_dev) {
+            kfree(ourISPdev->csi_dev);
+            ourISPdev->csi_dev = NULL;
+        }
+        kfree(csi_attr_cache_owned);
+        csi_attr_cache_owned = NULL;
 
         /* Unregister platform components */
         platform_driver_unregister(&tx_isp_driver);

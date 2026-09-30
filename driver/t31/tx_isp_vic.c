@@ -456,6 +456,10 @@ int tx_isp_create_vic_device(struct tx_isp_dev *isp_dev)
     spin_lock_init(&vic_dev->lock);
     mutex_init(&vic_dev->mlock);
     mutex_init(&vic_dev->state_lock);
+    /* Taken by tx_isp_vic_stop()/tx_isp_vic_set_buffer().  kzalloc() alone
+     * leaves wait_list NULL, so the first contended/zero-count lock walks a
+     * NULL list head in __mutex_lock_slowpath(). */
+    mutex_init(&vic_dev->vic_frame_end_lock);
     init_completion(&vic_dev->frame_complete);
     spin_lock_init(&vic_dev->buffer_mgmt_lock);
     spin_lock_init(&vic_dev->buffer_lock);
@@ -3394,48 +3398,40 @@ int tx_isp_vic_probe(struct platform_device *pdev)
     return 0;
 }
 
-/* VIC remove function */
+void tx_isp_free_irq(struct tx_isp_irq_info *irq_info);
+
+/* VIC remove function
+ *
+ * The VIC object is not owned by this platform device: tx_isp_init() creates
+ * it with tx_isp_create_vic_device() before the platform device exists, the
+ * probe only adopts it, and tx_isp_exit() frees it (together with the
+ * vic_regs/vic_regs_secondary mappings) after all subdev platform devices
+ * are unregistered.  Only undo what tx_isp_vic_probe()/tx_isp_subdev_init()
+ * acquired here: the isp-w02 IRQ (dev_id &vic_dev->sd_irq_info), the mem
+ * region and the pads.  Like the OEM remove, do not touch the hardware; the
+ * stream is already off and /proc/jz/isp is owned by tx_isp_proc.c.
+ */
 int tx_isp_vic_remove(struct platform_device *pdev)
 {
-    struct tx_isp_subdev *sd = platform_get_drvdata(pdev);
-    struct resource *res;
+    struct tx_isp_vic_device *vic_dev = platform_get_drvdata(pdev);
 
-    if (!sd)
-        return -EINVAL;
+    if (IS_ERR_OR_NULL(vic_dev))
+        return 0;
 
-    /* Stop VIC */
-    tx_isp_vic_stop(sd);
+    platform_set_drvdata(pdev, NULL);
 
-    /* Free interrupt */
-    free_irq(platform_get_irq(pdev, 0), sd);
+    if (vic_dev->sd_irq_info.irq > 0)
+        tx_isp_free_irq(&vic_dev->sd_irq_info);
+    vic_dev->sd.irqdev.irq = 0;
+    vic_dev->irq_enabled = 0;
 
-    remove_proc_entry("isp-w02", NULL);
-    remove_proc_entry("jz/isp", NULL);
+    if (dump_vsd == vic_dev)
+        dump_vsd = NULL;
+    test_addr = NULL;
 
-    /* Unmap and release memory */
-    iounmap(sd->base);
-    res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-    if (res)
-        release_mem_region(res->start, resource_size(res));
-
-    /* CRITICAL: Clean up BOTH VIC register mappings */
-    struct tx_isp_vic_device *vic_dev = container_of(sd, struct tx_isp_vic_device, sd);
-    if (vic_dev) {
-        if (vic_dev->vic_regs) {
-            pr_info("*** VIC REMOVE: Unmapping primary VIC registers ***\n");
-            iounmap(vic_dev->vic_regs);
-            vic_dev->vic_regs = NULL;
-        }
-        if (vic_dev->vic_regs_secondary) {
-            pr_info("*** VIC REMOVE: Unmapping secondary VIC registers ***\n");
-            iounmap(vic_dev->vic_regs_secondary);
-            vic_dev->vic_regs_secondary = NULL;
-        }
-    }
-
-    /* Clean up subdev */
-    tx_isp_subdev_deinit(sd);
-    kfree(sd);
+    /* Frees the pads and releases the mem region; the embedded subdev and
+     * its register mappings stay valid until tx_isp_exit() frees vic_dev. */
+    tx_isp_subdev_deinit(&vic_dev->sd);
 
     return 0;
 }

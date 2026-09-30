@@ -464,6 +464,10 @@ int tx_isp_fs_remove(struct platform_device *pdev)
     /* Detach ownership before releasing any child allocations.  This makes
      * repeated/unwound platform teardown a no-op instead of a double free. */
     platform_set_drvdata(pdev, NULL);
+    if (ourISPdev && (void *)ourISPdev->fs_dev == (void *)fs_dev)
+        ourISPdev->fs_dev = NULL;
+    if (dump_fsd == fs_dev)
+        dump_fsd = NULL;
 
     /* SAFE: Clean up frame channels with proper array indexing */
     channels_buffer = (struct tx_isp_frame_channel *)fs_dev->channel_buffer;

@@ -927,9 +927,14 @@ int tx_isp_vin_remove(struct platform_device *pdev)
         mcp_log_info("vin_remove: clock disabled", 0);
     }
 
+    /* tx_isp_subdev_init() published this object as ourISPdev->vin_dev;
+     * drop that alias before freeing it so later teardown cannot reach it. */
+    if (ourISPdev && ourISPdev->vin_dev == vin)
+        ourISPdev->vin_dev = NULL;
+
     /* Free device structure */
-    kfree(vin);
     platform_set_drvdata(pdev, NULL);
+    kfree(vin);
 
     mcp_log_info("vin_remove: VIN removal completed", 0);
     return 0;
