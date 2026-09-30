@@ -52,25 +52,17 @@ int tisp_ae_get_y_zone(void *arg1)
 }
 EXPORT_SYMBOL(tisp_ae_get_y_zone);
 
-/* tisp_g_ae_zone - OEM EXACT: ioctl handler to copy AE zone data to userspace */
-int tisp_g_ae_zone(struct tx_isp_dev *dev, struct isp_core_ctrl *ctrl)
+/* tisp_g_ae_zone - stock takes the caller's 900-byte buffer and fills it
+ * through tisp_ae_get_y_zone().  The previous (dev, ctrl) signature did not
+ * match the one-argument prototype its only caller (apical_isp_ae_zone_g_ctrl
+ * for G 0x8000030) uses, so the zone table never reached the caller's buffer
+ * and the ioctl copied uninitialised kernel stack to userspace instead. */
+int tisp_g_ae_zone(void *buffer)
 {
-    struct ae_zone_info zones;
-    int ret;
-
-    if (!dev || !ctrl || !ctrl->value)
+    if (!buffer)
         return -EINVAL;
 
-    memset(&zones, 0, sizeof(zones));
-
-    ret = tisp_ae_get_y_zone(&zones);
-    if (ret)
-        return ret;
-
-    if (copy_to_user((void __user *)ctrl->value, &zones, sizeof(zones)))
-        return -EFAULT;
-
-    return 0;
+    return tisp_ae_get_y_zone(buffer);
 }
 EXPORT_SYMBOL(tisp_g_ae_zone);
 

@@ -3517,6 +3517,7 @@ int tisp_get_defog_strength(uint32_t *value);
 int tisp_g_dpc_strength(uint32_t *value);
 int tisp_g_drc_strength(uint32_t *value);
 int apical_isp_ae_zone_g_ctrl(struct tx_isp_dev *dev, struct isp_core_ctrl *ctrl);
+int apical_isp_af_zone_g_ctrl(struct tx_isp_dev *dev, struct isp_core_ctrl *ctrl);
 
 /* Forward declarations for file operations */
 int tisp_code_tuning_open(struct inode *inode, struct file *file);
@@ -8700,8 +8701,8 @@ static int apical_isp_core_ops_g_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
             break;
         }
 
-        case 0x8000046: /* OEM: apical_isp_af_zone_g_ctrl */
-            ret = 0;
+        case 0x8000046: /* OEM: apical_isp_af_zone_g_ctrl (900-byte zone table) */
+            ret = apical_isp_af_zone_g_ctrl(dev, ctrl);
             break;
 
         case 0x8000084: { /* OEM: tisp_g_ncuinfo (0x14 bytes) */
@@ -10384,30 +10385,38 @@ int apical_isp_ae_zone_g_ctrl(struct tx_isp_dev *dev, struct isp_core_ctrl *ctrl
 
     pr_debug("apical_isp_ae_zone_g_ctrl: entry\n");
 
-    tisp_g_ae_zone(var_390);  // Binary Ninja: tisp_g_ae_zone(&var_390)
+    memset(var_390, 0, sizeof(var_390));
+    tisp_g_ae_zone(var_390);
 
     /* Binary Ninja: private_copy_to_user(*arg1, &var_390, 0x384) */
-    if (copy_to_user((void __user *)ctrl->value, var_390, 0x384)) {
+    if (copy_to_user((void __user *)(unsigned long)(uint32_t)ctrl->value,
+                     var_390, 0x384)) {
         return -EFAULT;
     }
 
     return 0;
 }
 
-/* apical_isp_af_zone_g_ctrl.isra.85 - EXACT Binary Ninja reference implementation */
+/* apical_isp_af_zone_g_ctrl.isra.85
+ *
+ * Stock hands its 900-byte stack buffer to tisp_af_get_zone(), which fills it
+ * from the AF zone statistics store before the copy to userspace.  This
+ * driver does not collect AF zone statistics yet, so report an all-zero zone
+ * table.  The buffer must be cleared: copying it uninitialised would leak
+ * 900 bytes of kernel stack to any process that can open /dev/isp-m0.
+ */
 int apical_isp_af_zone_g_ctrl(struct tx_isp_dev *dev, struct isp_core_ctrl *ctrl)
 {
-    /* Binary Ninja: tisp_g_af_zone(); void var_390 */
     char var_390[0x384];
 
     pr_debug("apical_isp_af_zone_g_ctrl: entry\n");
 
-    tisp_g_af_zone();  // Binary Ninja: takes no parameters
+    memset(var_390, 0, sizeof(var_390));
+    tisp_g_af_zone();
 
-    /* Binary Ninja: private_copy_to_user(*arg1, &var_390, 0x384) */
-    if (copy_to_user((void __user *)ctrl->value, var_390, 0x384)) {
+    if (copy_to_user((void __user *)(unsigned long)(uint32_t)ctrl->value,
+                     var_390, sizeof(var_390)))
         return -EFAULT;
-    }
 
     return 0;
 }
