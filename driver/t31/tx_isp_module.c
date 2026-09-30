@@ -3388,23 +3388,25 @@ static irqreturn_t isp_vic_interrupt_service_routine(int irq, void *dev_id)
 
 		/* OEM HLIL: Error recovery — if (($v1_7 & 0xde00) != 0 && vic_start_ok != 0) */
 		if ((v1_7 & 0xde00) != 0 && vic_start_ok != 0) {
-            pr_info("*** VIC ERROR RECOVERY: Detected error condition 0x%x (control limit errors should be prevented by proper config) ***\n", v1_7);
-            pr_err("error handler!!!\n");
+            pr_err_ratelimited("VIC error handler: status 0x%x, restarting VIC\n",
+                               v1_7);
 
             /* Binary Ninja: **($s0 + 0xb8) = 4 */
             writel(4, vic_regs + 0x0);
             wmb();
 
-            /* Binary Ninja: while (*$v0_70 != 0) */
+            /* Stock polls without bound and prints every iteration. This is
+             * hard IRQ: poll for at most ~1 ms and report a VIC that does
+             * not stop once, then restart it as before. */
             timeout = 1000;
-            while (timeout-- > 0) {
-                addr_ctl = readl(vic_regs + 0x0);
-                if (addr_ctl == 0) {
-                    break;
-                }
-                pr_info("addr ctl is 0x%x\n", addr_ctl);
+            addr_ctl = readl(vic_regs + 0x0);
+            while (addr_ctl != 0 && timeout-- > 0) {
                 udelay(1);
+                addr_ctl = readl(vic_regs + 0x0);
             }
+            if (addr_ctl != 0)
+                pr_err_ratelimited("VIC error handler: VIC did not stop, addr ctl is 0x%x\n",
+                                   addr_ctl);
 
             /* Binary Ninja: Final recovery steps */
             reg_val = readl(vic_regs + 0x104);
