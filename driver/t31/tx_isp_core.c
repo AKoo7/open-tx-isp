@@ -1450,6 +1450,34 @@ int tx_isp_core_wait_quiet(u32 frame_ms)
     return -ETIMEDOUT;
 }
 
+/*
+ * WDR exception reset (core error bits 0x200/0x100), see the ISR. Runs in
+ * hard IRQ. Stock waits for the release ack (0x28 bit 0) without bound, which
+ * hangs the CPU if the ISP never acknowledges; wait at most ~1 ms, report it
+ * and carry on with the flush and restart.
+ */
+static void ispcore_wdr_exception_reset(void __iomem *vic_regs)
+{
+    u32 r;
+    int budget = 1000;
+
+    system_reg_write(0x24, system_reg_read(0x24) | 1);
+    writel(4, vic_regs + 0x0);  /* VIC stop */
+    while (!(system_reg_read(0x28) & 1)) {
+        if (budget-- <= 0) {
+            pr_err_ratelimited("ispcore: WDR exception reset: no release ack (0x28=0x%x)\n",
+                               system_reg_read(0x28));
+            break;
+        }
+        udelay(1);
+    }
+    r = system_reg_read(0x20);
+    system_reg_write(0x20, r | 4);
+    system_reg_write(0x20, r & ~4);
+    system_reg_write(0x800, 1);
+    writel(1, vic_regs + 0x0);  /* VIC run */
+}
+
 /* ispcore_interrupt_service_routine - EXACT Binary Ninja implementation */
 irqreturn_t ispcore_interrupt_service_routine(int irq, void *dev_id)
 {
@@ -1553,31 +1581,13 @@ irqreturn_t ispcore_interrupt_service_routine(int irq, void *dev_id)
             allow_exception_reset = !!isp_dev->wdr_mode;
 
         if (interrupt_status & 0x200) {
-            if (allow_exception_reset) {
-                u32 r;
-                system_reg_write(0x24, system_reg_read(0x24) | 1);
-                writel(4, vic_regs + 0x0);  /* VIC stop */
-                do { r = system_reg_read(0x28); } while (!(r & 1));
-                r = system_reg_read(0x20);
-                system_reg_write(0x20, r | 4);
-                system_reg_write(0x20, r & ~4);
-                system_reg_write(0x800, 1);
-                writel(1, vic_regs + 0x0);  /* VIC run */
-            }
+            if (allow_exception_reset)
+                ispcore_wdr_exception_reset(vic_regs);
             isp_err_200_count++;
         }
         if (interrupt_status & 0x100) {
-            if (allow_exception_reset) {
-                u32 r;
-                system_reg_write(0x24, system_reg_read(0x24) | 1);
-                writel(4, vic_regs + 0x0);  /* VIC stop */
-                do { r = system_reg_read(0x28); } while (!(r & 1));
-                r = system_reg_read(0x20);
-                system_reg_write(0x20, r | 4);
-                system_reg_write(0x20, r & ~4);
-                system_reg_write(0x800, 1);
-                writel(1, vic_regs + 0x0);  /* VIC run */
-            }
+            if (allow_exception_reset)
+                ispcore_wdr_exception_reset(vic_regs);
             isp_err_100_count++;
         }
     }
