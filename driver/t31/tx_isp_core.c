@@ -3268,14 +3268,21 @@ int ispcore_frame_channel_streamoff(int32_t* arg1)
 
     /* Use dispatch->state instead of raw OEM pointer offsets into
      * event_priv.  The OEM's *(priv+0x74) hw_state and *(priv+0x9c)
-     * spinlock hit wrong memory in our isp_channel struct layout. */
-    if (!ispcore_bypass_enabled(isp_dev)) {
-        if (dispatch->state == 4) {
-            ret = tisp_channel_stop(dispatch->channel_id);
-            dispatch->state = 3;
-            pr_info("*** ispcore_frame_channel_streamoff: stopped channel %u (%d) ***\n",
-                    dispatch->channel_id, ret);
-        }
+     * spinlock hit wrong memory in our isp_channel struct layout.
+     *
+     * Stock hands streamoff to the bypass callbacks when bypass is on,
+     * because its bypass QBUF never touches the MSCA. Here state 4 is only
+     * set by tisp_channel_start (non-bypass STREAMON), so a channel in
+     * state 4 is a running MSCA channel even if ISP_CTRL_BYPASS was
+     * switched on since; skipping the stop left it writing into buffers
+     * userspace frees after STREAMOFF. In bypass mode without a started
+     * channel this is a no-op. */
+    if (dispatch->state == 4) {
+        ret = tisp_channel_stop(dispatch->channel_id);
+        dispatch->state = 3;
+        pr_info("*** ispcore_frame_channel_streamoff: stopped channel %u (%d)%s ***\n",
+                dispatch->channel_id, ret,
+                ispcore_bypass_enabled(isp_dev) ? " in bypass mode" : "");
     }
     return ret;
 }
@@ -3929,9 +3936,11 @@ static int ispcore_pad_event_handle(int32_t* arg1, int32_t arg2, void* arg3)
             /* FIFO clear — use dispatch->channel_id, not raw pointer offsets */
             ISP_INFO("ispcore_pad_event_handle: case 0x3000007 (fifo clear)");
 
-            if (ispcore_bypass_enabled(isp_dev))
-                return 0;
-
+            /* No bypass shortcut: the frame-channel QBUF pushes into the
+             * MSCA FIFO in bypass mode too (unlike stock, which routes a
+             * bypass QBUF to the bypass callbacks), so the clear is needed
+             * in both modes. It already runs on idle channels (REQBUFS,
+             * release), so an idle MSCA in bypass mode is no new case. */
             result = 0;
             if ((dispatch->enabled & 0x20) == 0 &&
                 dispatch->channel_id < MSCA_FIFO_CHANNELS) {
