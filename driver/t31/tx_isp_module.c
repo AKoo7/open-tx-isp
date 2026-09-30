@@ -5356,97 +5356,59 @@ static long tx_isp_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned 
 
         return 0;
     }
-    case 0x8038564f: { // TX_ISP_SENSOR_S_REGISTER - Set sensor register (EXACT Binary Ninja)
-        struct sensor_reg_write {
-            uint32_t addr;
-            uint32_t val;
+    case 0x8038564f:   // TX_ISP_SENSOR_S_REGISTER
+    case 0xc0385650: { // TX_ISP_SENSOR_G_REGISTER
+        /* Stock copies the 0x38-byte v4l2_dbg_register-style wire object and
+         * hands the sensor a translated struct tx_isp_dbg_register whose name
+         * points at the kernel copy.  Passing the raw user object made the
+         * sensor's strncmp() dereference the user-chosen first word. */
+        struct {
+            uint32_t match_type;
+            char name[32];
             uint32_t size;
-            // Additional fields from reference (0x38 bytes total)
-            uint32_t reserved[10];
-        } reg_write;
+            uint64_t reg;
+            uint64_t val;
+        } wire;
+        struct tx_isp_dbg_register dbg;
+        unsigned int event = (cmd == 0x8038564f) ?
+            TX_ISP_EVENT_SENSOR_S_REGISTER : TX_ISP_EVENT_SENSOR_G_REGISTER;
         int i;
         int ret = 0;
 
-        if (copy_from_user(&reg_write, argp, sizeof(reg_write)))
+        BUILD_BUG_ON(sizeof(wire) != 0x38);
+        if (copy_from_user(&wire, argp, sizeof(wire)))
             return -EFAULT;
+        wire.name[sizeof(wire.name) - 1] = '\0';
 
-        pr_info("Sensor register write: addr=0x%x val=0x%x size=%d\n",
-                reg_write.addr, reg_write.val, reg_write.size);
+        memset(&dbg, 0, sizeof(dbg));
+        dbg.name = wire.name;
+        dbg.size = wire.size;
+        dbg.reg = wire.reg;
+        dbg.val = wire.val;
 
-        /* Binary Ninja: Iterate through subdevs at offset 0x2c (isp_dev->subdevs) */
-        /* Pattern: for (i = isp_dev + 0x2c; i != isp_dev + 0x6c; i += 4) */
-        for (i = 0; i < ISP_MAX_SUBDEVS; i++) {
-            struct tx_isp_subdev *subdev = isp_dev->subdevs[i];
-
-            if (!subdev)
-                continue;
-
-            /* Binary Ninja: Check if subdev has sensor ops */
-            if (subdev->ops && subdev->ops->sensor && subdev->ops->sensor->ioctl) {
-                /* Binary Ninja: Call sensor ioctl with register write data */
-	                ret = subdev->ops->sensor->ioctl(subdev,
-	                                                 TX_ISP_EVENT_SENSOR_S_REGISTER,
-	                                                 &reg_write);
-
-                if (ret == 0) {
-                    /* Success - continue to next subdev */
-                    continue;
-                } else if (ret != -ENOIOCTLCMD) {
-                    /* Error other than "not supported" - return it */
-                    return ret;
-                }
-            }
-        }
-
-        return 0;
-    }
-    case 0xc0385650: { // TX_ISP_SENSOR_G_REGISTER - Get sensor register (EXACT Binary Ninja)
-        struct sensor_reg_read {
-            uint32_t addr;
-            uint32_t val;    // Will be filled by driver
-            uint32_t size;
-            // Additional fields from reference (0x38 bytes total)
-            uint32_t reserved[10];
-        } reg_read;
-        int i;
-        int ret = 0;
-
-        if (copy_from_user(&reg_read, argp, sizeof(reg_read)))
-            return -EFAULT;
-
-        pr_info("Sensor register read: addr=0x%x size=%d\n",
-                reg_read.addr, reg_read.size);
+        pr_info("Sensor register %s: reg=0x%llx\n",
+                event == TX_ISP_EVENT_SENSOR_S_REGISTER ? "write" : "read",
+                (unsigned long long)wire.reg);
 
         /* Binary Ninja: Iterate through subdevs at offset 0x2c (isp_dev->subdevs) */
         for (i = 0; i < ISP_MAX_SUBDEVS; i++) {
             struct tx_isp_subdev *subdev = isp_dev->subdevs[i];
 
-            if (!subdev)
+            if (!subdev || !subdev->ops || !subdev->ops->sensor ||
+                !subdev->ops->sensor->ioctl)
                 continue;
 
-            /* Binary Ninja: Check if subdev has sensor ops */
-            if (subdev->ops && subdev->ops->sensor && subdev->ops->sensor->ioctl) {
-                /* Binary Ninja: Call sensor ioctl with register read data */
-	                ret = subdev->ops->sensor->ioctl(subdev,
-	                                                 TX_ISP_EVENT_SENSOR_G_REGISTER,
-	                                                 &reg_read);
-
-                if (ret == 0) {
-                    /* Success - continue to next subdev */
-                    continue;
-                } else if (ret != -ENOIOCTLCMD) {
-                    /* Error other than "not supported" - return it */
-                    return ret;
-                }
-            }
+            ret = subdev->ops->sensor->ioctl(subdev, event, &dbg);
+            if (ret && ret != -ENOIOCTLCMD)
+                return ret;
         }
 
-        /* Binary Ninja: Copy result back to user */
-        if (copy_to_user(argp, &reg_read, sizeof(reg_read)))
-            return -EFAULT;
-
-        pr_info("Sensor register read result: addr=0x%x val=0x%x\n",
-                reg_read.addr, reg_read.val);
+        if (event == TX_ISP_EVENT_SENSOR_G_REGISTER) {
+            wire.size = dbg.size;
+            wire.val = dbg.val;
+            if (copy_to_user(argp, &wire, sizeof(wire)))
+                return -EFAULT;
+        }
 
         return 0;
     }
