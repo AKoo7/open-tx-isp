@@ -6335,8 +6335,11 @@ static void tisp_set_ae0_ag(uint32_t ag, uint32_t dg)
     if (q == 0) q = 10;  /* Default Q10 if not initialized */
     one_q = 1u << q;
 
-    /* OEM: Skip if IspAeFlag is 0 and gains haven't changed and no ctrls pending.
-     * For simplicity, always process (OEM has early-out optimization). */
+    /* The OEM returns early here when the gains are unchanged. Not here:
+     * data_b2f04, reached through the analog gain, also carries the
+     * integration time to the sensor, and an IT-only change (AG steady at
+     * 1x in daylight) would never reach it. The redundant sensor write is
+     * skipped in data_b2f04 instead. */
 
     /* OEM: Handle tisp_ae_ctrls override */
     if (tisp_ae_gain_hold_active()) {
@@ -35338,6 +35341,21 @@ static int data_b2f04(uint32_t param, int flag)
         pr_debug("data_b2f04: again_idx=%u it=%u\n", param,
                 ourISPdev->sensor->attr.integration_time);
         ourISPdev->sensor->attr.again = param;
+        {
+            /* Skip the worker wakeup (an I2C write of the same values) when
+             * IT and AG are unchanged. Still write every 32nd frame, so a
+             * sensor that reset its registers (stream restart) gets the
+             * current exposure back within about a second. */
+            static uint32_t last_it = ~0u, last_ag = ~0u;
+            static unsigned int unchanged;
+            uint32_t it = ourISPdev->sensor->attr.integration_time;
+
+            if (it == last_it && param == last_ag && ++unchanged < 32)
+                return 0;
+            unchanged = 0;
+            last_it = it;
+            last_ag = param;
+        }
         /* Queue deferred I2C write to sensor hardware.
          * Both IT and AG attributes are set by the time AG is written,
          * so one workqueue trigger here covers both. */
