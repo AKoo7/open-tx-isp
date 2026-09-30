@@ -8953,7 +8953,9 @@ static int apical_isp_core_ops_s_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
             break;
 
         case 0x8000028:  /* OEM: tisp_s_max_again — set max analog gain */
-            tisp_s_max_again(ctrl->value);
+            ret = tisp_s_max_again(ctrl->value);
+            if (ret)
+                goto out;
             tuning->max_again = data_c46b0;
             break;
 
@@ -16272,7 +16274,21 @@ static int tisp_s_max_isp_dgain(uint32_t value)
  * Decompiled from OEM at 0x52f40. tisp_s_max_again calls this. */
 int tiziano_ae_s_max_again(uint32_t value)
 {
+    /* Stock rejects a request above the sensor's max_again word shifted
+     * left by 11 with -1 before touching any state.  The comparison is
+     * unsigned, so a negative request is rejected as well. */
+    if ((tisp_sensor_ctrl.max_again << 11) < value) {
+        pr_err("%u not in range, max_again must between 0~%u\n",
+               value, tisp_sensor_ctrl.max_again << 11);
+        return -1;
+    }
+
     data_c46b0 = tisp_math_exp2(value, 5, 0xa);
+    /* Stock stores the limit in the AE control object (ctrls[5]).  Mirror
+     * it there so tisp_sensor_ctrl_sync() keeps a user-reduced limit and
+     * tisp_ae0_ctrls_update() clamps it against the sensor like stock.
+     * The AE solver keeps reading data_c46b0. */
+    tisp_ae_ctrls[5] = data_c46b0;
     data_a0dfc = 0;
     return 0;
 }
@@ -16282,6 +16298,7 @@ int tiziano_ae_s_max_again(uint32_t value)
 int tiziano_ae_s_max_isp_dgain(uint32_t value)
 {
     data_c46bc = tisp_math_exp2(value, 5, 0xa);
+    tisp_ae_ctrls[8] = data_c46bc;	/* stock AE control object field */
     data_a0dfc = 0;
     return 0;
 }
