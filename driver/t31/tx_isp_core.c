@@ -1442,8 +1442,10 @@ irqreturn_t ispcore_interrupt_service_routine(int irq, void *dev_id)
 
     /* Binary Ninja: Frame sync interrupt processing */
     if (interrupt_status & 0x1000) {
-        /* Queue frame-sync work on CPU 0 (private_schedule_work) */
-        if (fs_workqueue)
+        /* Queue frame-sync work on CPU 0 (private_schedule_work). Its only
+         * effect here is latching streaming_enabled; once set, a wakeup per
+         * frame does nothing, so skip it. */
+        if (fs_workqueue && !isp_dev->streaming_enabled)
             queue_work_on(0, fs_workqueue, &fs_work);
     }
 
