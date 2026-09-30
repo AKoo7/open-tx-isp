@@ -3750,7 +3750,11 @@ static uint32_t ae_ev_init_en = 0;
 static uint32_t ae_ev_init_strict = 0x1f4;
 
 /* AE completion structure for synchronization */
-static struct completion ae_algo_comp;
+/* Statically initialised: tisp_ae_algo_init(1) raises ta_custom_en before
+ * SET_AE_ALGO_OPEN reaches its init_completion(), and an allocation failure
+ * there leaves ta_custom_en set with no init at all, so tisp_ae0_process()
+ * could complete() a zeroed completion (NULL wait list) on the next frame. */
+static DECLARE_COMPLETION(ae_algo_comp);
 
 /* AE histogram data — must be before tisp_ae_get_hist_custome usage */
 static uint8_t tisp_ae_hist[0x42c];

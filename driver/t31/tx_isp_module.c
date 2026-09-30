@@ -2949,8 +2949,10 @@ static int csi_device_probe(struct tx_isp_dev *isp_dev)
         return -ENOMEM;
     }
 
-    /* Binary Ninja: memset($v0, 0, 0x148) */
-    memset(csi_dev, 0, 0x148);
+    /* Binary Ninja: memset($v0, 0, 0x148).  The raw OEM slots are explicit
+     * members, so the 0x148-byte OEM area lies inside the object. */
+    tx_isp_csi_layout_check();
+    memset(csi_dev, 0, TX_ISP_CSI_OEM_SIZE);
 
     /* Initialize CSI subdev structure like Binary Ninja tx_isp_subdev_init */
     memset(&csi_dev->sd, 0, sizeof(csi_dev->sd));
@@ -2989,6 +2991,7 @@ static int csi_device_probe(struct tx_isp_dev *isp_dev)
 
     /* Binary Ninja: private_raw_mutex_init($v0 + 0x12c) */
     mutex_init(&csi_dev->mlock);
+    spin_lock_init(&csi_dev->lock);
 
     /* Binary Ninja: *($v0 + 0x128) = 1 (initial state) */
     *(u32 *)((char *)csi_dev + 0x128) = 1;
