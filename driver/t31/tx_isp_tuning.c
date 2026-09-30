@@ -8277,6 +8277,84 @@ static uint8_t tisp_get_ae_luma(uint8_t *result);
 int tisp_g_wb_attr(void *out_buf);
 int tisp_get_bcsh_hue(uint32_t *value);
 
+int tisp_g_aezone_weight(void *buffer);
+int tisp_s_aezone_weight(uint32_t *weights);
+
+/* G 0x800002d (GetAeWeight): stock reads the 225-entry u32 zone-weight table
+ * and returns it as 225 bytes, row by row (15x15). */
+static int apical_isp_ae_zone_weight_g_attr(struct isp_core_ctrl *ctrl)
+{
+	uint32_t *weights;
+	uint8_t packed[0xe1];
+	int ret, i;
+
+	weights = kzalloc(0x384, GFP_KERNEL);
+	if (!weights)
+		return -ENOMEM;
+
+	ret = tisp_g_aezone_weight(weights);
+	if (ret == 0) {
+		for (i = 0; i < 0xe1; i++)
+			packed[i] = (uint8_t)weights[i];
+		if (copy_to_user((void __user *)(unsigned long)(uint32_t)ctrl->value,
+				 packed, sizeof(packed)))
+			ret = -EFAULT;
+	}
+	kfree(weights);
+	return ret;
+}
+
+/* S 0x800002d (SetAeWeight): 225 bytes, each weight must be below 9; stock
+ * rejects the whole table with -1 on the first out-of-range entry. */
+static int apical_isp_ae_zone_weight_s_attr(struct isp_core_ctrl *ctrl)
+{
+	uint32_t *weights;
+	uint8_t packed[0xe1];
+	int ret = 0, i;
+
+	if (!ctrl->value)
+		return -1;
+	if (copy_from_user(packed,
+			   (void __user *)(unsigned long)(uint32_t)ctrl->value,
+			   sizeof(packed)))
+		return -EFAULT;
+
+	weights = kmalloc(0x384, GFP_KERNEL);
+	if (!weights)
+		return -ENOMEM;
+
+	for (i = 0; i < 0xe1; i++) {
+		if (packed[i] >= 9) {
+			pr_err("apical_isp_ae_zone_weight_s_attr: ae zone weight overflow\n");
+			ret = -1;
+			goto out;
+		}
+		weights[i] = packed[i];
+	}
+	tisp_s_aezone_weight(weights);
+out:
+	kfree(weights);
+	return ret;
+}
+
+/* G 0x8000031 (GetAeHist_Origin): the raw 256-bin AE histogram, 0x400 bytes. */
+static int apical_isp_ae_hist_origin_g_attr(struct isp_core_ctrl *ctrl)
+{
+	uint8_t *hist;
+	int ret = 0;
+
+	hist = kzalloc(0x42c, GFP_KERNEL);
+	if (!hist)
+		return -ENOMEM;
+
+	tisp_g_ae_hist(hist);
+	if (copy_to_user((void __user *)(unsigned long)(uint32_t)ctrl->value,
+			 hist, 0x400))
+		ret = -EFAULT;
+	kfree(hist);
+	return ret;
+}
+
 /*
  * These controls need an explicitly reconstructed route.  The descriptor
  * records whether the eight-byte envelope carries an inline result or a
@@ -8302,12 +8380,12 @@ static const struct tx_isp_tuning_cmd_desc t31_g_ctrl_routes[] = {
 	  TX_ISP_TUNING_PAYLOAD_INLINE },
 	{ TX_ISP_TUNING_CMD_MOVE_STATE, 4, TX_ISP_TUNING_DIR_GET,
 	  TX_ISP_TUNING_PAYLOAD_INLINE },
-	{ TX_ISP_TUNING_CMD_AE_STATS, 4, TX_ISP_TUNING_DIR_GET,
-	  TX_ISP_TUNING_PAYLOAD_INLINE },
+	{ TX_ISP_TUNING_CMD_AE_WEIGHT, 0xe1, TX_ISP_TUNING_DIR_GET,
+	  TX_ISP_TUNING_PAYLOAD_USER_PTR },
 	{ TX_ISP_TUNING_CMD_AE_ZONE, 0x384, TX_ISP_TUNING_DIR_GET,
 	  TX_ISP_TUNING_PAYLOAD_USER_PTR },
-	{ TX_ISP_TUNING_CMD_AF_ZONE, 4, TX_ISP_TUNING_DIR_GET,
-	  TX_ISP_TUNING_PAYLOAD_INLINE },
+	{ TX_ISP_TUNING_CMD_AE_HIST_ORIGIN, 0x400, TX_ISP_TUNING_DIR_GET,
+	  TX_ISP_TUNING_PAYLOAD_USER_PTR },
 	{ TX_ISP_TUNING_CMD_AE_LUMA, 4, TX_ISP_TUNING_DIR_GET,
 	  TX_ISP_TUNING_PAYLOAD_INLINE },
 	{ TX_ISP_TUNING_CMD_AE_MANUAL, 0x98, TX_ISP_TUNING_DIR_GET,
@@ -8431,8 +8509,8 @@ static int apical_isp_core_ops_g_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
                 ctrl->value = tuning->sinter_strength;
                 break;
 
-            case 0x800002d:  // AE Statistics
-                ret = isp_get_ae_state(dev, ctrl);
+            case 0x800002d:  /* GetAeWeight: 225 bytes */
+                ret = apical_isp_ae_zone_weight_g_attr(ctrl);
                 if (ret)
                     goto out;
                 break;
@@ -8443,8 +8521,8 @@ static int apical_isp_core_ops_g_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
                     goto out;
                 break;
 
-            case 0x8000031:  // AF Zone Info
-                ret = isp_get_af_zone(dev, ctrl);
+            case 0x8000031:  /* GetAeHist_Origin: 256 x u32 */
+                ret = apical_isp_ae_hist_origin_g_attr(ctrl);
                 if (ret)
                     goto out;
                 break;
@@ -9274,8 +9352,8 @@ static int apical_isp_core_ops_s_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
             ret = apical_isp_gamma_s_attr((void __user *)(unsigned long)ctrl->value);
             break;
 
-        case 0x800002d: /* OEM: apical_isp_ae_zone_weight_s_attr */
-            ret = 0; /* OEM routes through isra helper */
+        case 0x800002d: /* OEM: apical_isp_ae_zone_weight_s_attr — 225 bytes */
+            ret = apical_isp_ae_zone_weight_s_attr(ctrl);
             break;
 
         case 0x800002e: { /* OEM: tisp_s_ae_hist — set AE histogram */
@@ -35030,18 +35108,6 @@ int tx_isp_set_ae_algo_close(void __user *arg)
     return 0;
 }
 EXPORT_SYMBOL(tx_isp_set_ae_algo_close);
-
-/* OEM EXACT: apical_isp_ae_zone_weight_g_attr (0x7388) — ioctl helper */
-int apical_isp_ae_zone_weight_g_attr(void *ctrl)
-{
-    return tisp_g_aezone_weight(NULL);
-}
-
-/* OEM EXACT: apical_isp_ae_hist_origin_g_attr (0x74b0) — ioctl helper */
-int apical_isp_ae_hist_origin_g_attr(void *ctrl)
-{
-    return 0;
-}
 
 /* Sensor control functions - Safe structure-based implementations */
 static void tisp_set_sensor_integration_time(uint32_t time)
