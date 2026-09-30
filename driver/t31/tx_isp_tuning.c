@@ -8637,12 +8637,15 @@ static int apical_isp_core_ops_g_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
             ctrl->value = tuning->running_mode;
             break;
         case 0x80000e2: { /* OEM: tisp_g_module_control — read lower 19 bits + MDNS state */
+            /* Stock copies the 4-byte result to the pointer in value. */
             int mdns_en = 0, mdns_sz = 0;
             u32 result = system_reg_read(0xc) & 0x7ffff;
             tisp_mdns_param_array_get(0x180, &mdns_en, &mdns_sz);
             if (mdns_en == 0)
                 result |= 0x80000000;
-            ctrl->value = result;
+            if (copy_to_user((void __user *)(unsigned long)(uint32_t)ctrl->value,
+                             &result, sizeof(result)))
+                ret = -EFAULT;
             break;
         }
         case 0x80000e7:  // ISP Custom Mode
@@ -9221,15 +9224,29 @@ static int apical_isp_core_ops_s_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
 	            break;
 	        }
         case 0x80000e2: { /* OEM: tisp_s_module_control — writes lower 19 bits of reg 0xc */
-            u32 reg_val = system_reg_read(0xc);
-            u32 new_bypass = (ctrl->value & 0x7ffff) | (reg_val & 0xfff80000);
-            int mdns_en = (ctrl->value >= 0) ? 1 : 0;
-            int mdns_sz = 0;
+            /* SetModuleControl passes a pointer to the 32-bit
+             * IMPISPModuleCtl word; stock copies 4 bytes from it.  Taking
+             * ctrl->value itself as the mask wrote pointer bits into the
+             * top bypass register and switched random blocks off.
+             * (OpenIMP keeps SetModuleControl in userspace and never sends
+             * this control, so there is no scalar caller to keep.) */
+            u32 module_ctl;
+            u32 reg_val, new_bypass;
+            int mdns_en, mdns_sz = 0;
+
+            if (copy_from_user(&module_ctl,
+                               (void __user *)(unsigned long)(uint32_t)ctrl->value,
+                               sizeof(module_ctl))) {
+                ret = -EFAULT;
+                goto out;
+            }
+            reg_val = system_reg_read(0xc);
+            new_bypass = (module_ctl & 0x7ffff) | (reg_val & 0xfff80000);
+            mdns_en = ((int32_t)module_ctl >= 0) ? 1 : 0;
             tisp_mdns_param_array_set(0x180, &mdns_en, &mdns_sz);
             /* OEM: no whitelist */
             new_bypass = tisp_apply_debug_top_bypass_overrides(new_bypass, __func__);
             system_reg_write(0xc, new_bypass);
-            tuning->custom_mode = ctrl->value;
             ret = 0;
             break;
         }
