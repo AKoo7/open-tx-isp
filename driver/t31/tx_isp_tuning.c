@@ -9170,6 +9170,18 @@ static int apical_isp_core_ops_s_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
                     if (ourISPdev->sensor)
                         ourISPdev->sensor->video.fps = fps_packed;
 
+                    /* Stock tisp_set_fps rebuilds the anti-flicker exposure
+                     * node table for the new frame timing whenever
+                     * anti-flicker is on; otherwise the AE keeps snapping to
+                     * nodes computed for the old line time (gap 8). */
+                    if (_flicker_t.data[0] != 0) {
+                        tiziano_deflicker_expt_tune(_flicker_t.data[0],
+                                tisp_si_fps(&sensor_info),
+                                tisp_si_total_height(&sensor_info),
+                                tisp_si_total_width(&sensor_info));
+                        tisp_ae_trig();
+                    }
+
                     pr_info("*** SET FPS: Physical sensor and ISP set to %d/%d FPS ***\n",
                             fps_num, fps_den);
                 } else {
