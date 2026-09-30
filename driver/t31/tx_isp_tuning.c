@@ -34246,6 +34246,10 @@ int ae0_interrupt_hist(void)
 {
     pr_debug("ae0_interrupt_hist: Processing AE0 histogram interrupt\n");
 
+    /* Guard: tisp_deinit frees the AE DMA pages */
+    if (!data_b2f48)
+        return 2;
+
     /* Binary Ninja: int32_t $s0 = (system_reg_read(0xa050) & 3) << 0xb */
     uint32_t ae0_status = system_reg_read(0xa050);
     uint32_t buffer_offset = (ae0_status & 3) << 11;
@@ -34283,6 +34287,10 @@ int ae1_interrupt_static(void)
 {
     pr_debug("ae1_interrupt_static: Processing AE1 static interrupt\n");
 
+    /* Guard: tisp_deinit frees the AE1 DMA pages */
+    if (!data_b2f54)
+        return 1;
+
     /* Binary Ninja: void* $s0 = system_reg_read(0xa850) << 8 & 0x3000 */
     uint32_t ae1_status = system_reg_read(0xa850);
     void *buffer_addr = (void *)((ae1_status << 8) & 0x3000) + data_b2f54;
@@ -34305,6 +34313,10 @@ EXPORT_SYMBOL(ae1_interrupt_static);
 int ae1_interrupt_hist(void)
 {
     pr_debug("ae1_interrupt_hist: Processing AE1 histogram interrupt\n");
+
+    /* Guard: tisp_deinit frees the AE1 DMA pages */
+    if (!data_b2f60)
+        return 2;
 
     /* Binary Ninja: int32_t $s0 = (system_reg_read(0xa850) & 3) << 0xb */
     uint32_t ae1_status = system_reg_read(0xa850);
@@ -35892,6 +35904,53 @@ EXPORT_SYMBOL(tisp_wdr_param_array_set_extended);
 EXPORT_SYMBOL(tisp_gib_param_array_set);
 
 
+/*
+ * Free the statistics DMA pages tisp_init allocates (AE0/AE1 order 3,
+ * AWB/ADR/DPC-defog/AF order 2, ~128 KiB); stock tisp_deinit kfrees its
+ * equivalents. Without this every core deinit/init cycle leaked them.
+ *
+ * Callers must have stopped the ISP input (ispcore_core_ops_init(0) runs
+ * tisp_deinit after ispcore_video_s_stream(0)), so the stats engines get
+ * no new frame. The pointers are cleared first and the ISP interrupt is
+ * synchronised, so a late stats interrupt sees NULL (every reader checks)
+ * and nothing reads a page after it is freed. tisp_init reprograms the
+ * stats address registers with fresh pages.
+ */
+static void tisp_free_stats_pages(void)
+{
+    unsigned long ae0 = data_b2f3c, ae1 = data_b2f54, awb = data_a2f5c;
+    unsigned long af = data_a2f80;
+    void *adr = adr_dma_virt, *defog = defog_dma_virt;
+
+    data_b2f3c = 0;
+    data_b2f48 = 0;
+    data_b2f54 = 0;
+    data_b2f60 = 0;
+    data_a2f5c = 0;
+    data_a2f60 = 0;
+    data_a2f80 = 0;
+    data_a2f84 = 0;
+    adr_dma_virt = NULL;
+    adr_dma_phys = 0;
+    defog_dma_virt = NULL;
+    defog_dma_phys = 0;
+    if (ourISPdev && ourISPdev->isp_irq > 0)
+        synchronize_irq(ourISPdev->isp_irq);
+
+    if (ae0)
+        free_pages(ae0, 3);
+    if (ae1)
+        free_pages(ae1, 3);
+    if (awb)
+        free_pages(awb, 2);
+    if (adr)
+        free_pages((unsigned long)adr, 2);
+    if (defog)
+        free_pages((unsigned long)defog, 2);
+    if (af)
+        free_pages(af, 2);
+}
+
 /* tisp_deinit - EXACT Binary Ninja implementation */
 int tisp_deinit(void)
 {
@@ -35900,6 +35959,7 @@ int tisp_deinit(void)
     /* OEM calls tisp_param_operate_deinit() — cleanup is handled by module unload */
 
     tisp_deinit_free();
+    tisp_free_stats_pages();
 
     /* Free mscaler mask buffers (OEM data_ba480/data_ba47c) */
     kfree(mscaler_mask_active);
