@@ -3,7 +3,26 @@
 
 #include <linux/hrtimer.h>
 #include <linux/dma-mapping.h>
+#include <linux/printk.h>
 #include <txx_funcs.h>
+
+/*
+ * t31_runtime_trace is defined in tx_isp_tuning.c as a writable module
+ * parameter (default 0). The recovered T31 driver logs a bring-up firehose at
+ * info level - over a thousand pr_info calls across init, per-frame AE/AWB/ADR
+ * and DMA paths. Route them through the trace flag so a production boot is
+ * quiet; "tx-isp-t31 t31_runtime_trace=1" (or the sysfs param) restores the
+ * trace. Warnings and errors are untouched.
+ */
+extern int t31_runtime_trace;
+
+#undef pr_info
+#define pr_info(fmt, ...) \
+	do { if (t31_runtime_trace) printk(KERN_INFO pr_fmt(fmt), ##__VA_ARGS__); } while (0)
+
+#undef pr_info_ratelimited
+#define pr_info_ratelimited(fmt, ...) \
+	do { if (t31_runtime_trace) printk(KERN_INFO pr_fmt(fmt), ##__VA_ARGS__); } while (0)
 
 /* =================== switchs ================== */
 

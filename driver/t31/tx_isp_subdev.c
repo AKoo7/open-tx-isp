@@ -12,6 +12,7 @@
 #include "include/tx_isp_sysfs.h"
 #include "../include/tx_isp/tx_isp_frame_channel.h"
 #include "../include/tx_isp/tx_isp_subdev.h"
+#include "include/tx_isp_debug.h"
 /* Keep the named T31 subdevice model pinned to the recovered legacy ABI. */
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 0, 0)
 TX_ISP_ABI_ASSERT(t31_subdev_name,

@@ -2866,6 +2866,14 @@ module_param(isp_bypass_all, int, 0644);
 static uint isp_bypass_override = 0;
 module_param(isp_bypass_override, uint, 0644);
 
+/* Runtime bring-up tracing: all of the driver's pr_info diagnostics (init,
+ * per-frame AE/AWB/ADR, DMA) print only when set. Default off so a production
+ * boot is quiet. Writable at runtime:
+ * /sys/module/tx_isp_t31/parameters/t31_runtime_trace */
+int t31_runtime_trace;
+module_param(t31_runtime_trace, int, 0644);
+MODULE_PARM_DESC(t31_runtime_trace, "enable T31 runtime informational logging");
+
 /* Module parameter: bitmask of ISP blocks to enable (clear bypass bit).
  * Each set bit in this mask clears the corresponding bypass register bit,
  * enabling that processing block.  Start with 0 (all bypassed = safe

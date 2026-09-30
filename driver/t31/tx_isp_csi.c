@@ -12,6 +12,8 @@
 #include <linux/uaccess.h>
 #include <linux/fcntl.h>
 
+#include "include/tx_isp_debug.h"
+
 
 /* CSI periodic dump thread controls */
 static struct task_struct *csi_dump_kthread;

@@ -21,6 +21,7 @@
 #include "include/tx_isp.h"
 #include "include/tx_isp_device.h"
 #include "../include/tx_isp/tx_isp_frame_channel.h"
+#include "include/tx_isp_debug.h"
 
 #ifndef CONFIG_DMA_SHARED_BUFFER
 #error "CONFIG_TX_ISP_T31_V4L2 requires CONFIG_DMA_SHARED_BUFFER"
