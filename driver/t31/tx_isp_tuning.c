@@ -13425,6 +13425,7 @@ int tisp_sdns_param_array_get(int param_id, void *out_buf, int *size_buf)
     return 0;
 }
 
+static void tisp_sdns_ratio_capture(const uint32_t *list);
 static int tisp_sdns_param_array_set(int param_id, void *in_buf, int *size_buf)
 {
     if (!in_buf || !size_buf) return -EINVAL;
@@ -13467,6 +13468,9 @@ static int tisp_sdns_param_array_set(int param_id, void *in_buf, int *size_buf)
 
     memcpy(dst, in_buf, len);
     *size_buf = len;
+    /* The average-threshold list is a SetSinterStrength source. */
+    if (param_id == 0x10E)
+        tisp_sdns_ratio_capture(dst);
     return 0;
 }
 
@@ -22525,6 +22529,9 @@ void tiziano_sdns_params_refresh(void)
 #include "tx_isp_tuning_sdns_refresh.inc"
 #undef SDNS_REFRESH_ENTRY
 
+    /* Fresh bank values: this is the SetSinterStrength source. */
+    tisp_sdns_ratio_capture(NULL);
+
     if (data_9a9c0 != 0x80)
         tisp_s_sdns_ratio(data_9a9c0);
 }
@@ -30129,8 +30136,9 @@ int tisp_sdns_wdr_en(int enable)
         tisp_sdns_select_now_linear();
     }
 
-    tisp_sdns_all_reg_refresh();
-    return 0;
+    /* Stock ends by re-applying the current ratio to the newly selected
+     * set, which also interpolates and refreshes all SDNS registers. */
+    return tisp_s_sdns_ratio(data_9a9c0);
 }
 
 /* tisp_event_set_cb - Binary Ninja EXACT implementation */
@@ -32084,74 +32092,124 @@ EXPORT_SYMBOL(tisp_code_destroy_tuning_node);
 
 
 
-/* tisp_s_sdns_ratio - 2D spatial noise suppression ratio - Binary Ninja EXACT implementation */
-int tisp_s_sdns_ratio(int ratio)
+/* SetSinterStrength source snapshot.
+ *
+ * Stock tisp_s_sdns_ratio reads the sixteen H-S curves and the average
+ * threshold list from the tuning bank (linear or WDR set) and writes the
+ * scaled values into the *_now working arrays.  Here the *_now arrays are
+ * the same arrays tiziano_sdns_params_refresh() loads from the bank, so the
+ * old code scaled its own output and every call compounded.  Keep an
+ * immutable copy of the bank values, taken whenever the bank is (re)loaded,
+ * and scale from that. */
+#define TISP_SDNS_RATIO_LISTS 17
+static uint32_t sdns_ratio_src[2][TISP_SDNS_RATIO_LISTS][9];
+static bool sdns_ratio_src_valid;
+
+static uint32_t *tisp_sdns_ratio_list(int wdr, int idx)
 {
-    int i;
-    uint32_t temp_val;
-    int is_low_ratio = (ratio < 0x81) ? 1 : 0;
-
-    pr_info("tisp_s_sdns_ratio: Setting spatial DNS ratio to %d\n", ratio);
-
-    /* Binary Ninja shows complex array processing for 16 different strength arrays */
-    data_9a9c0 = ratio;
-
-    /* OEM EXACT: Process all 9 array elements.
-     * Each h_s channel reads its OWN base value from the tuning binary array,
-     * NOT a shared base_values array. This preserves per-channel frequency
-     * response differences that the tuning binary specifies. */
-    {
-        /* Pointers to the source arrays (tuning binary originals) */
-        uint32_t *h_s_src[16] = {
+    static uint32_t *const lists[2][TISP_SDNS_RATIO_LISTS] = {
+        {
             sdns_h_s_1_array, sdns_h_s_2_array, sdns_h_s_3_array, sdns_h_s_4_array,
             sdns_h_s_5_array, sdns_h_s_6_array, sdns_h_s_7_array, sdns_h_s_8_array,
             sdns_h_s_9_array, sdns_h_s_10_array, sdns_h_s_11_array, sdns_h_s_12_array,
-            sdns_h_s_13_array, sdns_h_s_14_array, sdns_h_s_15_array, sdns_h_s_16_array
-        };
-        uint32_t **h_s_dst[16] = {
-            &sdns_h_s_1_array_now, &sdns_h_s_2_array_now, &sdns_h_s_3_array_now, &sdns_h_s_4_array_now,
-            &sdns_h_s_5_array_now, &sdns_h_s_6_array_now, &sdns_h_s_7_array_now, &sdns_h_s_8_array_now,
-            &sdns_h_s_9_array_now, &sdns_h_s_10_array_now, &sdns_h_s_11_array_now, &sdns_h_s_12_array_now,
-            &sdns_h_s_13_array_now, &sdns_h_s_14_array_now, &sdns_h_s_15_array_now, &sdns_h_s_16_array_now
-        };
-        int ch;
+            sdns_h_s_13_array, sdns_h_s_14_array, sdns_h_s_15_array, sdns_h_s_16_array,
+            sdns_ave_thres_array,
+        },
+        {
+            sdns_h_s_1_wdr_array, sdns_h_s_2_wdr_array, sdns_h_s_3_wdr_array, sdns_h_s_4_wdr_array,
+            sdns_h_s_5_wdr_array, sdns_h_s_6_wdr_array, sdns_h_s_7_wdr_array, sdns_h_s_8_wdr_array,
+            sdns_h_s_9_wdr_array, sdns_h_s_10_wdr_array, sdns_h_s_11_wdr_array, sdns_h_s_12_wdr_array,
+            sdns_h_s_13_wdr_array, sdns_h_s_14_wdr_array, sdns_h_s_15_wdr_array, sdns_h_s_16_wdr_array,
+            sdns_ave_thres_wdr_array,
+        },
+    };
 
-        for (i = 0; i < 9; i++) {
-            /* Scale each h_s channel independently from its own source array */
-            for (ch = 0; ch < 16; ch++) {
-                uint32_t base_val = h_s_src[ch][i];
-                if (is_low_ratio) {
-                    temp_val = (ratio * base_val) >> 7;
-                } else {
-                    int headroom = (base_val < 0x10) ? (0x10 - base_val) : 0;
-                    temp_val = base_val + ((headroom * (ratio - 0x80)) >> 7);
-                }
-                if (*h_s_dst[ch])
-                    (*h_s_dst[ch])[i] = temp_val;
-            }
+    return lists[wdr][idx];
+}
 
-            /* Update average threshold array — OEM uses 0xc8 headroom cap (not 0x10) */
-            if (sdns_ave_thres_array_now) {
-                uint32_t base_val = sdns_ave_thres_array[i];
-                if (is_low_ratio) {
-                    temp_val = (ratio * base_val) >> 7;
-                } else {
-                    int headroom = (base_val < 0xc8) ? (0xc8 - base_val) : 0;
-                    temp_val = base_val + ((headroom * (ratio - 0x80)) >> 7);
-                }
-                sdns_ave_thres_array_now[i] = temp_val;
+/* Snapshot the bank values.  list == NULL captures every list (bank load);
+ * otherwise only the list that was just written through the parameter API. */
+static void tisp_sdns_ratio_capture(const uint32_t *list)
+{
+    int wdr, idx;
+
+    for (wdr = 0; wdr < 2; wdr++) {
+        for (idx = 0; idx < TISP_SDNS_RATIO_LISTS; idx++) {
+            uint32_t *arr = tisp_sdns_ratio_list(wdr, idx);
+
+            if (list && list != arr)
+                continue;
+            memcpy(sdns_ratio_src[wdr][idx], arr, sizeof(sdns_ratio_src[wdr][idx]));
+        }
+    }
+    if (!list)
+        sdns_ratio_src_valid = true;
+}
+
+/* tisp_s_sdns_ratio - SetSinterStrength (0x8000086) */
+int tisp_s_sdns_ratio(int ratio)
+{
+    uint32_t **h_s_dst[16] = {
+        &sdns_h_s_1_array_now, &sdns_h_s_2_array_now, &sdns_h_s_3_array_now, &sdns_h_s_4_array_now,
+        &sdns_h_s_5_array_now, &sdns_h_s_6_array_now, &sdns_h_s_7_array_now, &sdns_h_s_8_array_now,
+        &sdns_h_s_9_array_now, &sdns_h_s_10_array_now, &sdns_h_s_11_array_now, &sdns_h_s_12_array_now,
+        &sdns_h_s_13_array_now, &sdns_h_s_14_array_now, &sdns_h_s_15_array_now, &sdns_h_s_16_array_now
+    };
+    uint32_t r = (uint32_t)ratio;
+    int is_low_ratio = (r < 0x81) ? 1 : 0;
+    int wdr = sdns_wdr_en ? 1 : 0;
+    uint32_t temp_val;
+    int i, ch;
+
+    pr_debug("tisp_s_sdns_ratio: Setting spatial DNS ratio to %d\n", ratio);
+
+    data_9a9c0 = ratio;
+
+    /* Without a tuning bin the bank was never loaded: the compile-time
+     * defaults are still untouched at this point, so they are the source. */
+    if (!sdns_ratio_src_valid)
+        tisp_sdns_ratio_capture(NULL);
+
+    for (i = 0; i < 9; i++) {
+        for (ch = 0; ch < 16; ch++) {
+            uint32_t base_val = sdns_ratio_src[wdr][ch][i];
+
+            if (is_low_ratio) {
+                temp_val = (r * base_val) >> 7;
+            } else {
+                uint32_t headroom = (base_val < 0x10) ? (0x10 - base_val) : 0;
+                temp_val = base_val + ((headroom * (r - 0x80)) >> 7);
             }
+            if (*h_s_dst[ch])
+                (*h_s_dst[ch])[i] = temp_val;
+        }
+
+        /* Average threshold list, 0xc8 headroom cap like stock. */
+        if (sdns_ave_thres_array_now) {
+            uint32_t base_val = sdns_ratio_src[wdr][16][i];
+
+            if (is_low_ratio) {
+                temp_val = (r * base_val) >> 7;
+            } else {
+                uint32_t headroom = (base_val < 0xc8) ? (0xc8 - base_val) : 0;
+                temp_val = base_val + ((headroom * (r - 0x80)) >> 7);
+            }
+            sdns_ave_thres_array_now[i] = temp_val;
         }
     }
 
-    /* Refresh all SDNS registers */
+    /* Stock refreshes through tisp_sdns_all_reg_refresh(last_gain + 0x200),
+     * which interpolates the new curves first.  Without the interpolation
+     * the registers kept the old *_intp values until the gain moved by the
+     * par_refresh threshold. */
+    tisp_sdns_intp(data_9a9c4 + 0x200);
     return tisp_sdns_all_reg_refresh();
 }
 
 /* tisp_s_2dns_ratio - 2D noise suppression ratio */
 int tisp_s_2dns_ratio(int ratio)
 {
-    pr_info("tisp_s_2dns_ratio: Setting 2D noise suppression ratio to %d\n", ratio);
+    pr_debug("tisp_s_2dns_ratio: Setting 2D noise suppression ratio to %d\n", ratio);
 
     /* Binary Ninja shows this calls tisp_s_sdns_ratio(arg1) */
     return tisp_s_sdns_ratio(ratio);
