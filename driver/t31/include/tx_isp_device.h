@@ -656,6 +656,11 @@ struct frame_channel_device {
 
     /* CRITICAL: Add validation magic number to detect corruption */
     uint32_t magic;                      /* Magic number for validation */
+
+    /* Open files on this channel and the one that set up its queue
+     * (REQBUFS/STREAMON). Protected by buffer_mutex. */
+    int open_count;
+    struct file *stream_owner;
 } __attribute__((aligned(8), packed));   /* MIPS-safe alignment */
 
 #define FRAME_CHANNEL_MAGIC 0xDEADBEEF

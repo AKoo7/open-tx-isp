@@ -2505,8 +2505,19 @@ int frame_channel_open(struct inode *inode, struct file *file)
         return -ENODEV;
     }
 
+    /* Only the first open resets the channel. frame_channel_prepare()
+     * re-initialises the slot table, queues, wait queue and completion; on
+     * a channel another fd is using (possibly streaming, possibly with a
+     * DQBUF asleep on frame_wait) that corrupted the running stream. A
+     * further open shares the existing state. */
     mutex_lock(&fcd->buffer_mutex);
-    frame_channel_prepare(fcd, channel_num, minor);
+    if (fcd->open_count++ == 0) {
+        fcd->stream_owner = NULL;
+        frame_channel_prepare(fcd, channel_num, minor);
+    } else {
+        pr_info("Frame channel %d already open (%d), keeping its state (streaming=%d)\n",
+                channel_num, fcd->open_count - 1, fcd->state.streaming);
+    }
     mutex_unlock(&fcd->buffer_mutex);
 
     file->private_data = fcd;
@@ -2534,6 +2545,18 @@ int frame_channel_release(struct inode *inode, struct file *file)
 
     /* Serialise against ioctls on other fds of the same channel. */
     mutex_lock(&fcd->buffer_mutex);
+    if (fcd->open_count > 0)
+        fcd->open_count--;
+
+    /* Another fd that did not set up the queue may close while the owner
+     * keeps streaming; leave the channel alone then. The owner's close
+     * (including a crash) and the last close tear it down. */
+    if (fcd->open_count > 0 && fcd->stream_owner != file) {
+        mutex_unlock(&fcd->buffer_mutex);
+        file->private_data = NULL;
+        return 0;
+    }
+    fcd->stream_owner = NULL;
 
     /* OEM-style release: tear down active queueing/stream state back to activate. */
     if (state->state == 4 || state->streaming) {
@@ -2552,6 +2575,9 @@ int frame_channel_release(struct inode *inode, struct file *file)
         state->flags &= ~1U;
         fcd->streaming_flags &= ~1;
         state->state = 2;
+        /* A DQBUF or 0x400456bf wait on another fd must see the stop. */
+        complete_all(&state->frame_done);
+        wake_up_interruptible(&state->frame_wait);
     } else if (state->state == 3) {
         state->state = 2;
     }
@@ -4037,10 +4063,19 @@ static long frame_channel_ioctl_locked(struct file *file, unsigned int cmd,
 
         pr_info("*** Channel %d: REQBUFS - MEMORY-AWARE implementation ***\n", channel);
 
+        /* Stock: "reqbufs: streaming active" -> -EBUSY. Re-sizing the queue
+         * would wipe the slots of the running stream (possibly from another
+         * fd of the same channel). */
+        if (state->streaming || (fcd->streaming_flags & 1)) {
+            pr_err("reqbufs: channel %d streaming active\n", channel);
+            return -EBUSY;
+        }
+
         /* OEM __vb2_queue_free: a new buffer set starts with an empty MSCA
          * address FIFO. */
-        if (!state->streaming)
-            frame_channel_fifo_clear(fcd);
+        frame_channel_fifo_clear(fcd);
+        if (reqbuf.count > 0)
+            fcd->stream_owner = file;
         pr_info("Channel %d: Request %d buffers, type=%d memory=%d\n",
                 channel, reqbuf.count, reqbuf.type, reqbuf.memory);
 
@@ -4670,6 +4705,7 @@ static long frame_channel_ioctl_locked(struct file *file, unsigned int cmd,
         state->enabled = true;
         state->flags |= 1U;
         fcd->streaming_flags |= 1;
+        fcd->stream_owner = file;
 
         /* Reset frame signaling BEFORE setting streaming=true.
          * The ISR's frame_chan_event path gates on state->streaming,
