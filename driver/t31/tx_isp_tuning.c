@@ -8717,11 +8717,28 @@ static int apical_isp_core_ops_g_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
             ret = apical_isp_gamma_g_attr((void __user *)(unsigned long)ctrl->value);
             break;
 
-        case 0x800002e: { /* OEM: tisp_g_ae_hist — copy histogram to user */
-            void *hist_buf = kmalloc(0x42c, GFP_KERNEL);
+        case 0x800002e: { /* OEM: GetAeHist — 16-byte IMPISPAEHist */
+            /* Stock packs {u8 thresh[4]; u16 hist[5]; u8 nodeh, nodev}
+             * from the 0x42c-byte histogram record: thresholds at +0x414,
+             * the five-bin histogram at +0x400, node counts at +0x424.
+             * Copying the raw 0x400-byte histogram here overran the
+             * caller's 16-byte structure. */
+            uint32_t *hist_buf = kzalloc(0x42c, GFP_KERNEL);
+            uint8_t out_buf[0x10];
+            int i;
+
             if (!hist_buf) { ret = -ENOMEM; break; }
             tisp_g_ae_hist(hist_buf);
-            if (copy_to_user((void __user *)(unsigned long)ctrl->value, hist_buf, 0x400))
+            memset(out_buf, 0, sizeof(out_buf));
+            for (i = 0; i < 4; i++)
+                out_buf[i] = (uint8_t)hist_buf[(0x414 / 4) + i];
+            for (i = 0; i < 5; i++) {
+                uint16_t bin = (uint16_t)hist_buf[(0x400 / 4) + i];
+                memcpy(&out_buf[4 + i * 2], &bin, sizeof(bin));
+            }
+            out_buf[14] = (uint8_t)hist_buf[0x424 / 4];
+            out_buf[15] = (uint8_t)hist_buf[0x428 / 4];
+            if (copy_to_user((void __user *)(unsigned long)ctrl->value, out_buf, sizeof(out_buf)))
                 ret = -EFAULT;
             kfree(hist_buf);
             break;
@@ -9356,8 +9373,22 @@ static int apical_isp_core_ops_s_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
             ret = apical_isp_ae_zone_weight_s_attr(ctrl);
             break;
 
-        case 0x800002e: { /* OEM: tisp_s_ae_hist — set AE histogram */
-            tisp_s_ae_hist((void *)(unsigned long)ctrl->value);
+        case 0x800002e: { /* OEM: SetAeHist — 16-byte IMPISPAEHist */
+            /* Only the four bin thresholds are consumed.  The value is a
+             * userspace pointer: copy it in; the old code dereferenced it
+             * directly in kernel context (Oops on a bad pointer). */
+            uint8_t in_buf[0x10];
+
+            if (!ctrl->value) {
+                ret = -1;
+                goto out;
+            }
+            if (copy_from_user(in_buf, (void __user *)(unsigned long)(uint32_t)ctrl->value,
+                               sizeof(in_buf))) {
+                ret = -EFAULT;
+                goto out;
+            }
+            ret = tisp_s_ae_hist(in_buf);
             break;
         }
 
@@ -33752,32 +33783,29 @@ int tisp_s_ae_attr(void *ae_attr_data)
 }
 EXPORT_SYMBOL(tisp_s_ae_attr);
 
-/* tisp_s_ae_hist - AE histogram control */
+/* tisp_s_ae_hist - SetAeHist (0x800002e).
+ *
+ * hist_data is a kernel copy of the 16-byte IMPISPAEHist; its first four
+ * bytes are the histogram bin thresholds.  Stock widens them to words and
+ * stores them in the threshold slots of the last-histogram record
+ * (tisp_ae_hist_last + 0x414) under the histogram lock; nothing else is
+ * programmed.  Mirror exactly that. */
 int tisp_s_ae_hist(void *hist_data)
 {
-    uint8_t hist_buffer[0x424];
+    const uint8_t *in = hist_data;
+    uint32_t thresh[4];
+    unsigned long flags;
     int i;
 
-    pr_info("tisp_s_ae_hist: Setting AE histogram\n");
-
-    if (!hist_data) {
-        pr_err("tisp_s_ae_hist: NULL histogram data\n");
+    if (!in)
         return -EINVAL;
-    }
 
-    /* Binary Ninja implementation:
-     * for (; i u< 0x41c; i += 1)
-     *     var_428[i] = *(&arg_10 + i);
-     * tisp_ae_set_hist_custome();
-     */
+    for (i = 0; i < 4; i++)
+        thresh[i] = in[i];
 
-    /* Copy histogram data */
-    for (i = 0; i < 0x41c; i++) {
-        hist_buffer[i] = ((uint8_t*)hist_data)[i];
-    }
-
-    /* Apply custom histogram settings - simplified implementation */
-    pr_info("tisp_s_ae_hist: Applied AE histogram settings\n");
+    spin_lock_irqsave(&ae_hist_lock, flags);
+    memcpy(tisp_ae_hist_last + 0x414, thresh, sizeof(thresh));
+    spin_unlock_irqrestore(&ae_hist_lock, flags);
 
     return 0;
 }
