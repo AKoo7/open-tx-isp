@@ -8701,6 +8701,13 @@ static int apical_isp_core_ops_g_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
             break;
         }
 
+        case 0x8000045: { /* OEM: copies a 20-byte AF record to userspace */
+            uint32_t af_rec[5] = {0};
+            if (copy_to_user((void __user *)(unsigned long)ctrl->value, af_rec, 0x14))
+                ret = -EFAULT;
+            break;
+        }
+
         case 0x8000046: /* OEM: apical_isp_af_zone_g_ctrl (900-byte zone table) */
             ret = apical_isp_af_zone_g_ctrl(dev, ctrl);
             break;
