@@ -5657,7 +5657,7 @@ static long tx_isp_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned 
             return -EFAULT;
 
         /* Binary Ninja: if ($a2_4 u>= 2) */
-        if (link_config >= 2) {
+        if ((unsigned int)link_config >= 2) {
             pr_err("Invalid video link config: %d\n", link_config);
             return -EINVAL;
         }
