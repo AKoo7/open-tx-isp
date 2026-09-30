@@ -1393,6 +1393,15 @@ static int t31_daynight_notify(void *opaque, u32 mode)
     return 1;
 }
 
+/*
+ * Module exit: drop a queued day/night switch and wait for a running one.
+ * Only the ISP core IRQ queues it; call this with that IRQ quiet.
+ */
+void tx_isp_core_daynight_cancel(void)
+{
+    cancel_work_sync(&t31_daynight_work);
+}
+
 static void t31_daynight_work_fn(struct work_struct *work)
 {
     struct tx_isp_dev *isp = ourISPdev;
@@ -4542,7 +4551,7 @@ int tx_isp_core_remove(struct platform_device *pdev)
     tisp_reset_initialization_flag();
 
     /* The day/night work item lives in this module. */
-    cancel_work_sync(&t31_daynight_work);
+    tx_isp_core_daynight_cancel();
 
     /* Cleanup frame sync workqueue */
     if (fs_workqueue) {

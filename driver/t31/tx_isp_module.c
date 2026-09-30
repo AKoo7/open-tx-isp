@@ -6338,6 +6338,7 @@ err_free_dev:
 
 extern void tx_isp_t31_wdr_stop(void);
 extern void tisp_deinit_free(void);
+extern void tx_isp_core_daynight_cancel(void);
 
 static void tx_isp_exit(void)
 {
@@ -6382,6 +6383,11 @@ static void tx_isp_exit(void)
             free_irq(ourISPdev->isp_irq, ourISPdev);
             pr_info("Hardware interrupt %d (isp-m0) freed\n", ourISPdev->isp_irq);
         }
+
+        /* The ISP core IRQ queues the day/night work, and STREAMOFF (which
+         * masks that IRQ) flushes it. Cancel it here too, so no switch runs
+         * into the teardown below if the stream was never stopped. */
+        tx_isp_core_daynight_cancel();
 
         tisp_deinit_free();
 
