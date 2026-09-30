@@ -5477,6 +5477,10 @@ static long tx_isp_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned 
                    layout.used_size, buf_setup.size);
             return -EINVAL;
         }
+        /* Same DDR-aperture check as QBUF: never point ISP DMA at MMIO. */
+        if (tx_isp_dma_range_validate(buf_setup.addr, layout.used_size,
+                                      TX_ISP_T31_PHYS_DRAM_LIMIT))
+            return -EINVAL;
 
         /* OEM does NOT zero the frame buffer — it just programs DMA registers.
          * Previous PINK_DIAG zeroing (memset_io to 0) caused MDNS R=G=B:
@@ -5602,6 +5606,10 @@ static long tx_isp_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned 
             tisp_s_wdr_en(0);
             return -EFAULT;
         }
+
+        if (tx_isp_dma_range_validate(wdr_setup.addr, required_size,
+                                      TX_ISP_T31_PHYS_DRAM_LIMIT))
+            return -EINVAL;
 
         /* OEM tx_isp_wdr_set_buf programs the physical cache directly. */
         system_reg_write(0x2004, wdr_setup.addr);
