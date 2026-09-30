@@ -5027,7 +5027,15 @@ static int tisp_ae0_get_statistics(void *buffer, uint32_t flags)
     if (zones > AE_ZONE_COUNT_MAX)
         return -EINVAL;
 
-    memset(IspAeStatic, 0, sizeof(IspAeStatic));
+    /* Every plane is rewritten for [0, zones); only a smaller grid leaves
+     * a tail to clear. The AE0 IRQ always asks for the full 15x15 grid. */
+    if (zones < AE_ZONE_COUNT_MAX) {
+        uint32_t plane;
+
+        for (plane = 0; plane < AE_STATS_PLANE_COUNT; plane++)
+            memset(&IspAeStatic[plane * AE_ZONE_COUNT_MAX + zones], 0,
+                   (AE_ZONE_COUNT_MAX - zones) * sizeof(IspAeStatic[0]));
+    }
 
     for (idx = 0; idx < zones; idx++, src += 4) {
         uint32_t w0 = src[0];
