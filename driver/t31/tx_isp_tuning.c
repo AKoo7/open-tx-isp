@@ -21939,12 +21939,17 @@ static int tisp_dmsc_sharpness_set(u32 value)
 	u32 sharp = value & 0xff;
 
 	dmsc_sharpness = sharp;
+	/* Stock scales the tuning-bank curves (tparams) into separate working
+	 * arrays, so repeated calls do not compound and 128 restores the tuned
+	 * curve.  tisp_dmsc_param_store holds the bank copy made by
+	 * tiziano_dmsc_params_refresh() (same parameter IDs/layout); the
+	 * dmsc_*_curve arrays are the working set the refresh path programs. */
 	for (i = 0; i < TISP_DMSC_CURVE_WORDS; ++i) {
-		u32 src_sp_d_w = dmsc_sp_d_w_stren_curve[i];
-		u32 src_sp_d_b = dmsc_sp_d_b_stren_curve[i];
-		u32 src_sp_ud_w = dmsc_sp_ud_w_stren_curve[i];
-		u32 src_sp_ud_b = dmsc_sp_ud_b_stren_curve[i];
-		u32 src_uu = dmsc_uu_stren_curve[i];
+		u32 src_sp_d_w = dmsc_param_word(0x7a, i);
+		u32 src_sp_d_b = dmsc_param_word(0x7b, i);
+		u32 src_sp_ud_w = dmsc_param_word(0x83, i);
+		u32 src_sp_ud_b = dmsc_param_word(0x84, i);
+		u32 src_uu = dmsc_param_word(0x71, i);
 
 		if (sharp >= 0x81) {
 			u32 scale = sharp - 0x80;
