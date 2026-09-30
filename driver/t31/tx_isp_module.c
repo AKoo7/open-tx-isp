@@ -2520,6 +2520,14 @@ int frame_channel_release(struct inode *inode, struct file *file)
     /* OEM-style release: tear down active queueing/stream state back to activate. */
     if (state->state == 4 || state->streaming) {
         pr_info("Channel %d: Stopping streaming on release\n", fcd->channel_num);
+        /* Closed without STREAMOFF (crash, kill -9): stop the MSCA channel
+         * as STREAMOFF does (stock streams off in release), or it keeps
+         * writing into memory of the dead process. */
+        if (ourISPdev && fcd->channel_num >= 0 &&
+            fcd->channel_num < ISP_MAX_CHAN)
+            tx_isp_send_event_to_remote(
+                &ourISPdev->channels[fcd->channel_num].subdev,
+                TX_ISP_FRAME_EVENT_STREAM_OFF, NULL);
         state->streaming = false;
         state->enabled = false;
         state->capture_active = false;
