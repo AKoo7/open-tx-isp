@@ -3117,13 +3117,13 @@ static uintptr_t sharpen_birg_thres_intp;
 static uintptr_t sharpen_dark_thres_intp;
 static uintptr_t sharpen_pixel_thres_intp;
 static uintptr_t sharpen_w_stren_intp;
-static unsigned char sdns_top_func_array[12];
-static unsigned char sdns_y_bil_npv_array[60];
+static unsigned char __attribute__((aligned(4))) sdns_top_func_array[12];
+static unsigned char __attribute__((aligned(4))) sdns_y_bil_npv_array[60];
 static uintptr_t sdns_y_bil_stren_intp;
-static unsigned char sdns_y_bsp_npv_array[64];
+static unsigned char __attribute__((aligned(4))) sdns_y_bsp_npv_array[64];
 static uintptr_t sdns_y_bsp_segop_intp;
 static uintptr_t sdns_y_bsp_stren_intp;
-static unsigned char sdns_y_dsp_npv_array[64];
+static unsigned char __attribute__((aligned(4))) sdns_y_dsp_npv_array[64];
 static uintptr_t sdns_y_dsp_segop_intp;
 static uintptr_t sdns_y_dsp_stren_intp;
 static uintptr_t sdns_y_dtl_npv_0_intp;
@@ -3134,42 +3134,42 @@ static uintptr_t sdns_y_dtl_npv_4_intp;
 static uintptr_t sdns_y_dtl_segop_intp;
 static uintptr_t sdns_y_dtl_stren_intp;
 static uintptr_t sdns_y_dtl_thres_intp;
-static unsigned char sdns_y_fus_npv_array[64];
+static unsigned char __attribute__((aligned(4))) sdns_y_fus_npv_array[64];
 static uintptr_t sdns_y_fus_segop_intp;
 static uintptr_t sdns_y_fus_slope_intp;
 static uintptr_t sdns_y_fus_stren_intp;
 static uintptr_t sdns_y_lum_divop_intp;
-static unsigned char sdns_y_lum_npv_array[64];
+static unsigned char __attribute__((aligned(4))) sdns_y_lum_npv_array[64];
 static uintptr_t sdns_y_lum_segop_intp;
 static uintptr_t sdns_y_lum_stren_intp;
 static uintptr_t sdns_c_bas_wei_intp;
 static uintptr_t sdns_c_flu_cal_intp;
-static unsigned char sdns_c_flu_npv_array[64];
+static unsigned char __attribute__((aligned(4))) sdns_c_flu_npv_array[64];
 static uintptr_t sdns_c_flu_stren_intp;
 static uintptr_t sdns_c_fus_mod_intp;
-static unsigned char sdns_c_bas_wei_array[36];
-static unsigned char sdns_c_flu_cal_array[36];
-static unsigned char sdns_c_flu_stren_array[36];
-static unsigned char sdns_c_fus_mod_array[36];
-static unsigned char sdns_y_bil_stren_array[36];
-static unsigned char sdns_y_bsp_segop_array[36];
-static unsigned char sdns_y_bsp_stren_array[36];
-static unsigned char sdns_y_dsp_segop_array[36];
-static unsigned char sdns_y_dsp_stren_array[36];
-static unsigned char sdns_y_dtl_npv_0_array[36];
-static unsigned char sdns_y_dtl_npv_1_array[36];
-static unsigned char sdns_y_dtl_npv_2_array[36];
-static unsigned char sdns_y_dtl_npv_3_array[36];
-static unsigned char sdns_y_dtl_npv_4_array[36];
-static unsigned char sdns_y_dtl_segop_array[36];
-static unsigned char sdns_y_dtl_stren_array[36];
-static unsigned char sdns_y_dtl_thres_array[36];
-static unsigned char sdns_y_fus_segop_array[36];
-static unsigned char sdns_y_fus_slope_array[36];
-static unsigned char sdns_y_fus_stren_array[36];
-static unsigned char sdns_y_lum_divop_array[36];
-static unsigned char sdns_y_lum_segop_array[36];
-static unsigned char sdns_y_lum_stren_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_c_bas_wei_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_c_flu_cal_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_c_flu_stren_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_c_fus_mod_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_bil_stren_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_bsp_segop_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_bsp_stren_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_dsp_segop_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_dsp_stren_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_dtl_npv_0_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_dtl_npv_1_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_dtl_npv_2_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_dtl_npv_3_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_dtl_npv_4_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_dtl_segop_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_dtl_stren_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_dtl_thres_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_fus_segop_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_fus_slope_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_fus_stren_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_lum_divop_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_lum_segop_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_lum_stren_array[36];
 static uint32_t tiziano_sdns_gain_old;
 static uintptr_t mdns_sta_size_intp;
 static uintptr_t mdns_pbt_size_intp;
@@ -35290,725 +35290,79 @@ int32_t tisp_sdns_top_func_cfg(void)
 	return 0;
 }
 
-/* WHOLE_DRIVER_CANDIDATE fn_000000000001c010 origin=fragment_seed original=tisp_sdns_y_param_cfg */
-int32_t tisp_sdns_y_param_cfg(void)
+/*
+ * SDNS register writers, rewritten from OEM tx-isp-t21.ko (PC420 build):
+ * tisp_sdns_y_param_cfg @0x1b730 and tisp_sdns_c_param_cfg @0x1c058.
+ * The decompiled versions wrote uninitialised locals and a one-argument
+ * system_reg_write(0x2084).  Each npv array is scaled by its *_stren_intp
+ * and packed four bytes per register, byte 0 in bits 7:0 (OEM order, no
+ * masking, same write order).
+ */
+static inline uint32_t sdns_pack4(const uint32_t *v)
 {
-    uint32_t local_10 = 0;
-    uint32_t local_14 = 0;
-    uint32_t local_18 = 0;
-    uint32_t local_1c = 0;
-    uint32_t local_20 = 0;
-    uint32_t local_24 = 0;
-    uint32_t local_28 = 0;
-    uint32_t local_2c = 0;
-    uint32_t local_30 = 0;
-    uint32_t local_34 = 0;
-    uint32_t local_38 = 0;
-    uint32_t local_3c = 0;
-    uint32_t local_40 = 0;
-    uint32_t local_44 = 0;
-    uint32_t local_48 = 0;
-    uint32_t local_4c = 0;
-    uint32_t local_50 = 0;
-    uint32_t local_54 = 0;
-    uint32_t local_58 = 0;
-    uint32_t local_5c = 0;
-    uint32_t local_60 = 0;
-    uint32_t local_64 = 0;
-    uint32_t local_68 = 0;
-    uint32_t local_6c = 0;
-    uint32_t local_70 = 0;
-    uint32_t local_74 = 0;
-    uint32_t local_78 = 0;
-    uint32_t local_7c = 0;
-    uint32_t local_80 = 0;
-    uint32_t local_84 = 0;
-    uint32_t local_88 = 0;
-    uint32_t local_8c = 0;
-    uint32_t local_90 = 0;
-    uint32_t local_94 = 0;
-    uint32_t local_98 = 0;
-    uint32_t *local_9c = 0;
-    uint32_t local_a0 = 0;
-    uint32_t local_a4 = 0;
-    uint32_t local_a8 = 0;
-    uint32_t local_ac = 0;
-    uint32_t *local_b0 = 0;
-    uint32_t local_b4 = 0;
-    uint32_t local_b8 = 0;
-    uint32_t local_bc = 0;
-    uint32_t local_c0 = 0;
-    uint32_t *local_c4 = 0;
-    uint32_t local_c8 = 0;
-    uint32_t local_cc = 0;
-    uint32_t local_d0 = 0;
-    uint32_t local_d4 = 0;
-    uint32_t *local_d8 = 0;
-    uint32_t local_dc = 0;
-    uint32_t local_e0 = 0;
-    uint32_t local_e4 = 0;
-    uint32_t local_e8 = 0;
-    uint32_t *local_ec = 0;
-    uint32_t local_f0 = 0;
-    uint32_t local_f4 = 0;
-    uint32_t local_f8 = 0;
-    uint32_t local_fc = 0;
-    uint32_t *local_100 = 0;
-    uint32_t local_104 = 0;
-    uint32_t local_108 = 0;
-    uint32_t local_10c = 0;
-    uint32_t local_110 = 0;
-    uint32_t local_114 = 0;
-    uint32_t local_118 = 0;
-    uint32_t local_11c = 0;
-    uint32_t local_120 = 0;
-    uint32_t local_124 = 0;
-    uint32_t local_128 = 0;
-    uint32_t local_12c = 0;
-    uint32_t local_130 = 0;
-    uint32_t local_134 = 0;
-    uint32_t local_138 = 0;
-    uint32_t local_13c = 0;
-    uint32_t local_140 = 0;
-    uint32_t local_144 = 0;
-    uint32_t local_148 = 0;
-    uint32_t local_14c = 0;
-    uint32_t local_150 = 0;
-    uint32_t local_154 = 0;
-    uint32_t local_158 = 0;
-    uint32_t local_15c = 0;
-    uint32_t local_160 = 0;
-    uint32_t local_164 = 0;
-    uintptr_t *a0 = 0;
-    uint32_t a1 = 0;
-    uint32_t a2 = 0;
-    uint32_t a3 = 0;
-    uint32_t ra = 0;
-    uint32_t s0 = 0;
-    uint32_t s1 = 0;
-    uint32_t s2 = 0;
-    uint32_t s3 = 0;
-    uint32_t s4 = 0;
-    uint32_t s5 = 0;
-    uint32_t s6 = 0;
-    uint32_t s7 = 0;
-    uint32_t s8 = 0;
-    uint32_t t0 = 0;
-    uint32_t t1 = 0;
-    uint32_t t2 = 0;
-    uint32_t t3 = 0;
-    uint32_t t4 = 0;
-    uint32_t t5 = 0;
-    uint32_t t6 = 0;
-    uint32_t t7 = 0;
-    uint32_t t8 = 0;
-    uint32_t t9 = 0;
-    uintptr_t *v0 = 0;
-    uintptr_t v1 = 0;
-
-    /* fragment 0: Arithmetic */
-    v1 = (uintptr_t)&sdns_y_dtl_npv_0_intp;
-
-    /* fragment 1: MemoryAccess */
-    t7 = *(uint32_t *)((char *)((char *)&sdns_y_dtl_npv_0_intp));
-    v1 = (uintptr_t)&sdns_y_dtl_npv_1_intp;
-    t6 = *(uint32_t *)((char *)((char *)&sdns_y_dtl_npv_1_intp));
-    v1 = (uintptr_t)&sdns_y_dtl_npv_2_intp;
-    t8 = *(uint32_t *)((char *)((char *)&sdns_y_dtl_npv_2_intp));
-    v1 = (uintptr_t)&sdns_y_dtl_npv_3_intp;
-    t9 = *(uint32_t *)((char *)((char *)&sdns_y_dtl_npv_3_intp));
-    v0 = (uintptr_t *)&sdns_y_dtl_stren_intp;
-    v1 = (uintptr_t)&sdns_y_dtl_npv_4_intp;
-    v0 = *(uint32_t *)((char *)((char *)&sdns_y_dtl_stren_intp));
-    local_144 = s1;
-    s1 = *(uint32_t *)((char *)((char *)&sdns_y_dtl_npv_4_intp));
-    v1 = (uintptr_t)&sdns_y_fus_npv_array;
-    local_164 = ra;
-    local_160 = s8;
-    local_15c = s7;
-    local_158 = s6;
-    local_154 = s5;
-    local_150 = s4;
-    local_14c = s3;
-    local_148 = s2;
-    local_140 = s0;
-    t7 = (uintptr_t)v0 * t7;
-    t6 = (uintptr_t)v0 * t6;
-    t8 = (uintptr_t)v0 * t8;
-    t9 = (uintptr_t)v0 * t9;
-    s1 = (uintptr_t)v0 * s1;
-    t3 = *(uint32_t *)((char *)((char *)&sdns_y_fus_npv_array));
-    v0 = (uintptr_t *)&sdns_y_fus_stren_intp;
-
-    /* fragment 2: Arithmetic */
-    v1 = v1;
-
-    /* fragment 3: MemoryAccess */
-    v0 = *(uint32_t *)((char *)((char *)&sdns_y_fus_stren_intp));
-    a0 = *(uint32_t *)((char *)v1 + 16);
-    t2 = *(uint32_t *)((char *)v1 + 4);
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 20);
-    local_10 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 24);
-    local_14 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 28);
-    local_18 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 32);
-    local_1c = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 36);
-    local_20 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    t4 = *(uint32_t *)((char *)v1 + 8);
-    t5 = *(uint32_t *)((char *)v1 + 12);
-    local_24 = a1;
-    a0 = *(uint32_t *)((char *)v1 + 40);
-    t3 = (uintptr_t)v0 * t3;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 44);
-    local_28 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 48);
-    local_2c = a1;
-
-    /* fragment 4: Arithmetic */
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-
-    /* fragment 5: MemoryAccess */
-    a0 = *(uint32_t *)((char *)v1 + 52);
-    local_30 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 56);
-    v1 = *(uint32_t *)((char *)v1 + 60);
-    local_34 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = (uintptr_t)v0 * v1;
-    t2 = (uintptr_t)v0 * t2;
-    t4 = (uintptr_t)v0 * t4;
-    t5 = (uintptr_t)v0 * t5;
-    v1 = (uintptr_t)&sdns_y_lum_npv_array;
-    v0 = (uintptr_t *)&sdns_y_lum_stren_intp;
-    v0 = *(uint32_t *)((char *)((char *)&sdns_y_lum_stren_intp));
-    local_3c = a0;
-    a0 = *(uint32_t *)((char *)((char *)&sdns_y_lum_npv_array));
-    local_38 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    v1 = v1;
-    a0 = *(uint32_t *)((char *)v1 + 4);
-    local_40 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 8);
-    local_44 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 12);
-    local_48 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 16);
-    local_4c = a1;
-
-    /* fragment 6: Arithmetic */
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-
-    /* fragment 7: MemoryAccess */
-    a0 = *(uint32_t *)((char *)v1 + 20);
-    local_50 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 24);
-    local_54 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 28);
-    local_58 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 32);
-    local_5c = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 36);
-    local_60 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 40);
-    local_64 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    s0 = (uintptr_t)&system_reg_write;
-    local_68 = a1;
-    a0 = *(uint32_t *)((char *)v1 + 44);
-    s0 = s0;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 48);
-    local_6c = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 52);
-    local_70 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 56);
-
-    /* fragment 8: MemoryAccess */
-    v1 = *(uint32_t *)((char *)v1 + 60);
-    local_74 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = (uintptr_t)v0 * v1;
-    v1 = (uintptr_t)&sdns_y_bsp_npv_array;
-    v0 = (uintptr_t *)&sdns_y_bsp_stren_intp;
-    v0 = *(uint32_t *)((char *)((char *)&sdns_y_bsp_stren_intp));
-    local_7c = a0;
-    a0 = *(uint32_t *)((char *)((char *)&sdns_y_bsp_npv_array));
-    local_78 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    v1 = v1;
-    a0 = *(uint32_t *)((char *)v1 + 4);
-    local_80 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 8);
-    local_84 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 12);
-    local_88 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 16);
-    local_8c = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 20);
-    local_90 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 24);
-    local_94 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-
-    /* fragment 9: MemoryAccess */
-    a0 = *(uint32_t *)((char *)v1 + 28);
-    local_98 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 32);
-    local_9c = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 36);
-    local_a0 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 40);
-    local_a4 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 44);
-    local_a8 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    local_ac = a1;
-    a0 = *(uint32_t *)((char *)v1 + 48);
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 52);
-    local_b0 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 56);
-    v1 = *(uint32_t *)((char *)v1 + 60);
-    local_b4 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = (uintptr_t)v0 * v1;
-    v1 = (uintptr_t)&sdns_y_dsp_npv_array;
-    v0 = (uintptr_t *)&sdns_y_dsp_stren_intp;
-    v0 = *(uint32_t *)((char *)((char *)&sdns_y_dsp_stren_intp));
-    local_bc = a0;
-
-    /* fragment 10: MemoryAccess */
-    a0 = *(uint32_t *)((char *)((char *)&sdns_y_dsp_npv_array));
-    local_b8 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    v1 = v1;
-    a0 = *(uint32_t *)((char *)v1 + 4);
-    local_c0 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 8);
-    local_c4 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 12);
-    local_c8 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 16);
-    local_cc = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 20);
-    local_d0 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 24);
-    local_d4 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 28);
-    local_d8 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 32);
-    local_dc = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 36);
-    local_e0 = a1;
-
-    /* fragment 11: Arithmetic */
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-
-    /* fragment 12: MemoryAccess */
-    a0 = *(uint32_t *)((char *)v1 + 40);
-    local_e4 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 44);
-    local_e8 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 48);
-    local_ec = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    local_f0 = a1;
-    a0 = *(uint32_t *)((char *)v1 + 52);
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 56);
-    v1 = *(uint32_t *)((char *)v1 + 60);
-    local_f4 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = (uintptr_t)v0 * v1;
-    v0 = (uintptr_t *)&sdns_y_bil_stren_intp;
-    local_fc = a0;
-    a0 = (uint32_t *)&sdns_y_bil_npv_array;
-    v0 = *(uint32_t *)((char *)((char *)&sdns_y_bil_stren_intp));
-    v1 = *(uint32_t *)((char *)((char *)&sdns_y_bil_npv_array));
-    local_f8 = a1;
-    a1 = (uintptr_t)v0 * v1;
-    a0 = a0;
-    v1 = *(uint32_t *)((char *)a0 + 4);
-    local_100 = a1;
-    a1 = (uintptr_t)v0 * v1;
-    v1 = *(uint32_t *)((char *)a0 + 16);
-    local_104 = a1;
-
-    /* fragment 13: Arithmetic */
-    a1 = (uintptr_t)v0 * v1;
-
-    /* fragment 14: MemoryAccess */
-    t0 = *(uint32_t *)((char *)a0 + 8);
-    t1 = *(uint32_t *)((char *)a0 + 12);
-    v1 = *(uint32_t *)((char *)a0 + 20);
-    a2 = *(uint32_t *)((char *)a0 + 24);
-    a3 = *(uint32_t *)((char *)a0 + 28);
-    s6 = *(uint32_t *)((char *)a0 + 32);
-    s5 = *(uint32_t *)((char *)a0 + 36);
-    s7 = *(uint32_t *)((char *)a0 + 40);
-    s8 = *(uint32_t *)((char *)a0 + 44);
-    s2 = *(uint32_t *)((char *)a0 + 48);
-    s3 = *(uint32_t *)((char *)a0 + 52);
-    s4 = *(uint32_t *)((char *)a0 + 56);
-    v1 = (uintptr_t)v0 * v1;
-    a2 = (uintptr_t)v0 * a2;
-    a3 = (uintptr_t)v0 * a3;
-    t0 = (uintptr_t)v0 * t0;
-    t1 = (uintptr_t)v0 * t1;
-    s5 = (uintptr_t)v0 * s5;
-    s2 = (uintptr_t)v0 * s2;
-    s6 = (uintptr_t)v0 * s6;
-    s7 = (uintptr_t)v0 * s7;
-    s8 = (uintptr_t)v0 * s8;
-    s3 = (uintptr_t)v0 * s3;
-    s4 = (uintptr_t)v0 * s4;
-    v0 = (uintptr_t *)&sdns_y_fus_slope_intp;
-    local_108 = a1;
-    a1 = *(uint32_t *)((char *)((char *)&sdns_y_fus_slope_intp));
-    v0 = (uintptr_t *)&sdns_y_dtl_thres_intp;
-    v0 = *(uint32_t *)((char *)((char *)&sdns_y_dtl_thres_intp));
-    a1 = a1 << 16;
-
-    /* fragment 15: CallSetup */
-    local_134 = v1;
-    local_138 = a2;
-    local_13c = a3;
-    local_12c = t0;
-    local_130 = t1;
-    local_120 = t2;
-    local_11c = t3;
-    local_124 = t4;
-    local_128 = t5;
-    local_110 = t6;
-    local_10c = t7;
-    local_114 = t8;
-    local_118 = t9;
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8212, (a1 | ((uintptr_t)v0 << 8)) | (*(uint32_t *)((char *)(uintptr_t)&sdns_y_lum_divop_intp)), a2, a3); /* jalr target resolved by relocation */
-
-    /* fragment 16: Arithmetic */
-    v0 = (uintptr_t *)&sdns_y_dsp_segop_intp;
-
-    /* fragment 17: CallSetup */
-    s8 = s8 << 24;
-    s7 = s7 << 16;
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8216, ((*(uint32_t *)((char *)(uintptr_t)&sdns_y_dsp_segop_intp)) << 28) | ((*(uint32_t *)((char *)(uintptr_t)&sdns_y_bsp_segop_intp)) << 24) | (*(uint32_t *)((char *)(uintptr_t)&sdns_y_fus_segop_intp)) | ((*(uint32_t *)((char *)(uintptr_t)&sdns_y_lum_segop_intp)) << 16) | ((*(uint32_t *)((char *)(uintptr_t)&sdns_y_dtl_segop_intp)) << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 18: CallSetup */
-    t9 = local_118;
-    t8 = local_114;
-    t6 = local_110;
-    t9 = t9 << 24;
-    t7 = local_10c;
-    t8 = t8 << 16;
-    t8 = t9 | t8;
-    t7 = t8 | t7;
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8236, ((local_118 << 24) | (local_114 << 16) | local_10c) | (local_110 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 19: CallSetup */
-    s1 = s1 << 8;
-    s1 = ((s1 << 24) | (s1 << 16) | s1) | s1;
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8240, ((s1 << 24) | (s1 << 16) | s1) | (s1 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 20: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(int32_t *)system_reg_write)(8244, s1); /* jalr target resolved by relocation */
-
-    /* fragment 21: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(int32_t *)system_reg_write)(8248, s1); /* jalr target resolved by relocation */
-
-    /* fragment 22: CallSetup */
-    t5 = local_128;
-    t4 = local_124;
-    t2 = local_120;
-    t5 = t5 << 24;
-    t3 = local_11c;
-    t4 = t4 << 16;
-    t4 = t5 | t4;
-    t3 = t4 | t3;
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8220, ((local_128 << 24) | (local_124 << 16) | local_11c) | (local_120 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 23: CallSetup */
-    s7 = s8 | s7;
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8224, ((local_1c << 24) | (local_18 << 16) | local_10) | (local_14 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 24: CallSetup */
-    s6 = s7 | s6;
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8228, ((local_2c << 24) | (local_28 << 16) | local_20) | (local_24 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 25: CallSetup */
-    s4 = s4 << 16;
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8232, ((local_3c << 24) | (local_38 << 16) | local_30) | (local_34 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 26: CallSetup */
-    s3 = s3 << 8;
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8252, ((local_4c << 24) | (local_48 << 16) | local_40) | (local_44 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 27: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8256, ((local_5c << 24) | (local_58 << 16) | local_50) | (local_54 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 28: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8260, ((local_6c << 24) | (local_68 << 16) | local_60) | (local_64 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 29: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8264, ((local_7c << 24) | (local_78 << 16) | local_70) | (local_74 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 30: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8268, ((local_8c << 24) | (local_88 << 16) | local_80) | (local_84 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 31: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8272, (((uintptr_t)local_9c << 24) | (local_98 << 16) | local_90) | (local_94 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 32: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8276, ((local_ac << 24) | (local_a8 << 16) | local_a0) | (local_a4 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 33: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8280, ((local_bc << 24) | (local_b8 << 16) | (uintptr_t)local_b0) | (local_b4 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 34: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8284, ((local_cc << 24) | (local_c8 << 16) | local_c0) | ((uintptr_t)local_c4 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 35: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8288, ((local_dc << 24) | ((uintptr_t)local_d8 << 16) | local_d0) | (local_d4 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 36: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8292, (((uintptr_t)local_ec << 24) | (local_e8 << 16) | local_e0) | (local_e4 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 37: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8296, ((local_fc << 24) | (local_f8 << 16) | local_f0) | (local_f4 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 38: CallSetup */
-    t1 = local_130;
-    t0 = local_12c;
-    t0 = t0 << 16;
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8300, ((local_130 << 24) | (local_12c << 16) | (uintptr_t)local_100) | (local_104 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 39: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8304, ((local_13c << 24) | (local_138 << 16) | local_108) | (local_134 << 8), local_138 << 16, local_13c); /* jalr target resolved by relocation */
-
-    /* fragment 40: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8308, s6 | (s5 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 41: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8312, (s4 | s3) | s2); /* jalr target resolved by relocation */
-
-    /* fragment 42: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    /* fragment 43: Arithmetic */
-    v0 = 0;
-
-    /* fragment 44: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    return 0;
+	return (v[3] << 24) | (v[2] << 16) | v[0] | (v[1] << 8);
 }
 
-/* WHOLE_DRIVER_CANDIDATE fn_000000000001c938 origin=fragment_seed original=tisp_sdns_c_param_cfg */
+static void sdns_write_npv16(uint32_t reg, const void *arr, uint32_t stren)
+{
+	const uint32_t *src = arr;
+	uint32_t v[16];
+	int i;
+
+	for (i = 0; i < 16; i++)
+		v[i] = src[i] * stren;
+	for (i = 0; i < 16; i += 4)
+		system_reg_write(reg + i, sdns_pack4(&v[i]));
+}
+
+/* WHOLE_DRIVER_CANDIDATE fn_000000000001c010 origin=oem_disasm original=tisp_sdns_y_param_cfg */
+int32_t tisp_sdns_y_param_cfg(void)
+{
+	const uint32_t *bil = (const uint32_t *)sdns_y_bil_npv_array;
+	uint32_t s = (uint32_t)sdns_y_dtl_stren_intp;
+	uint32_t d[4], d4, b[15];
+	int i;
+
+	d[0] = (uint32_t)sdns_y_dtl_npv_0_intp * s;
+	d[1] = (uint32_t)sdns_y_dtl_npv_1_intp * s;
+	d[2] = (uint32_t)sdns_y_dtl_npv_2_intp * s;
+	d[3] = (uint32_t)sdns_y_dtl_npv_3_intp * s;
+	d4 = (uint32_t)sdns_y_dtl_npv_4_intp * s;
+	for (i = 0; i < 15; i++)
+		b[i] = bil[i] * (uint32_t)sdns_y_bil_stren_intp;
+
+	system_reg_write(0x2014, ((uint32_t)sdns_y_fus_slope_intp << 16) |
+				 ((uint32_t)sdns_y_dtl_thres_intp << 8) |
+				 (uint32_t)sdns_y_lum_divop_intp);
+	system_reg_write(0x2018, ((uint32_t)sdns_y_dsp_segop_intp << 28) |
+				 ((uint32_t)sdns_y_bsp_segop_intp << 24) |
+				 (uint32_t)sdns_y_fus_segop_intp |
+				 ((uint32_t)sdns_y_lum_segop_intp << 16) |
+				 ((uint32_t)sdns_y_dtl_segop_intp << 8));
+	system_reg_write(0x202c, sdns_pack4(d));
+	d4 = (d4 << 24) | (d4 << 16) | d4 | (d4 << 8);
+	system_reg_write(0x2030, d4);
+	system_reg_write(0x2034, d4);
+	system_reg_write(0x2038, d4);
+	sdns_write_npv16(0x201c, sdns_y_fus_npv_array, (uint32_t)sdns_y_fus_stren_intp);
+	sdns_write_npv16(0x203c, sdns_y_lum_npv_array, (uint32_t)sdns_y_lum_stren_intp);
+	sdns_write_npv16(0x204c, sdns_y_bsp_npv_array, (uint32_t)sdns_y_bsp_stren_intp);
+	sdns_write_npv16(0x205c, sdns_y_dsp_npv_array, (uint32_t)sdns_y_dsp_stren_intp);
+	system_reg_write(0x206c, sdns_pack4(&b[0]));
+	system_reg_write(0x2070, sdns_pack4(&b[4]));
+	system_reg_write(0x2074, sdns_pack4(&b[8]));
+	system_reg_write(0x2078, (b[14] << 16) | (b[13] << 8) | b[12]);
+	return 0;
+}
+
+/* WHOLE_DRIVER_CANDIDATE fn_000000000001c938 origin=oem_disasm original=tisp_sdns_c_param_cfg */
 int32_t tisp_sdns_c_param_cfg(void)
 {
-    uint32_t local_10 = 0;
-    uint32_t local_14 = 0;
-    uint32_t local_18 = 0;
-    uint32_t local_1c = 0;
-    uint32_t local_20 = 0;
-    uint32_t local_24 = 0;
-    uint32_t local_28 = 0;
-    uint32_t local_2c = 0;
-    uint32_t local_30 = 0;
-    uint32_t local_34 = 0;
-    uint32_t local_38 = 0;
-    uint32_t local_3c = 0;
-    uint32_t local_40 = 0;
-    uint32_t local_44 = 0;
-    uint32_t local_48 = 0;
-    uint32_t local_4c = 0;
-    uint32_t local_50 = 0;
-    uint32_t local_54 = 0;
-    uint32_t *a0 = 0;
-    uint32_t a1 = 0;
-    uint32_t a2 = 0;
-    uint32_t a3 = 0;
-    uint32_t ra = 0;
-    uint32_t s0 = 0;
-    uint32_t s1 = 0;
-    uint32_t s2 = 0;
-    uint32_t s3 = 0;
-    uint32_t s4 = 0;
-    uint32_t s5 = 0;
-    uint32_t s6 = 0;
-    uint32_t s7 = 0;
-    uint32_t s8 = 0;
-    uint32_t t0 = 0;
-    uint32_t t1 = 0;
-    uint32_t t2 = 0;
-    uint32_t t3 = 0;
-    uint32_t t4 = 0;
-    uint32_t t5 = 0;
-    uintptr_t *v0 = 0;
-    uintptr_t v1 = 0;
-
-    /* fragment 0: Arithmetic */
-    v1 = (uintptr_t)&sdns_c_flu_npv_array;
-
-    /* fragment 1: MemoryAccess */
-    t3 = *(uint32_t *)((char *)((char *)&sdns_c_flu_npv_array));
-    v0 = (uintptr_t *)&sdns_c_flu_stren_intp;
-    v1 = v1;
-    v0 = *(uint32_t *)((char *)((char *)&sdns_c_flu_stren_intp));
-    t2 = *(uint32_t *)((char *)v1 + 4);
-    t4 = *(uint32_t *)((char *)v1 + 8);
-    t5 = *(uint32_t *)((char *)v1 + 12);
-    a3 = *(uint32_t *)((char *)v1 + 16);
-    a2 = *(uint32_t *)((char *)v1 + 20);
-    t0 = *(uint32_t *)((char *)v1 + 24);
-    t1 = *(uint32_t *)((char *)v1 + 28);
-    local_50 = s8;
-    local_4c = s7;
-    s8 = *(uint32_t *)((char *)v1 + 44);
-    s7 = *(uint32_t *)((char *)v1 + 40);
-    local_48 = s6;
-    local_44 = s5;
-    s6 = *(uint32_t *)((char *)v1 + 32);
-    s5 = *(uint32_t *)((char *)v1 + 36);
-    local_40 = s4;
-    local_3c = s3;
-    s4 = *(uint32_t *)((char *)v1 + 60);
-    s3 = *(uint32_t *)((char *)v1 + 56);
-    local_38 = s2;
-    local_34 = s1;
-    s2 = *(uint32_t *)((char *)v1 + 48);
-    s1 = *(uint32_t *)((char *)v1 + 52);
-    a3 = (uintptr_t)v0 * a3;
-    a2 = (uintptr_t)v0 * a2;
-    t0 = (uintptr_t)v0 * t0;
-
-    /* fragment 2: Arithmetic */
-    t1 = (uintptr_t)v0 * t1;
-    t3 = (uintptr_t)v0 * t3;
-    t2 = (uintptr_t)v0 * t2;
-    t4 = (uintptr_t)v0 * t4;
-    t5 = (uintptr_t)v0 * t5;
-    s5 = (uintptr_t)v0 * s5;
-    s1 = (uintptr_t)v0 * s1;
-    s6 = (uintptr_t)v0 * s6;
-    s7 = (uintptr_t)v0 * s7;
-    s8 = (uintptr_t)v0 * s8;
-    s2 = (uintptr_t)v0 * s2;
-    s3 = (uintptr_t)v0 * s3;
-    s4 = (uintptr_t)v0 * s4;
-    v0 = (uintptr_t *)&sdns_c_bas_wei_intp;
-
-    /* fragment 3: MemoryAccess */
-    a1 = *(uint32_t *)((char *)((char *)&sdns_c_bas_wei_intp));
-    v0 = (uintptr_t *)&sdns_c_fus_mod_intp;
-    v0 = *(uint32_t *)((char *)((char *)&sdns_c_fus_mod_intp));
-    a1 = a1 << 16;
-    v0 = (uintptr_t)v0 << 8;
-    a1 = a1 | (uintptr_t)v0;
-    v0 = (uintptr_t *)&sdns_c_flu_cal_intp;
-    v0 = *(uint32_t *)((char *)((char *)&sdns_c_flu_cal_intp));
-    local_30 = s0;
-    s0 = (uintptr_t)&system_reg_write;
-    s0 = s0;
-    a0 = 8324;
-    a1 = a1 | (uintptr_t)v0;
-    local_54 = ra;
-    local_24 = a2;
-    local_20 = a3;
-    local_28 = t0;
-    local_2c = t1;
-    local_14 = t2;
-    local_10 = t3;
-    local_18 = t4;
-
-    /* fragment 4: CallSetup */
-    local_1c = t5;
-    v0 = (uintptr_t *)((uintptr_t (*)(int32_t *))(uintptr_t)system_reg_write)(a0); /* jalr target resolved by relocation */
-
-    /* fragment 5: CallSetup */
-    t5 = local_1c;
-    t4 = local_18;
-    t2 = local_14;
-    t5 = t5 << 24;
-    t3 = local_10;
-    t4 = t4 << 16;
-    t4 = t5 | t4;
-    t3 = t4 | t3;
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8328, ((local_1c << 24) | (local_18 << 16) | local_10) | (local_14 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 6: CallSetup */
-    t1 = local_2c;
-    t0 = local_28;
-    t1 = t1 << 24;
-    t0 = t0 << 16;
-    t0 = t1 | t0;
-    s8 = s8 << 24;
-    s7 = s7 << 16;
-    s7 = s8 | s7;
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8332, ((local_2c << 24) | (local_28 << 16) | local_20) | (local_24 << 8), local_24, (local_2c << 24) | (local_28 << 16) | local_20); /* jalr target resolved by relocation */
-
-    /* fragment 7: CallSetup */
-    s6 = s7 | s6;
-    s4 = s4 << 24;
-    s3 = s3 << 16;
-    s3 = s4 | s3;
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8336, (s7 | s6) | (s5 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 8: CallSetup */
-    s2 = s3 | s2;
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8340, (s3 | s2) | (s1 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 9: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    /* fragment 10: Arithmetic */
-    v0 = 0;
-
-    /* fragment 11: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    return 0;
+	system_reg_write(0x2084, ((uint32_t)sdns_c_bas_wei_intp << 16) |
+				 ((uint32_t)sdns_c_fus_mod_intp << 8) |
+				 (uint32_t)sdns_c_flu_cal_intp);
+	sdns_write_npv16(0x2088, sdns_c_flu_npv_array, (uint32_t)sdns_c_flu_stren_intp);
+	return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001cb20 origin=fragment_seed original=tisp_sdns_intp */
@@ -36189,121 +35543,56 @@ int32_t tisp_sdns_par_refresh(uint32_t a0, uint32_t a1)
 	return 0;
 }
 
-/* WHOLE_DRIVER_CANDIDATE fn_000000000001cf24 origin=fragment_seed original=tiziano_sdns_params_refresh */
+/*
+ * tiziano_sdns_params_refresh: OEM tx-isp-t21.ko @0x1c644 copies the 30 SDNS
+ * arrays from tparams+0x10354..0x107d4 (lui 0x1 / addiu 0x354.. on tparams).
+ * The decompile dropped the 0x10000 high part and copied from tparams+0, the
+ * ASCII descriptor table ("TISP_PARAM_TOP_BYPASS..."), so 2DNR ran with
+ * garbage thresholds.
+ */
 int32_t tiziano_sdns_params_refresh(void)
 {
-    uint32_t local_10 = 0;
-    uint32_t local_14 = 0;
-    uint32_t *a0 = 0;
-    uint32_t a1 = 0;
-    uint32_t a2 = 0;
-    uint32_t ra = 0;
-    uint32_t s0 = 0;
-    uintptr_t *v0 = 0;
+	static const struct {
+		void *dst;
+		uint16_t off;	/* tparams + 0x10000 + off */
+		uint16_t len;
+	} tbl[] = {
+		{ &sdns_top_func_array,     0x354, 8 },
+		{ &sdns_y_dtl_thres_array,  0x35c, 36 },
+		{ &sdns_y_fus_slope_array,  0x380, 36 },
+		{ &sdns_y_lum_divop_array,  0x3a4, 36 },
+		{ &sdns_y_dtl_segop_array,  0x3c8, 36 },
+		{ &sdns_y_fus_segop_array,  0x3ec, 36 },
+		{ &sdns_y_lum_segop_array,  0x410, 36 },
+		{ &sdns_y_dsp_segop_array,  0x434, 36 },
+		{ &sdns_y_bsp_segop_array,  0x458, 36 },
+		{ &sdns_y_dtl_stren_array,  0x47c, 36 },
+		{ &sdns_y_fus_stren_array,  0x4a0, 36 },
+		{ &sdns_y_lum_stren_array,  0x4c4, 36 },
+		{ &sdns_y_dsp_stren_array,  0x4e8, 36 },
+		{ &sdns_y_bsp_stren_array,  0x50c, 36 },
+		{ &sdns_y_dtl_npv_0_array,  0x530, 36 },
+		{ &sdns_y_dtl_npv_1_array,  0x554, 36 },
+		{ &sdns_y_dtl_npv_2_array,  0x578, 36 },
+		{ &sdns_y_dtl_npv_3_array,  0x59c, 36 },
+		{ &sdns_y_dtl_npv_4_array,  0x5c0, 36 },
+		{ &sdns_y_fus_npv_array,    0x5e4, 64 },
+		{ &sdns_y_lum_npv_array,    0x624, 64 },
+		{ &sdns_y_dsp_npv_array,    0x664, 64 },
+		{ &sdns_y_bsp_npv_array,    0x6a4, 64 },
+		{ &sdns_y_bil_stren_array,  0x6e4, 36 },
+		{ &sdns_y_bil_npv_array,    0x708, 60 },
+		{ &sdns_c_bas_wei_array,    0x744, 36 },
+		{ &sdns_c_fus_mod_array,    0x768, 36 },
+		{ &sdns_c_flu_cal_array,    0x78c, 36 },
+		{ &sdns_c_flu_stren_array,  0x7b0, 36 },
+		{ &sdns_c_flu_npv_array,    0x7d4, 64 },
+	};
+	size_t i;
 
-    /* fragment 0: Prologue */
-    /* function prologue: stack frame and callee-saved register setup */
-
-    /* fragment 1: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_top_func_array, (void *)(uintptr_t)&tparams, 8); /* jalr target resolved by relocation */
-
-    /* fragment 2: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_dtl_thres_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 3: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_fus_slope_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 4: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_lum_divop_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 5: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_dtl_segop_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 6: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_fus_segop_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 7: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_lum_segop_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 8: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_dsp_segop_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 9: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_bsp_segop_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 10: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_dtl_stren_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 11: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_fus_stren_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 12: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_lum_stren_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 13: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_dsp_stren_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 14: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_bsp_stren_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 15: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_dtl_npv_0_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 16: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_dtl_npv_1_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 17: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_dtl_npv_2_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 18: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_dtl_npv_3_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 19: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_dtl_npv_4_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 20: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_fus_npv_array, (void *)(uintptr_t)&tparams, 64); /* jalr target resolved by relocation */
-
-    /* fragment 21: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_lum_npv_array, (void *)(uintptr_t)&tparams, 64); /* jalr target resolved by relocation */
-
-    /* fragment 22: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_dsp_npv_array, (void *)(uintptr_t)&tparams, 64); /* jalr target resolved by relocation */
-
-    /* fragment 23: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_bsp_npv_array, (void *)(uintptr_t)&tparams, 64); /* jalr target resolved by relocation */
-
-    /* fragment 24: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_bil_stren_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 25: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_bil_npv_array, (void *)(uintptr_t)&tparams, 60); /* jalr target resolved by relocation */
-
-    /* fragment 26: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_c_bas_wei_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 27: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_c_fus_mod_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 28: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_c_flu_cal_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 29: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_c_flu_stren_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 30: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_c_flu_npv_array, (void *)(uintptr_t)&tparams, 64); /* jalr target resolved by relocation */
-
-    /* fragment 31: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    /* fragment 32: Arithmetic */
-    v0 = 0;
-
-    /* fragment 33: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    return 0;
+	for (i = 0; i < ARRAY_SIZE(tbl); i++)
+		memcpy(tbl[i].dst, tparams + 0x10000 + tbl[i].off, tbl[i].len);
+	return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001d21c origin=model_output original=tiziano_sdns_dn_params_refresh */
