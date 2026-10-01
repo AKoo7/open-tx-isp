@@ -15166,11 +15166,13 @@ static long regtrace_framechan_copy_words_from_user(uint32_t *words,
     return 0;
 }
 
-static long regtrace_framechan_repair_dqbuf(int channel, unsigned long arg)
+static long regtrace_framechan_repair_dqbuf(int channel, unsigned long arg,
+                                            bool nonblock)
 {
     struct regtrace_framechan_done done;
     uint32_t words[REGTRACE_FRAMECHAN_QBUF_WORDS];
     unsigned long flags;
+    bool streaming;
     int slot;
     long ret;
 
@@ -15183,17 +15185,20 @@ static long regtrace_framechan_repair_dqbuf(int channel, unsigned long arg)
 
     slot = -1;
     if (regtrace_t23_source_frame_done) {
-        ret = wait_event_interruptible(
-            regtrace_framechan_done_wait[channel],
-            regtrace_framechan_done_count[channel] ||
-            !regtrace_framechan_streaming[channel]);
-        if (ret)
-            return ret;
+        if (!nonblock) {
+            ret = wait_event_interruptible(
+                regtrace_framechan_done_wait[channel],
+                regtrace_framechan_done_count[channel] ||
+                !regtrace_framechan_streaming[channel]);
+            if (ret)
+                return ret;
+        }
 
         spin_lock_irqsave(&regtrace_framechan_done_lock, flags);
         if (!regtrace_framechan_done_count[channel]) {
+            streaming = regtrace_framechan_streaming[channel];
             spin_unlock_irqrestore(&regtrace_framechan_done_lock, flags);
-            return -EPIPE;
+            return nonblock && streaming ? -EAGAIN : -EPIPE;
         }
         slot = regtrace_framechan_done_tail[channel];
         done = regtrace_framechan_done_ring[channel][slot];
@@ -15364,7 +15369,8 @@ static long regtrace_framechan_ioctl(struct file *file, unsigned int cmd, unsign
                    channel, arg);
         break;
     case REGTRACE_FRAMECHAN_DQBUF:
-        ret = regtrace_framechan_repair_dqbuf(channel, arg);
+        ret = regtrace_framechan_repair_dqbuf(
+            channel, arg, file && (file->f_flags & O_NONBLOCK));
         break;
     case REGTRACE_T23_VIDIOC_STREAMON:
         regtrace_framechan_set_streaming(channel, true);
