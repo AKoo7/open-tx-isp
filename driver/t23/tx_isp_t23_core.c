@@ -9937,6 +9937,10 @@ static const unsigned char *regtrace_t23_source_active_bank;
 #define REGTRACE_T23_CLM_TUNING_SIZE    0x24fcU
 #define REGTRACE_T23_HLDC_TUNING_OFFSET 0x14b44U
 static uint regtrace_t23_source_core_bayer = UINT_MAX;
+/* source_core_bayer was derived from the media-bus code, not set by hand */
+static bool regtrace_t23_core_bayer_from_mbus;
+/* Bayer index for reg 0x8 at the next core interrupt, UINT_MAX = none */
+static uint32_t regtrace_t23_bayer_pending = UINT_MAX;
 static uint regtrace_t23_source_core_mode = 0x1cU;
 static bool regtrace_t23_direct_csi_start;
 static bool regtrace_t23_direct_vic_start;
@@ -14187,6 +14191,7 @@ static int regtrace_t23_source_resolve_sensor_config(void)
             return ret;
         }
         regtrace_t23_source_core_bayer = bayer;
+        regtrace_t23_core_bayer_from_mbus = true;
     } else if (regtrace_t23_source_core_bayer > 3U) {
         return -EINVAL;
     }
@@ -14304,6 +14309,7 @@ static int regtrace_t23_source_core_set_stream(int enable,
     system_reg_write(0x800U, 0);
     system_reg_write(0x4U,
                      (regtrace_t23_source_sensor_width << 16) | regtrace_t23_source_sensor_height);
+    ACCESS_ONCE(regtrace_t23_bayer_pending) = UINT_MAX;
     system_reg_write(0x8U, regtrace_t23_source_core_bayer);
     system_reg_write(0x1cU, 0);
     system_reg_write(0x2cU, 0x400040U);
@@ -32815,6 +32821,12 @@ int32_t isp_irq_handle(int32_t irq, void *dev_id)
         regtrace_t23_source_awb_stats_irq(status0,
                                           regtrace_t23_core_irq_count);
 
+        /* OEM: mbus_to_bayer_write() after a sensor Bayer change. */
+        if (ACCESS_ONCE(regtrace_t23_bayer_pending) != UINT_MAX) {
+            system_reg_write(0x8U, ACCESS_ONCE(regtrace_t23_bayer_pending));
+            ACCESS_ONCE(regtrace_t23_bayer_pending) = UINT_MAX;
+        }
+
         /* OEM T23 drains MSCA completion FIFOs from the core ISR. */
         if (regtrace_t23_source_frame_done) {
             for (channel = 0; channel < 3; channel++) {
@@ -38279,12 +38291,48 @@ int32_t tx_isp_open(int32_t arg1, void *arg2) {
  * sync_sensor_attr ops; here those copies are the seeded sensor caches.
  * Other notifications have no consumer in this driver.
  */
+/*
+ * Runtime Bayer re-sync after a sensor mirror/flip.  A sensor whose readout
+ * order changes with the flip reports the new media-bus code (and sets
+ * video.mbus_change) through TX_ISP_EVENT_SYNC_SENSOR_ATTR.  The OEM
+ * ispcore_sync_sensor_attr copies the video struct into the core, and the
+ * next ispcore_interrupt_service_routine calls mbus_to_bayer_write() (ISP
+ * input pattern, reg 0x8) and clears the flag.  The same happens here: the
+ * new index is posted for the core interrupt.  The GIB black levels follow
+ * at the next gain update (tisp_gib_gain_interpolation reads reg 0x8), the
+ * LSC mesh follows the flip in regtrace_t23_sensor_flip_set(), AWB has no
+ * pattern-dependent setup.  The trigger is a changed pattern rather than
+ * mbus_change, so a sensor that forgets the flag is covered too; a
+ * source_core_bayer set by hand is left alone.  sc2336 shifts its window
+ * on flip and keeps SBGGR10, so it never triggers this.
+ */
+static void regtrace_t23_bayer_follow_sensor(void)
+{
+    uint32_t bayer;
+
+    if (!regtrace_t23_core_bayer_from_mbus ||
+        regtrace_t23_bayer_from_mbus(regtrace_t23_source_sensor_mbus_code,
+                                     &bayer) ||
+        bayer == regtrace_t23_source_core_bayer)
+        return;
+    printk(KERN_INFO
+           "tx_isp_t23_recovered: sensor Bayer %u -> %u (mbus=0x%x)%s\n",
+           regtrace_t23_source_core_bayer, bayer,
+           regtrace_t23_source_sensor_mbus_code,
+           regtrace_t23_core_started ? ", reg 0x8 at next frame" : "");
+    regtrace_t23_source_core_bayer = bayer;     /* also for the next start */
+    if (regtrace_t23_core_started)
+        ACCESS_ONCE(regtrace_t23_bayer_pending) = bayer;
+}
+
 int tx_isp_notify(void *module, unsigned int notification, void *data)
 {
     (void)module;
     (void)data;
-    if (notification == REGTRACE_TX_ISP_EVENT_SYNC_SENSOR_ATTR)
+    if (notification == REGTRACE_TX_ISP_EVENT_SYNC_SENSOR_ATTR) {
         regtrace_t23_seed_sensor_caches("sensor-sync-attr");
+        regtrace_t23_bayer_follow_sensor();
+    }
     return 0;
 }
 
