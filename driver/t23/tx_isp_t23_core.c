@@ -14846,6 +14846,14 @@ static uint32_t regtrace_framechan_qbuf_index[REGTRACE_FRAMECHAN_COUNT][REGTRACE
 static uint32_t regtrace_framechan_qbuf_userptr[REGTRACE_FRAMECHAN_COUNT][REGTRACE_FRAMECHAN_QBUF_SLOTS];
 static uint32_t regtrace_framechan_qbuf_len[REGTRACE_FRAMECHAN_COUNT][REGTRACE_FRAMECHAN_QBUF_SLOTS];
 static uint32_t regtrace_framechan_qbuf_count[REGTRACE_FRAMECHAN_COUNT];
+/*
+ * Whether the buffer in a qbuf slot is queued to the driver: set by QBUF,
+ * cleared when its MSCA completion is handed to DQBUF and when the channel
+ * stops streaming or its buffers are requested again. Only a queued
+ * buffer can complete, so each QBUF yields at most one DQBUF.
+ */
+static bool regtrace_framechan_qbuf_queued[REGTRACE_FRAMECHAN_COUNT][REGTRACE_FRAMECHAN_QBUF_SLOTS];
+static int regtrace_framechan_qbuf_last[REGTRACE_FRAMECHAN_COUNT];
 static uint32_t regtrace_framechan_dq_sequence[REGTRACE_FRAMECHAN_COUNT];
 static uint32_t regtrace_framechan_log_count[REGTRACE_FRAMECHAN_COUNT];
 struct regtrace_framechan_done {
@@ -15044,32 +15052,67 @@ static void regtrace_t23_set_msca_stream(int channel,
            reason ? reason : "?");
 }
 
+/* Forget every buffer queued to a channel. Call with the done lock held. */
+static void regtrace_framechan_forget_qbufs_locked(int channel)
+{
+    int i;
+
+    for (i = 0; i < REGTRACE_FRAMECHAN_QBUF_SLOTS; i++)
+        regtrace_framechan_qbuf_queued[channel][i] = false;
+}
+
 static int regtrace_framechan_record_qbuf(int channel, const uint32_t *words)
 {
     unsigned long flags;
-    uint32_t slot;
+    uint32_t userptr;
+    int slot = -1;
+    int i;
     int ret;
 
     if (channel < 0 || channel >= REGTRACE_FRAMECHAN_COUNT || !words)
         return -EINVAL;
 
-    ret = regtrace_t23_program_msca_qbuf(
-        channel, words[TX_ISP_FRAME_WORD_DMA],
-        words[TX_ISP_FRAME_WORD_LENGTH]);
-    if (ret)
-        return ret;
+    userptr = words[TX_ISP_FRAME_WORD_DMA];
 
+    /*
+     * Record the buffer as queued before it reaches the MSCA address FIFO,
+     * so that its completion cannot arrive first and be lost. A buffer
+     * queued again keeps its slot; a new one takes a free slot, so a
+     * queued buffer is never overwritten while there is room.
+     */
     spin_lock_irqsave(&regtrace_framechan_done_lock, flags);
-    slot = regtrace_framechan_qbuf_count[channel] % REGTRACE_FRAMECHAN_QBUF_SLOTS;
+    for (i = 0; i < REGTRACE_FRAMECHAN_QBUF_SLOTS; i++) {
+        if ((regtrace_framechan_qbuf_userptr[channel][i] & ~7U) ==
+            (userptr & ~7U)) {
+            slot = i;
+            break;
+        }
+    }
+    for (i = 0; slot < 0 && i < REGTRACE_FRAMECHAN_QBUF_SLOTS; i++) {
+        if (!regtrace_framechan_qbuf_queued[channel][i])
+            slot = i;
+    }
+    if (slot < 0)
+        slot = regtrace_framechan_qbuf_count[channel] %
+            REGTRACE_FRAMECHAN_QBUF_SLOTS;
     regtrace_framechan_qbuf_index[channel][slot] =
         words[TX_ISP_FRAME_WORD_INDEX];
-    regtrace_framechan_qbuf_userptr[channel][slot] =
-        words[TX_ISP_FRAME_WORD_DMA];
+    regtrace_framechan_qbuf_userptr[channel][slot] = userptr;
     regtrace_framechan_qbuf_len[channel][slot] =
         words[TX_ISP_FRAME_WORD_LENGTH];
+    regtrace_framechan_qbuf_queued[channel][slot] = true;
+    regtrace_framechan_qbuf_last[channel] = slot;
     regtrace_framechan_qbuf_count[channel]++;
     spin_unlock_irqrestore(&regtrace_framechan_done_lock, flags);
-    return 0;
+
+    ret = regtrace_t23_program_msca_qbuf(
+        channel, userptr, words[TX_ISP_FRAME_WORD_LENGTH]);
+    if (ret) {
+        spin_lock_irqsave(&regtrace_framechan_done_lock, flags);
+        regtrace_framechan_qbuf_queued[channel][slot] = false;
+        spin_unlock_irqrestore(&regtrace_framechan_done_lock, flags);
+    }
+    return ret;
 }
 
 static void regtrace_framechan_done_init(void)
@@ -15089,12 +15132,22 @@ static void regtrace_framechan_set_streaming(int channel, bool streaming)
         return;
 
     spin_lock_irqsave(&regtrace_framechan_done_lock, flags);
-    regtrace_framechan_streaming[channel] = streaming;
-    if (streaming) {
+    /*
+     * A new stream starts with an empty done queue; a repeated STREAMON
+     * keeps the completions not yet dequeued, which userspace would
+     * otherwise never get back. STREAMOFF returns every buffer to
+     * userspace, as the OEM vb2 queue cancel does: drop the completions and
+     * forget the queued buffers, so that nothing handed out later belongs
+     * to the stopped stream.
+     */
+    if (streaming != regtrace_framechan_streaming[channel] || !streaming) {
         regtrace_framechan_done_head[channel] = 0;
         regtrace_framechan_done_tail[channel] = 0;
         regtrace_framechan_done_count[channel] = 0;
     }
+    if (!streaming)
+        regtrace_framechan_forget_qbufs_locked(channel);
+    regtrace_framechan_streaming[channel] = streaming;
     spin_unlock_irqrestore(&regtrace_framechan_done_lock, flags);
     wake_up_interruptible(&regtrace_framechan_done_wait[channel]);
 }
@@ -15117,8 +15170,16 @@ static void regtrace_framechan_complete_fifo(int channel,
     y_phys &= ~7U;
     uv_phys &= ~7U;
     spin_lock_irqsave(&regtrace_framechan_done_lock, flags);
-    for (i = 0; i < REGTRACE_FRAMECHAN_QBUF_SLOTS; i++) {
-        if ((regtrace_framechan_qbuf_userptr[channel][i] & ~7U) == y_phys) {
+    /*
+     * Only a buffer queued in the current stream may complete. An address
+     * left in the MSCA FIFO from an earlier stream, or completing twice,
+     * would otherwise hand userspace a buffer it already holds, or the
+     * index it had for that address in an earlier stream.
+     */
+    for (i = 0; regtrace_framechan_streaming[channel] &&
+                i < REGTRACE_FRAMECHAN_QBUF_SLOTS; i++) {
+        if (regtrace_framechan_qbuf_queued[channel][i] &&
+            (regtrace_framechan_qbuf_userptr[channel][i] & ~7U) == y_phys) {
             match = i;
             break;
         }
@@ -15140,6 +15201,7 @@ static void regtrace_framechan_complete_fifo(int channel,
         regtrace_framechan_done_count[channel]--;
     }
 
+    regtrace_framechan_qbuf_queued[channel][match] = false;
     slot = regtrace_framechan_done_head[channel];
     done = &regtrace_framechan_done_ring[channel][slot];
     done->index = regtrace_framechan_qbuf_index[channel][match];
@@ -15167,7 +15229,7 @@ static int regtrace_framechan_latest_slot(int channel)
     count = regtrace_framechan_qbuf_count[channel];
     if (!count)
         return -1;
-    return (int)((count - 1U) % REGTRACE_FRAMECHAN_QBUF_SLOTS);
+    return regtrace_framechan_qbuf_last[channel];
 }
 
 static long regtrace_framechan_copy_words_from_user(uint32_t *words,
@@ -15213,7 +15275,12 @@ static long regtrace_framechan_repair_dqbuf(int channel, unsigned long arg,
         if (!regtrace_framechan_done_count[channel]) {
             streaming = regtrace_framechan_streaming[channel];
             spin_unlock_irqrestore(&regtrace_framechan_done_lock, flags);
-            return nonblock && streaming ? -EAGAIN : -EPIPE;
+            /*
+             * The OEM DQBUF fails a channel that is not streaming with
+             * -EINVAL ("Streaming off, will not wait for buffers"), also
+             * when STREAMOFF ends its wait.
+             */
+            return nonblock && streaming ? -EAGAIN : -EINVAL;
         }
         slot = regtrace_framechan_done_tail[channel];
         done = regtrace_framechan_done_ring[channel][slot];
@@ -15404,6 +15471,18 @@ static long regtrace_framechan_ioctl(struct file *file, unsigned int cmd, unsign
                                   sizeof(words))) {
             ret = -EFAULT;
             break;
+        }
+        /* New buffers: forget the old ones, which may be freed by now. */
+        if (channel >= 0 && channel < REGTRACE_FRAMECHAN_COUNT) {
+            unsigned long flags;
+
+            spin_lock_irqsave(&regtrace_framechan_done_lock, flags);
+            if (!regtrace_framechan_streaming[channel]) {
+                memset(regtrace_framechan_qbuf_userptr[channel], 0,
+                       sizeof(regtrace_framechan_qbuf_userptr[channel]));
+                regtrace_framechan_forget_qbufs_locked(channel);
+            }
+            spin_unlock_irqrestore(&regtrace_framechan_done_lock, flags);
         }
         if (regtrace_t23_log_framechan_payloads)
             printk(KERN_INFO "tx_isp_t23_recovered: framechan%d reqbufs count=%u type=%u memory=%u ret=0\n",
