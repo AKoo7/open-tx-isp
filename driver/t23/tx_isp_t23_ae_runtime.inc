@@ -537,9 +537,126 @@ static int regtrace_t23_ae_hlil_retime_force(uint32_t max_it,
     return ret;
 }
 
+/*
+ * AE limits set through the tuning API (OEM tisp_s_ae_it_max,
+ * tiziano_ae_s_max_again).  The ladder is built from the smaller of the
+ * sensor's own limit and the user limit; the sensor limit is kept so a
+ * frame-rate change or clearing the user limit restores it.  0 = no user
+ * limit.
+ */
+static uint32_t regtrace_t23_ae_sensor_max_it;      /* lines */
+static uint32_t regtrace_t23_ae_user_max_it;        /* lines */
+static uint32_t regtrace_t23_ae_sensor_max_again;   /* log2, Q16 */
+static uint32_t regtrace_t23_ae_user_max_again;     /* log2, Q16 */
+static uint32_t regtrace_t23_ae_user_max_dgain;     /* log2, Q5 (API) */
+
+static uint32_t regtrace_t23_ae_cap_it(uint32_t sensor_max_it)
+{
+    uint32_t cap = regtrace_t23_ae_user_max_it;
+
+    if (cap && cap < sensor_max_it &&
+        cap >= regtrace_t23_source_sensor_min_it)
+        return cap;
+    return sensor_max_it;
+}
+
+static uint32_t regtrace_t23_ae_cap_again(uint32_t sensor_max_again)
+{
+    uint32_t cap = regtrace_t23_ae_user_max_again;
+
+    return (cap && cap < sensor_max_again) ? cap : sensor_max_again;
+}
+
+/* Sensor limits as resolved from the sensor attributes. */
+static void regtrace_t23_ae_sensor_limits(uint32_t max_it, uint32_t max_again)
+{
+    regtrace_t23_ae_sensor_max_it = max_it;
+    regtrace_t23_ae_sensor_max_again = max_again;
+    regtrace_t23_source_sensor_max_it = regtrace_t23_ae_cap_it(max_it);
+    regtrace_t23_source_sensor_max_again =
+        regtrace_t23_ae_cap_again(max_again);
+}
+
 static int regtrace_t23_ae_hlil_retime(uint32_t max_it, const char *reason)
 {
-    return regtrace_t23_ae_hlil_retime_force(max_it, reason, false);
+    regtrace_t23_ae_sensor_max_it = max_it;
+    return regtrace_t23_ae_hlil_retime_force(regtrace_t23_ae_cap_it(max_it),
+                                             reason, false);
+}
+
+/* AE_IT_MAX: integration-time ceiling in lines (OEM tisp_s_ae_it_max). */
+static int regtrace_t23_ae_set_max_it(uint32_t lines)
+{
+    uint32_t old = regtrace_t23_ae_user_max_it;
+    int ret;
+
+    if (lines && regtrace_t23_source_sensor_configured &&
+        lines < regtrace_t23_source_sensor_min_it)
+        return -EINVAL;
+    regtrace_t23_ae_user_max_it = lines;
+    if (!regtrace_t23_source_sensor_configured)
+        return 0;   /* resolve_sensor_config applies it */
+    ret = regtrace_t23_ae_hlil_retime_force(
+        regtrace_t23_ae_cap_it(regtrace_t23_ae_sensor_max_it), "it-max",
+        true);
+    if (ret)
+        regtrace_t23_ae_user_max_it = old;
+    return ret;
+}
+
+/*
+ * MAX_AGAIN: analog-gain ceiling, log2 in 1/32 steps (32 = 2x) as the OEM
+ * tiziano_ae_s_max_again takes it and GetMaxAgain reports it (tisp_g_ev_attr
+ * word 11).  The OEM rejects values above the sensor's maximum.
+ */
+static int regtrace_t23_ae_set_max_again(uint32_t log2_q5)
+{
+    uint32_t q16 = log2_q5 << 11;
+    uint32_t old_user;
+    uint32_t old_max;
+    int ret;
+
+    if (log2_q5 > 0xffffU ||
+        (regtrace_t23_ae_sensor_max_again &&
+         q16 > regtrace_t23_ae_sensor_max_again))
+        return -EINVAL;
+    old_user = regtrace_t23_ae_user_max_again;
+    old_max = regtrace_t23_source_sensor_max_again;
+    regtrace_t23_ae_user_max_again = q16;
+    if (!regtrace_t23_source_sensor_configured)
+        return 0;
+    regtrace_t23_source_sensor_max_again =
+        regtrace_t23_ae_cap_again(regtrace_t23_ae_sensor_max_again);
+    ret = regtrace_t23_ae_hlil_retime_force(
+        regtrace_t23_source_sensor_max_it, "max-again", true);
+    if (ret) {
+        regtrace_t23_ae_user_max_again = old_user;
+        regtrace_t23_source_sensor_max_again = old_max;
+    }
+    return ret;
+}
+
+static uint32_t regtrace_t23_ae_get_max_again(void)
+{
+    return regtrace_t23_source_sensor_max_again >> 11;
+}
+
+/*
+ * MAX_DGAIN: ISP digital-gain ceiling, log2 in 1/32 steps.  The ladder has
+ * no ISP digital-gain stage (all gain is sensor gain), so the ceiling is
+ * kept and reported but changes nothing.
+ */
+static int regtrace_t23_ae_set_max_dgain(uint32_t log2_q5)
+{
+    if (log2_q5 > 0xffffU)
+        return -EINVAL;
+    regtrace_t23_ae_user_max_dgain = log2_q5;
+    return 0;
+}
+
+static uint32_t regtrace_t23_ae_get_max_dgain(void)
+{
+    return regtrace_t23_ae_user_max_dgain;
 }
 
 /* Anti-flicker change: rebuild the ladder for the same frame length. */
