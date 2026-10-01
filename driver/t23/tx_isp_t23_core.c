@@ -2100,7 +2100,13 @@ static int32_t regtrace_t23_csc_current[15] = {
 static uint16_t *tiziano_gamma_lut_now;
 static uint16_t tiziano_gamma_lut[129] __attribute__((aligned(4)));
 static uint16_t tiziano_gamma_lut_wdr[129] __attribute__((aligned(4)));
-static unsigned char dumpQueue[8];
+/*
+ * Wait queue of the OEM tuning poll node.  The day/night, custom-mode and
+ * bin switches wake it.  The OEM object is a wait_queue_head_t that
+ * tisp_code_create_tuning_node() initialises; this driver never runs that
+ * function on the live path, so the head is initialised statically here.
+ */
+static DECLARE_WAIT_QUEUE_HEAD(dumpQueue);
 static uintptr_t tispPollValue;
 static unsigned char tisp_ae_ctrls[176];
 static unsigned char data_6d610[16384];
@@ -46436,7 +46442,7 @@ tisp_code_create_tuning_node0x74:
 
     /* fragment 12: CallSetup */
     *(uint8_t *)((char *)((char *)&tispPollValue)) = 0;
-    __init_waitqueue_head((void *)(uintptr_t)&dumpQueue, (const char *)(uintptr_t)&LC12, (void *)(uintptr_t)0); /* jalr target resolved by relocation */
+    init_waitqueue_head(&dumpQueue);
 
     /* fragment 13: Epilogue */
     /* function epilogue: restore registers and return */
@@ -91581,7 +91587,7 @@ int64_t tisp_day_or_night_s_ctrl(uintptr_t a0, uint32_t a1)
     *(uint8_t *)(void *)&tispPollValue = 1;
     *((uint8_t *)(void *)&tispPollValue + 2) =
         day_night[a0 * sizeof(uint32_t)];
-    __wake_up(&dumpQueue, 1, 1, 0);
+    wake_up_interruptible(&dumpQueue);
 
     return 0;
 }
@@ -91670,7 +91676,7 @@ uint32_t tisp_switch_bin(uint32_t a0)
 
     *(uint8_t *)(void *)&tispPollValue = 1;
     *((uint8_t *)(void *)&tispPollValue + 3) = 1;
-    __wake_up(&dumpQueue, 1, 1, 0);
+    wake_up_interruptible(&dumpQueue);
 
     return (uint32_t)result;
 }
