@@ -506,10 +506,26 @@ static int frame_channel_vidioc_s_crop(struct file *file, void *fh,
 	if(a->type != vdev->vbq.type)
 		return -EINVAL;
 
-	if(a->c.top < 0 || a->c.left < 0 || a->c.width < 0 || a->c.height < 0
+	/* The bounds are only filled in by VIDIOC_CROPCAP.  A caller that goes
+	 * straight to S_CROP would otherwise be checked against 0x0 and every
+	 * non-empty crop rejected; query the core for them on demand. */
+	if ((a->c.width || a->c.height) &&
+	    (bounds->width == 0 || bounds->height == 0)) {
+		ioctl.dir = TX_ISP_PRIVATE_IOCTL_GET;
+		ioctl.cmd = TX_ISP_PRIVATE_IOCTL_FRAME_CHAN_CROP_CAP;
+		ioctl.value = (int)vdev;
+		ret = v4l2_subdev_call(vdev->parent, core, ioctl,
+				       VIDIOC_ISP_PRIVATE_IOCTL, &ioctl);
+		if (ret != ISP_SUCCESS)
+			return ret;
+	}
+
+	if(a->c.top < 0|| a->c.left < 0 || a->c.width < 0 || a->c.height < 0
 		|| a->c.left + a->c.width > bounds->width ||
 		a->c.top + a->c.height > bounds->height){
-		printk("%s[%d] the parameter is invalid!\n", __func__,__LINE__);
+		printk("%s[%d] the parameter is invalid! chan%d crop %dx%d+%d+%d bounds %dx%d\n",
+		       __func__, __LINE__, vdev->index, a->c.width, a->c.height,
+		       a->c.left, a->c.top, bounds->width, bounds->height);
 		return -EINVAL;
 	}
 
