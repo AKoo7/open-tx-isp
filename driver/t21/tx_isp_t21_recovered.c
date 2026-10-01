@@ -1075,7 +1075,11 @@ struct t21_ispcore_irq_view {
 	struct t21_ispcore_irq_view *runtime;
 	u8 pad_channels[0x74];
 	u8 *channels;
-	u8 pad_running_mode_pending[0x174 - 0x150];
+	u8 pad_flip[0x164 - 0x150];
+	u32 vflip;		/* 0x164 */
+	u32 vflip_pending;	/* 0x168 */
+	u32 hflip;		/* 0x16c */
+	u32 hflip_pending;	/* 0x170 */
 	u32 running_mode_pending;
 	u8 pad_tuning[0x19c - 0x178];
 	struct t21_tuning_state_view *tuning;
@@ -1110,8 +1114,12 @@ struct t21_isp_core_runtime_view {
 	struct t21_isp_core_runtime_view *self;
 	uint8_t pad_sensor_mode[0x12c - 0xd8];
 	uint32_t sensor_mode;
-	uint8_t pad_running_mode_pending[0x174 - 0x130];
-	uint32_t running_mode_pending;
+	uint8_t pad_flip[0x164 - 0x130];
+	uint32_t vflip;			/* 0x164 */
+	uint32_t vflip_pending;		/* 0x168 */
+	uint32_t hflip;			/* 0x16c */
+	uint32_t hflip_pending;		/* 0x170 */
+	uint32_t running_mode_pending;	/* 0x174 */
 };
 
 struct t21_isp_core_info_view {
@@ -13669,7 +13677,6 @@ int32_t apical_isp_core_ops_s_ctrl(int32_t *arg1, int32_t *arg2, int32_t arg3)
 	cmd = (uint32_t)arg2[0];
 	value = (uint32_t)arg2[1];
 	switch (cmd) {
-	case 0x00980915:
 	case 0x08000001:
 	case 0x08000002:
 	case 0x08000006:
@@ -13697,7 +13704,6 @@ int32_t apical_isp_core_ops_s_ctrl(int32_t *arg1, int32_t *arg2, int32_t arg3)
 	case 0x08000167:
 	case 0x08000168:
 	case 0x08000169:
-	case 0x00980914:
 	case 0x0098091f:
 	case 0x009a0914:
 	case 0x009a091a:
@@ -13740,6 +13746,33 @@ int32_t apical_isp_core_ops_s_ctrl(int32_t *arg1, int32_t *arg2, int32_t arg3)
 		return tisp_s_3dns_ratio(value);
 	case 0x080000a2:
 		return tisp_s_drc_strength(value);
+	case 0x00980914:	/* V4L2_CID_HFLIP, OEM s_ctrl @0x3ff4 */
+	case 0x00980915: {	/* V4L2_CID_VFLIP, OEM s_ctrl @0x4020 */
+		struct t21_tuning_state_view *tuning = (void *)arg1;
+		struct t21_isp_core_runtime_view *core;
+
+		BUILD_BUG_ON(offsetof(struct t21_isp_core_runtime_view, vflip) != 0x164);
+		BUILD_BUG_ON(offsetof(struct t21_isp_core_runtime_view, hflip_pending) != 0x170);
+		if (!tuning || !tuning->core || !tuning->core->self)
+			return -EINVAL;
+		core = tuning->core->self;
+		/* Cached for G_CTRL at tuning+0xeb4 (H) / +0xeb0 (V); the ISR
+		 * applies the change through tisp_mirror/flip_enable. */
+		if (cmd == 0x00980914) {
+			*(uint32_t *)((char *)tuning + 0xeb4) = value;
+			if (core->hflip != value) {
+				core->hflip = value;
+				core->hflip_pending = 1;
+			}
+		} else {
+			*(uint32_t *)((char *)tuning + 0xeb0) = value;
+			if (core->vflip != value) {
+				core->vflip = value;
+				core->vflip_pending = 1;
+			}
+		}
+		return 0;
+	}
 	case 0x080000e1: {
 		struct t21_tuning_state_view *tuning = (void *)arg1;
 
@@ -50612,6 +50645,16 @@ int32_t ispcore_interrupt_service_routine(uintptr_t a0)
 		}
 		runtime->running_mode_pending = 0;
 		csc_day_pending = 1;
+	}
+
+	/* OEM ISR @0x32a74-0x32ac0: apply pending mirror/flip requests. */
+	if (runtime->hflip_pending == 1) {
+		runtime->hflip_pending = 0;
+		tisp_mirror_enable(runtime->hflip != 0);
+	}
+	if (runtime->vflip_pending == 1) {
+		runtime->vflip_pending = 0;
+		tisp_flip_enable(runtime->vflip != 0);
 	}
 
 	/* Match the OEM interrupt fan-out: every asserted slot gets its callback,
