@@ -142,7 +142,16 @@ static void regtrace_t23_source_ae_hlil_work(struct work_struct *work);
 static DECLARE_WORK(regtrace_t23_source_ae_hlil_work_item,
                     regtrace_t23_source_ae_hlil_work);
 
+static void regtrace_t23_source_ae_hlil_work_body(struct work_struct *work);
+
 static void regtrace_t23_source_ae_hlil_work(struct work_struct *work)
+{
+    regtrace_t23_text_check("ae_hlil_work-enter", 0);
+    regtrace_t23_source_ae_hlil_work_body(work);
+    regtrace_t23_text_check("ae_hlil_work-exit", 0);
+}
+
+static void regtrace_t23_source_ae_hlil_work_body(struct work_struct *work)
 {
     const struct regtrace_t23_ae_hlil_rung *rungs =
         regtrace_t23_ae_hlil_rungs;

@@ -9419,10 +9419,15 @@ int32_t tx_isp_subdev_init(uintptr_t a0, uintptr_t a1, uint32_t a2)
            pdev->name, sd, (void *)(uintptr_t)a2, pdata);
     return 0;
 }
+void tx_isp_t23_sinfo_sensor_unbound(void *subdev, struct module *owner);
+
 int32_t tx_isp_subdev_deinit(uintptr_t arg1)
 {
     if (arg1)
         *(uint32_t *)((char *)arg1 + REGTRACE_TX_ISP_SUBDEV_OPS_OFFSET) = 0;
+    /* A sensor's remove() frees the subdev right after this call. */
+    if (arg1 && (uintptr_t)regtrace_t23_sensor_sd == arg1)
+        tx_isp_t23_sinfo_sensor_unbound((void *)arg1, NULL);
     return 0;
 }
 
@@ -9882,6 +9887,73 @@ static uint regtrace_t23_snapraw_buffer_bytes = 4U * 1024U * 1024U;
 static uint regtrace_t23_snapraw_phys_addr;
 module_param_named(enable_irqs_on_streamon, regtrace_t23_enable_irqs_on_streamon, bool, 0644);
 module_param_named(log_framechan_payloads, regtrace_t23_log_framechan_payloads, bool, 0644);
+
+/*
+ * Debug aid: text_watch=1 keeps a copy of this module's core text and
+ * compares it at the entry and exit of every tx-isp, isp-m0 and frame
+ * channel call and AE/AWB worker run. A change is reported once, with the
+ * offsets and words, the call it was first seen in, and the copy is then
+ * updated. Something that writes into the module (a stray pointer or a
+ * DMA into the wrong page) shows up there long before the CPU executes the
+ * damaged instruction. Costs a ~450 KiB compare per check; off by default.
+ */
+static bool regtrace_t23_text_watch;
+module_param_named(text_watch, regtrace_t23_text_watch, bool, 0644);
+static u32 *regtrace_t23_text_snap;
+static size_t regtrace_t23_text_words;
+static DEFINE_SPINLOCK(regtrace_t23_text_lock);
+
+static void regtrace_t23_text_check(const char *where, unsigned int cmd)
+{
+    const u32 *text = THIS_MODULE->module_core;
+    unsigned long flags;
+    unsigned int shown = 0;
+    size_t words;
+    size_t i;
+    u32 *snap;
+
+    if (!regtrace_t23_text_watch || !text)
+        return;
+
+    if (!regtrace_t23_text_snap) {
+        words = THIS_MODULE->core_text_size / sizeof(u32);
+        snap = vmalloc(words * sizeof(u32));
+        if (!snap)
+            return;
+        memcpy(snap, text, words * sizeof(u32));
+        spin_lock_irqsave(&regtrace_t23_text_lock, flags);
+        if (!regtrace_t23_text_snap) {
+            regtrace_t23_text_words = words;
+            regtrace_t23_text_snap = snap;
+            snap = NULL;
+        }
+        spin_unlock_irqrestore(&regtrace_t23_text_lock, flags);
+        if (snap)
+            vfree(snap);
+        else
+            printk(KERN_WARNING "tx_isp_t23_recovered: text watch armed text=%p size=0x%zx at %s\n",
+                   text, words * sizeof(u32), where);
+        return;
+    }
+
+    spin_lock_irqsave(&regtrace_t23_text_lock, flags);
+    snap = regtrace_t23_text_snap;
+    words = regtrace_t23_text_words;
+    if (memcmp(snap, text, words * sizeof(u32))) {
+        for (i = 0; i < words; i++) {
+            if (snap[i] == text[i])
+                continue;
+            if (shown++ < 16)
+                printk(KERN_ERR "tx_isp_t23_recovered: TEXT CHANGED at %p (text+0x%zx) 0x%08x -> 0x%08x seen at %s cmd=0x%x pid=%d comm=%s\n",
+                       &text[i], i * sizeof(u32), snap[i], text[i],
+                       where, cmd, current->pid, current->comm);
+            snap[i] = text[i];
+        }
+        printk(KERN_ERR "tx_isp_t23_recovered: TEXT CHANGED %u words, seen at %s cmd=0x%x\n",
+               shown, where, cmd);
+    }
+    spin_unlock_irqrestore(&regtrace_t23_text_lock, flags);
+}
 module_param_named(direct_msca_qbuf, regtrace_t23_direct_msca_qbuf, bool, 0644);
 module_param_named(direct_msca_start, regtrace_t23_direct_msca_start, bool, 0644);
 module_param_named(direct_msca_cfg_load, regtrace_t23_direct_msca_cfg_load, bool, 0644);
@@ -14519,7 +14591,21 @@ static int regtrace_tx_isp_release(struct inode *inode, struct file *file)
     return 0;
 }
 
+static long regtrace_tx_isp_ioctl_body(struct file *file, unsigned int cmd,
+                                        unsigned long arg);
+
 static long regtrace_tx_isp_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+    long ret;
+
+    regtrace_t23_text_check("tx_isp_ioctl-enter", cmd);
+    ret = regtrace_tx_isp_ioctl_body(file, cmd, arg);
+    regtrace_t23_text_check("tx_isp_ioctl-exit", cmd);
+    return ret;
+}
+
+static long regtrace_tx_isp_ioctl_body(struct file *file, unsigned int cmd,
+                                        unsigned long arg)
 {
     long ret;
 
@@ -14661,7 +14747,21 @@ static int regtrace_isp_m0_release(struct inode *inode, struct file *file)
     return 0;
 }
 
+static long regtrace_isp_m0_ioctl_body(struct file *file, unsigned int cmd,
+                                        unsigned long arg);
+
 static long regtrace_isp_m0_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+    long ret;
+
+    regtrace_t23_text_check("isp_m0_ioctl-enter", cmd);
+    ret = regtrace_isp_m0_ioctl_body(file, cmd, arg);
+    regtrace_t23_text_check("isp_m0_ioctl-exit", cmd);
+    return ret;
+}
+
+static long regtrace_isp_m0_ioctl_body(struct file *file, unsigned int cmd,
+                                        unsigned long arg)
 {
     long ret;
 
@@ -14868,6 +14968,14 @@ static uint32_t regtrace_framechan_qbuf_index[REGTRACE_FRAMECHAN_COUNT][REGTRACE
 static uint32_t regtrace_framechan_qbuf_userptr[REGTRACE_FRAMECHAN_COUNT][REGTRACE_FRAMECHAN_QBUF_SLOTS];
 static uint32_t regtrace_framechan_qbuf_len[REGTRACE_FRAMECHAN_COUNT][REGTRACE_FRAMECHAN_QBUF_SLOTS];
 static uint32_t regtrace_framechan_qbuf_count[REGTRACE_FRAMECHAN_COUNT];
+/*
+ * Whether the buffer in a qbuf slot is queued to the driver: set by QBUF,
+ * cleared when its MSCA completion is handed to DQBUF and when the channel
+ * stops streaming or its buffers are requested again. Only a queued
+ * buffer can complete, so each QBUF yields at most one DQBUF.
+ */
+static bool regtrace_framechan_qbuf_queued[REGTRACE_FRAMECHAN_COUNT][REGTRACE_FRAMECHAN_QBUF_SLOTS];
+static int regtrace_framechan_qbuf_last[REGTRACE_FRAMECHAN_COUNT];
 static uint32_t regtrace_framechan_dq_sequence[REGTRACE_FRAMECHAN_COUNT];
 static uint32_t regtrace_framechan_log_count[REGTRACE_FRAMECHAN_COUNT];
 struct regtrace_framechan_done {
@@ -14886,6 +14994,16 @@ static uint32_t regtrace_framechan_done_unmatched[REGTRACE_FRAMECHAN_COUNT];
 static bool regtrace_framechan_streaming[REGTRACE_FRAMECHAN_COUNT];
 static wait_queue_head_t regtrace_framechan_done_wait[REGTRACE_FRAMECHAN_COUNT];
 static spinlock_t regtrace_framechan_done_lock;
+/*
+ * Frame channels that are between STREAMON and STREAMOFF, one bit per
+ * channel, and the file that started each of them. The ISP, VIC, sensor
+ * and their interrupts are shared by all channels: like the OEM driver,
+ * a channel STREAMOFF only stops that channel, and the shared pipeline
+ * stops with the last one. Serialised by regtrace_framechan_stream_lock.
+ */
+static DEFINE_MUTEX(regtrace_framechan_stream_lock);
+static uint32_t regtrace_framechan_stream_mask;
+static struct file *regtrace_framechan_stream_owner[REGTRACE_FRAMECHAN_COUNT];
 static struct regtrace_t23_frame_image_format
     regtrace_t23_framechan_formats[REGTRACE_FRAMECHAN_COUNT];
 static bool regtrace_t23_framechan_format_ready[REGTRACE_FRAMECHAN_COUNT];
@@ -15056,32 +15174,67 @@ static void regtrace_t23_set_msca_stream(int channel,
            reason ? reason : "?");
 }
 
+/* Forget every buffer queued to a channel. Call with the done lock held. */
+static void regtrace_framechan_forget_qbufs_locked(int channel)
+{
+    int i;
+
+    for (i = 0; i < REGTRACE_FRAMECHAN_QBUF_SLOTS; i++)
+        regtrace_framechan_qbuf_queued[channel][i] = false;
+}
+
 static int regtrace_framechan_record_qbuf(int channel, const uint32_t *words)
 {
     unsigned long flags;
-    uint32_t slot;
+    uint32_t userptr;
+    int slot = -1;
+    int i;
     int ret;
 
     if (channel < 0 || channel >= REGTRACE_FRAMECHAN_COUNT || !words)
         return -EINVAL;
 
-    ret = regtrace_t23_program_msca_qbuf(
-        channel, words[TX_ISP_FRAME_WORD_DMA],
-        words[TX_ISP_FRAME_WORD_LENGTH]);
-    if (ret)
-        return ret;
+    userptr = words[TX_ISP_FRAME_WORD_DMA];
 
+    /*
+     * Record the buffer as queued before it reaches the MSCA address FIFO,
+     * so that its completion cannot arrive first and be lost. A buffer
+     * queued again keeps its slot; a new one takes a free slot, so a
+     * queued buffer is never overwritten while there is room.
+     */
     spin_lock_irqsave(&regtrace_framechan_done_lock, flags);
-    slot = regtrace_framechan_qbuf_count[channel] % REGTRACE_FRAMECHAN_QBUF_SLOTS;
+    for (i = 0; i < REGTRACE_FRAMECHAN_QBUF_SLOTS; i++) {
+        if ((regtrace_framechan_qbuf_userptr[channel][i] & ~7U) ==
+            (userptr & ~7U)) {
+            slot = i;
+            break;
+        }
+    }
+    for (i = 0; slot < 0 && i < REGTRACE_FRAMECHAN_QBUF_SLOTS; i++) {
+        if (!regtrace_framechan_qbuf_queued[channel][i])
+            slot = i;
+    }
+    if (slot < 0)
+        slot = regtrace_framechan_qbuf_count[channel] %
+            REGTRACE_FRAMECHAN_QBUF_SLOTS;
     regtrace_framechan_qbuf_index[channel][slot] =
         words[TX_ISP_FRAME_WORD_INDEX];
-    regtrace_framechan_qbuf_userptr[channel][slot] =
-        words[TX_ISP_FRAME_WORD_DMA];
+    regtrace_framechan_qbuf_userptr[channel][slot] = userptr;
     regtrace_framechan_qbuf_len[channel][slot] =
         words[TX_ISP_FRAME_WORD_LENGTH];
+    regtrace_framechan_qbuf_queued[channel][slot] = true;
+    regtrace_framechan_qbuf_last[channel] = slot;
     regtrace_framechan_qbuf_count[channel]++;
     spin_unlock_irqrestore(&regtrace_framechan_done_lock, flags);
-    return 0;
+
+    ret = regtrace_t23_program_msca_qbuf(
+        channel, userptr, words[TX_ISP_FRAME_WORD_LENGTH]);
+    if (ret) {
+        spin_lock_irqsave(&regtrace_framechan_done_lock, flags);
+        regtrace_framechan_qbuf_queued[channel][slot] = false;
+        spin_unlock_irqrestore(&regtrace_framechan_done_lock, flags);
+    }
+    return ret;
 }
 
 static void regtrace_framechan_done_init(void)
@@ -15101,12 +15254,22 @@ static void regtrace_framechan_set_streaming(int channel, bool streaming)
         return;
 
     spin_lock_irqsave(&regtrace_framechan_done_lock, flags);
-    regtrace_framechan_streaming[channel] = streaming;
-    if (streaming) {
+    /*
+     * A new stream starts with an empty done queue; a repeated STREAMON
+     * keeps the completions not yet dequeued, which userspace would
+     * otherwise never get back. STREAMOFF returns every buffer to
+     * userspace, as the OEM vb2 queue cancel does: drop the completions and
+     * forget the queued buffers, so that nothing handed out later belongs
+     * to the stopped stream.
+     */
+    if (streaming != regtrace_framechan_streaming[channel] || !streaming) {
         regtrace_framechan_done_head[channel] = 0;
         regtrace_framechan_done_tail[channel] = 0;
         regtrace_framechan_done_count[channel] = 0;
     }
+    if (!streaming)
+        regtrace_framechan_forget_qbufs_locked(channel);
+    regtrace_framechan_streaming[channel] = streaming;
     spin_unlock_irqrestore(&regtrace_framechan_done_lock, flags);
     wake_up_interruptible(&regtrace_framechan_done_wait[channel]);
 }
@@ -15129,8 +15292,16 @@ static void regtrace_framechan_complete_fifo(int channel,
     y_phys &= ~7U;
     uv_phys &= ~7U;
     spin_lock_irqsave(&regtrace_framechan_done_lock, flags);
-    for (i = 0; i < REGTRACE_FRAMECHAN_QBUF_SLOTS; i++) {
-        if ((regtrace_framechan_qbuf_userptr[channel][i] & ~7U) == y_phys) {
+    /*
+     * Only a buffer queued in the current stream may complete. An address
+     * left in the MSCA FIFO from an earlier stream, or completing twice,
+     * would otherwise hand userspace a buffer it already holds, or the
+     * index it had for that address in an earlier stream.
+     */
+    for (i = 0; regtrace_framechan_streaming[channel] &&
+                i < REGTRACE_FRAMECHAN_QBUF_SLOTS; i++) {
+        if (regtrace_framechan_qbuf_queued[channel][i] &&
+            (regtrace_framechan_qbuf_userptr[channel][i] & ~7U) == y_phys) {
             match = i;
             break;
         }
@@ -15152,6 +15323,7 @@ static void regtrace_framechan_complete_fifo(int channel,
         regtrace_framechan_done_count[channel]--;
     }
 
+    regtrace_framechan_qbuf_queued[channel][match] = false;
     slot = regtrace_framechan_done_head[channel];
     done = &regtrace_framechan_done_ring[channel][slot];
     done->index = regtrace_framechan_qbuf_index[channel][match];
@@ -15179,7 +15351,7 @@ static int regtrace_framechan_latest_slot(int channel)
     count = regtrace_framechan_qbuf_count[channel];
     if (!count)
         return -1;
-    return (int)((count - 1U) % REGTRACE_FRAMECHAN_QBUF_SLOTS);
+    return regtrace_framechan_qbuf_last[channel];
 }
 
 static long regtrace_framechan_copy_words_from_user(uint32_t *words,
@@ -15193,11 +15365,13 @@ static long regtrace_framechan_copy_words_from_user(uint32_t *words,
     return 0;
 }
 
-static long regtrace_framechan_repair_dqbuf(int channel, unsigned long arg)
+static long regtrace_framechan_repair_dqbuf(int channel, unsigned long arg,
+                                            bool nonblock)
 {
     struct regtrace_framechan_done done;
     uint32_t words[REGTRACE_FRAMECHAN_QBUF_WORDS];
     unsigned long flags;
+    bool streaming;
     int slot;
     long ret;
 
@@ -15210,17 +15384,25 @@ static long regtrace_framechan_repair_dqbuf(int channel, unsigned long arg)
 
     slot = -1;
     if (regtrace_t23_source_frame_done) {
-        ret = wait_event_interruptible(
-            regtrace_framechan_done_wait[channel],
-            regtrace_framechan_done_count[channel] ||
-            !regtrace_framechan_streaming[channel]);
-        if (ret)
-            return ret;
+        if (!nonblock) {
+            ret = wait_event_interruptible(
+                regtrace_framechan_done_wait[channel],
+                regtrace_framechan_done_count[channel] ||
+                !regtrace_framechan_streaming[channel]);
+            if (ret)
+                return ret;
+        }
 
         spin_lock_irqsave(&regtrace_framechan_done_lock, flags);
         if (!regtrace_framechan_done_count[channel]) {
+            streaming = regtrace_framechan_streaming[channel];
             spin_unlock_irqrestore(&regtrace_framechan_done_lock, flags);
-            return -EPIPE;
+            /*
+             * The OEM DQBUF fails a channel that is not streaming with
+             * -EINVAL ("Streaming off, will not wait for buffers"), also
+             * when STREAMOFF ends its wait.
+             */
+            return nonblock && streaming ? -EAGAIN : -EINVAL;
         }
         slot = regtrace_framechan_done_tail[channel];
         done = regtrace_framechan_done_ring[channel][slot];
@@ -15262,6 +15444,109 @@ static long regtrace_framechan_repair_dqbuf(int channel, unsigned long arg)
     return 0;
 }
 
+/*
+ * TX_ISP_FRAME_IOCTL_LEGACY_WAIT. The stock libimp frame_pooling_thread
+ * loops on it and, whenever it returns 0, dequeues a frame without checking
+ * the DQBUF result: VBMGetFrame() then uses the index of a v4l2_buffer the
+ * failed ioctl never filled in. The OEM wait is a
+ * wait_for_completion_interruptible() on the channel's frame-done
+ * completion, so it only succeeds when a frame is ready. Do the same, but
+ * do not block for ever: give up after a second (the pooling thread checks
+ * for cancellation between waits) and at once when the channel stops
+ * streaming, and fail in both cases, so that no DQBUF follows. A channel
+ * that is not streaming yet is waited on for the same second, so a pooling
+ * thread that outlives its STREAMOFF does not spin.
+ */
+static long regtrace_framechan_wait_frame(int channel, unsigned long arg)
+{
+    unsigned long deadline = jiffies + msecs_to_jiffies(1000);
+    uint32_t ready;
+    bool streaming;
+    long left;
+
+    if (channel < 0 || channel >= REGTRACE_FRAMECHAN_COUNT)
+        return -EINVAL;
+
+    if (regtrace_t23_source_frame_done) {
+        for (;;) {
+            streaming = regtrace_framechan_streaming[channel];
+            left = (long)(deadline - jiffies);
+            if (left <= 0)
+                return streaming ? -ETIMEDOUT : -EINVAL;
+            left = wait_event_interruptible_timeout(
+                regtrace_framechan_done_wait[channel],
+                regtrace_framechan_done_count[channel] ||
+                    regtrace_framechan_streaming[channel] != streaming,
+                left);
+            if (left < 0)
+                return left;
+            if (regtrace_framechan_done_count[channel])
+                break;
+            if (!left)
+                return streaming ? -ETIMEDOUT : -EINVAL;
+            if (!regtrace_framechan_streaming[channel])
+                return -EINVAL;
+        }
+    }
+
+    /* Frames ready to dequeue; libimp does not use the value. */
+    ready = regtrace_framechan_done_count[channel];
+    if (arg && copy_to_user((void __user *)(uintptr_t)arg, &ready,
+                            sizeof(ready)))
+        return -EFAULT;
+    return 0;
+}
+
+static void regtrace_framechan_stream_on(struct file *file, int channel)
+{
+    mutex_lock(&regtrace_framechan_stream_lock);
+    if (channel >= 0 && channel < REGTRACE_FRAMECHAN_COUNT) {
+        regtrace_framechan_stream_mask |= 1U << channel;
+        regtrace_framechan_stream_owner[channel] = file;
+    }
+    regtrace_framechan_set_streaming(channel, true);
+    regtrace_t23_enable_stream_clks();
+    if (!regtrace_t23_vic_streaming)
+        regtrace_t23_source_input_stream(1, "framechan-streamon");
+    regtrace_t23_direct_vic_input_stream(1, "framechan-streamon");
+    regtrace_t23_tisp_stream_regs(1, channel, "framechan-streamon");
+    regtrace_t23_set_msca_stream(channel, 1, "framechan-streamon");
+    regtrace_t23_direct_vic_mdma_stream(channel, 1, "framechan-streamon");
+    regtrace_t23_stream_irq_gate(1, "framechan-streamon", channel);
+    mutex_unlock(&regtrace_framechan_stream_lock);
+}
+
+/*
+ * Stop one frame channel. The OEM ispcore_frame_channel_streamoff() only
+ * resets the stopping channel's queue; the core interrupt, which drains the
+ * MSCA completion FIFOs of every channel, the TISP, the VIC and the sensor
+ * keep running for the others. Stop those only with the last channel.
+ */
+static void regtrace_framechan_stream_off(int channel, const char *reason)
+{
+    bool last;
+
+    mutex_lock(&regtrace_framechan_stream_lock);
+    if (channel >= 0 && channel < REGTRACE_FRAMECHAN_COUNT) {
+        regtrace_framechan_stream_mask &= ~(1U << channel);
+        regtrace_framechan_stream_owner[channel] = NULL;
+    }
+    last = !regtrace_framechan_stream_mask;
+    regtrace_framechan_set_streaming(channel, false);
+    if (last)
+        regtrace_t23_direct_vic_mdma_stream(channel, 0, reason);
+    regtrace_t23_set_msca_stream(channel, 0, reason);
+    if (last) {
+        regtrace_t23_source_input_stream(0, reason);
+        regtrace_t23_direct_vic_input_stream(0, reason);
+        regtrace_t23_tisp_stream_regs(0, -1, reason);
+        regtrace_t23_stream_irq_gate(0, reason, channel);
+    }
+    printk(KERN_INFO "tx_isp_t23_recovered: framechan%d stream off, still streaming mask=0x%x reason=%s\n",
+           channel, regtrace_framechan_stream_mask, reason ? reason : "?");
+    mutex_unlock(&regtrace_framechan_stream_lock);
+}
+
 static int regtrace_framechan_index_from_misc(struct miscdevice *mdev)
 {
     int i;
@@ -15290,6 +15575,7 @@ static int regtrace_framechan_open(struct inode *inode, struct file *file)
         file->private_data = &regtrace_framechan_contexts[channel];
     printk(KERN_INFO "tx_isp_t23_recovered: open /dev/framechan%d pid=%d comm=%s\n",
            channel, current->pid, current->comm);
+    regtrace_t23_text_check("framechan-open", (unsigned int)channel);
     return 0;
 }
 
@@ -15302,15 +15588,43 @@ static int regtrace_framechan_release(struct inode *inode, struct file *file)
     ctx = file ? file->private_data : NULL;
     if (ctx)
         channel = ctx->channel;
-    regtrace_framechan_set_streaming(channel, false);
+    /*
+     * Like the OEM frame_channel_release(), a close stops the channel if
+     * this file started it. Another open file of the same channel (or of
+     * another channel) does not touch the stream.
+     */
+    if (file && channel >= 0 && channel < REGTRACE_FRAMECHAN_COUNT &&
+        regtrace_framechan_stream_owner[channel] == file)
+        regtrace_framechan_stream_off(channel, "framechan-release");
     if (file)
         file->private_data = NULL;
     printk(KERN_INFO "tx_isp_t23_recovered: release /dev/framechan%d pid=%d comm=%s\n",
            channel, current->pid, current->comm);
+    regtrace_t23_text_check("framechan-release", (unsigned int)channel);
     return 0;
 }
 
+static long regtrace_framechan_ioctl_body(struct file *file, unsigned int cmd,
+                                           unsigned long arg);
+
 static long regtrace_framechan_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+    /* Skip the per-frame calls: the compare is too slow for them. */
+    bool check = cmd != REGTRACE_FRAMECHAN_QBUF &&
+                 cmd != REGTRACE_FRAMECHAN_DQBUF &&
+                 cmd != REGTRACE_FRAMECHAN_WAIT;
+    long ret;
+
+    if (check)
+        regtrace_t23_text_check("framechan_ioctl-enter", cmd);
+    ret = regtrace_framechan_ioctl_body(file, cmd, arg);
+    if (check)
+        regtrace_t23_text_check("framechan_ioctl-exit", cmd);
+    return ret;
+}
+
+static long regtrace_framechan_ioctl_body(struct file *file, unsigned int cmd,
+                                           unsigned long arg)
 {
     struct regtrace_framechan_context *ctx;
     int channel = -1;
@@ -15355,6 +15669,18 @@ static long regtrace_framechan_ioctl(struct file *file, unsigned int cmd, unsign
             ret = -EFAULT;
             break;
         }
+        /* New buffers: forget the old ones, which may be freed by now. */
+        if (channel >= 0 && channel < REGTRACE_FRAMECHAN_COUNT) {
+            unsigned long flags;
+
+            spin_lock_irqsave(&regtrace_framechan_done_lock, flags);
+            if (!regtrace_framechan_streaming[channel]) {
+                memset(regtrace_framechan_qbuf_userptr[channel], 0,
+                       sizeof(regtrace_framechan_qbuf_userptr[channel]));
+                regtrace_framechan_forget_qbufs_locked(channel);
+            }
+            spin_unlock_irqrestore(&regtrace_framechan_done_lock, flags);
+        }
         if (regtrace_t23_log_framechan_payloads)
             printk(KERN_INFO "tx_isp_t23_recovered: framechan%d reqbufs count=%u type=%u memory=%u ret=0\n",
                    channel, words[TX_ISP_FRAME_REQUEST_WORD_COUNT],
@@ -15391,63 +15717,28 @@ static long regtrace_framechan_ioctl(struct file *file, unsigned int cmd, unsign
                    channel, arg);
         break;
     case REGTRACE_FRAMECHAN_DQBUF:
-        ret = regtrace_framechan_repair_dqbuf(channel, arg);
+        ret = regtrace_framechan_repair_dqbuf(
+            channel, arg, file && (file->f_flags & O_NONBLOCK));
         break;
     case REGTRACE_T23_VIDIOC_STREAMON:
-        regtrace_framechan_set_streaming(channel, true);
-        regtrace_t23_enable_stream_clks();
-        if (!regtrace_t23_vic_streaming)
-            regtrace_t23_source_input_stream(1, "framechan-streamon");
-        regtrace_t23_direct_vic_input_stream(1, "framechan-streamon");
-        regtrace_t23_tisp_stream_regs(1, channel, "framechan-streamon");
-        regtrace_t23_set_msca_stream(channel, 1, "framechan-streamon");
-        regtrace_t23_direct_vic_mdma_stream(channel, 1, "framechan-streamon");
-        regtrace_t23_stream_irq_gate(1, "framechan-streamon", channel);
+        regtrace_framechan_stream_on(file, channel);
         if (regtrace_t23_log_framechan_payloads)
             printk(KERN_WARNING "tx_isp_t23_recovered: framechan%d streamon arg=0x%lx ret=0 core=%p vic=%p csi=%p fs=%p\n",
                    channel, arg, regtrace_t23_core_sd, regtrace_t23_vic_sd,
                    regtrace_t23_csi_sd, regtrace_t23_fs_sd);
         break;
     case REGTRACE_T23_VIDIOC_STREAMOFF:
-        regtrace_framechan_set_streaming(channel, false);
-        regtrace_t23_direct_vic_mdma_stream(channel, 0, "framechan-streamoff");
-        regtrace_t23_set_msca_stream(channel, 0, "framechan-streamoff");
-        if (!regtrace_t23_msca_ch_en) {
-            regtrace_t23_source_input_stream(0, "framechan-streamoff");
-            regtrace_t23_direct_vic_input_stream(0, "framechan-streamoff");
-        }
-        regtrace_t23_tisp_stream_regs(0, channel, "framechan-streamoff");
-        regtrace_t23_stream_irq_gate(0, "framechan-streamoff", channel);
+        regtrace_framechan_stream_off(channel, "framechan-streamoff");
         if (regtrace_t23_log_framechan_payloads)
             printk(KERN_WARNING "tx_isp_t23_recovered: framechan%d streamoff arg=0x%lx ret=0\n",
                    channel, arg);
         break;
-    case REGTRACE_FRAMECHAN_WAIT: {
-        /*
-         * The legacy wait blocks until a frame is done; libimp's
-         * frame_pooling_thread loops on it and OpenIMP waits on it the same
-         * way. Returning immediately added no waiting at all and made those
-         * loops spin at 100% CPU, so wait on the frame-done queue exactly as
-         * regtrace_framechan_repair_dqbuf() does - without consuming the
-         * frame, which the following DQBUF does.
-         */
-        uint32_t ready = 0;
-
-        if (channel >= 0 && channel < REGTRACE_FRAMECHAN_COUNT &&
-            regtrace_t23_source_frame_done) {
-            if (!regtrace_framechan_done_count[channel])
-                wait_event_interruptible_timeout(
-                    regtrace_framechan_done_wait[channel],
-                    regtrace_framechan_done_count[channel] ||
-                        !regtrace_framechan_streaming[channel],
-                    msecs_to_jiffies(1000));
-            ready = regtrace_framechan_done_count[channel];
-        }
-        if (arg && copy_to_user((void __user *)(uintptr_t)arg, &ready,
-                                sizeof(ready)))
-            ret = -EFAULT;
+    case REGTRACE_FRAMECHAN_WAIT:
+        /* 3afbd7ff (succeed only when a frame is ready) supersedes the
+         * upstreamed thingino 0003 wait (b8f26127), which returned 0 on
+         * STREAMOFF/timeout and let libimp index its pool with garbage. */
+        ret = regtrace_framechan_wait_frame(channel, arg);
         break;
-    }
     default:
         printk(KERN_INFO "tx_isp_t23_recovered: framechan%d ioctl cmd=0x%x arg=0x%lx ret=0 pid=%d comm=%s\n",
                channel, cmd, arg, current->pid, current->comm);
@@ -30230,6 +30521,8 @@ void private_i2c_del_driver(struct i2c_driver *driver)
 {
     regtrace_t23_release_sensor_client(driver, "private-i2c-del-driver");
     i2c_del_driver(driver);
+    /* Drop the registry slot before the sensor module's text and data go. */
+    tx_isp_sinfo_driver_del(driver);
 }
 
 
@@ -39842,43 +40135,13 @@ int tisp_deinit(int arg1)
 
 	tisp_lsc_deinit();
 
-	s0 = (uintptr_t *)&tisp_init;
-	a0 = *(int *)((char *)s0 + 12);
-	if (a0 != 0) {
-		a0 = *(int *)((char *)s0 + 36);
-		private_kfree((void *)a0);
-		*(int *)((char *)s0 + 12) = 0;
-	}
-	a0 = *(int *)((char *)s0 + 36);
-	if (a0 != 0) {
-		a0 = *(int *)((char *)s0 + 60);
-		private_kfree((void *)a0);
-		*(int *)((char *)s0 + 36) = 0;
-	}
-	a0 = *(int *)((char *)s0 + 60);
-	if (a0 != 0) {
-		a0 = *(int *)((char *)s0 + 72);
-		private_kfree((void *)a0);
-		*(int *)((char *)s0 + 60) = 0;
-	}
-	a0 = *(int *)((char *)s0 + 72);
-	if (a0 != 0) {
-		a0 = *(int *)((char *)s0 + 84);
-		private_kfree((void *)a0);
-		*(int *)((char *)s0 + 72) = 0;
-	}
-	a0 = *(int *)((char *)s0 + 84);
-	if (a0 != 0) {
-		a0 = *(int *)((char *)s0 + 96);
-		private_kfree((void *)a0);
-		*(int *)((char *)s0 + 84) = 0;
-	}
-	a0 = *(int *)((char *)s0 + 96);
-	if (a0 != 0) {
-		a0 = *(int *)((char *)s0 + 96);
-		private_kfree((void *)a0);
-		*(int *)((char *)s0 + 96) = 0;
-	}
+	/*
+	 * The OEM frees the statistics buffers it keeps in tispinfo here.
+	 * The recovered code read them from &tisp_init, i.e. from this
+	 * module's text, kfree()d instruction words and zeroed instructions.
+	 * This driver keeps its statistics buffers in
+	 * regtrace_t23_core_dma_bufs, freed by cleanup_module().
+	 */
 
 	s0 = (uintptr_t *)&tparams_day;
 	a0 = *(int *)((char *)s0 + 0);
@@ -78088,7 +78351,11 @@ int tiziano_deflicker_expt(uint32_t flicker_t, uint32_t param2, uint32_t param3,
     s1_saved = *(uint32_t *)(s8 + 28);
     s0_saved = *(uint32_t *)(s8 + 24);
 
-    *(uint32_t *)((char *)&get_clk_name + 17108) = 1;
+    /*
+     * OEM: sw 1 to .data+0x342d4, which is IspAeFlag + 0x18. The recovered
+     * &get_clk_name + 17108 wrote into this module's text instead.
+     */
+    ((uint32_t *)(void *)IspAeFlag)[6] = 1;
 
     *(uint32_t *)(s8 + 60) = ra_saved;
     *(uint32_t *)(s8 + 56) = s8_saved;
@@ -90862,8 +91129,14 @@ int32_t tiziano_mdns_init(uint32_t arg1, uint32_t arg2)
     *(uint32_t *)((char *)((char *)&mdns_c_fiir_fus_wei7_array_now)) = (uint32_t)&mdns_c_fiir_fus_wei7_array;
     *(uint32_t *)((char *)((char *)&mdns_c_fiir_fus_wei8_array_now)) = (uint32_t)&mdns_c_fiir_fus_wei8_array;
     regtrace_t23_source_mdns_gain_old = 0xffffffffU;
-    *(uint32_t *)((char *)&get_clk_name + 19064) = arg1;
-    *(uint32_t *)((char *)&get_clk_name + 19060) = arg2;
+    /*
+     * The OEM stores arg1/arg2 into its static vin_width/vin_height
+     * (.data+0x34a78/0x34a74), already kept above in
+     * regtrace_t23_mdns_frame_width/height. The recovered stores went to
+     * &get_clk_name + 0x4a78/0x4a74, which is this module's own text
+     * (text+0x4e90/0x4e94): every ISP stream start overwrote two
+     * instructions with the frame height and width.
+     */
     ret = tiziano_mdns_params_refresh();
     if (ret)
         return ret;
@@ -93158,8 +93431,18 @@ int tisp_s_adr_enable(int arg1, int arg2)
     s1 = v0;
 
     if (s0 == 1) {
-        tiziano_adr_init(s2, *(int *)((char *)&sensor_init + 0),
-                         *(int *)((char *)&sensor_init + 4));
+        /*
+         * OEM: sensor_info width and height. The recovered code read two
+         * instruction words of sensor_init() instead.
+         */
+        uint32_t width = regtrace_t23_get_le32(sensor_info + 0);
+        uint32_t height = regtrace_t23_get_le32(sensor_info + 4);
+
+        if (!width || !height) {
+            width = regtrace_t23_source_sensor_width;
+            height = regtrace_t23_source_sensor_height;
+        }
+        tiziano_adr_init(s2, width, height);
         a1_val = (uintptr_t)s1 & 0xffffff7f;
     } else {
         a1_val = (uintptr_t)s1 | 0x80;
@@ -100050,6 +100333,8 @@ int32_t init_module(void)
         regtrace_t23_vin_proc_exit();
         tx_isp_sinfo_exit();
     }
+    if (!ret)
+        regtrace_t23_text_check("module-init", 0);
     return ret;
 #endif
     return tx_isp_init();
@@ -100059,6 +100344,8 @@ int32_t init_module(void)
 void cleanup_module(void)
 {
 #ifdef REGTRACE_KERNEL_TREE_BUILD
+    vfree(regtrace_t23_text_snap);
+    regtrace_t23_text_snap = NULL;
     regtrace_framechan_set_streaming(0, false);
     regtrace_framechan_set_streaming(1, false);
     regtrace_framechan_set_streaming(2, false);
