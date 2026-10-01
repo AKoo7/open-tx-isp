@@ -31799,55 +31799,20 @@ tiziano_gib_dn_params_refresh0x4c:
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000017588 origin=fragment_seed original=tiziano_gib_deir_reg */
 int32_t tiziano_gib_deir_reg(uint32_t a0, uint32_t a1, uint32_t a2)
 {
-    uint32_t local_10 = 0;
-    uint32_t local_14 = 0;
-    uint32_t local_18 = 0;
-    uint32_t local_1c = 0;
-    uint32_t local_20 = 0;
-    uint32_t local_24 = 0;
-    uint32_t local_28 = 0;
-    uint32_t local_2c = 0;
-    uint32_t ra = 0;
-    uint32_t s0 = 0;
-    uint32_t s1 = 0;
-    uint32_t s2 = 0;
-    uint32_t s3 = 0;
-    uint32_t s4 = 0;
-    uint32_t s5 = 0;
-    uint32_t s6 = 0;
-    uintptr_t *v0 = 0;
+	/* OEM @0x16ca8: three 32-entry tables at 0x8000/0x8080/0x8100, each
+	 * word = x[i + 1] << 12 | x[i].  The recovered loop advanced the
+	 * offset before the third write, shifting it to 0x8104..0x8180. */
+	const uint32_t *r = (const uint32_t *)(uintptr_t)a0;
+	const uint32_t *g = (const uint32_t *)(uintptr_t)a1;
+	const uint32_t *b = (const uint32_t *)(uintptr_t)a2;
+	uint32_t i;
 
-    /* fragment 0: Prologue */
-    /* function prologue: stack frame and callee-saved register setup */
-
-    /* fragment 1: CallSetup */
-    s4 = a0;
-    s3 = a1;
-    s2 = a2;
-    s0 = 32768;
-    s6 = (uintptr_t)&system_reg_write;
-    s5 = 32896;
-    v0 = s4 + s0;
-
-tiziano_gib_deir_reg0x40:
-    /* fragment 2: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(s0, ((*(uint32_t *)((char *)((uintptr_t)v0) + -32764)) << 12) | (*(uint32_t *)((char *)((uintptr_t)v0) + -32768))); /* jalr target resolved by relocation */
-
-    /* fragment 3: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(s0 + 128, ((*(uint32_t *)((char *)(s3 + s0) + -32764)) << 12) | (*(uint32_t *)((char *)(s3 + s0) + -32768))); /* jalr target resolved by relocation */
-
-    /* fragment 4: CallSetup */
-    s0 = s0 + 4;
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(s0 + 256, ((*(uint32_t *)((char *)(s2 + s0) + -32764)) << 12) | (*(uint32_t *)((char *)(s2 + s0) + -32768))); /* jalr target resolved by relocation */
-
-    /* fragment 5: Branch */
-    v0 = s4 + s0;
-    if (s0 != s5) { goto tiziano_gib_deir_reg0x40; }
-
-    /* fragment 6: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    return 0;
+	for (i = 0; i < 0x20; i++) {
+		system_reg_write(0x8000 + i * 4, (r[i + 1] << 12) | r[i]);
+		system_reg_write(0x8080 + i * 4, (g[i + 1] << 12) | g[i]);
+		system_reg_write(0x8100 + i * 4, (b[i + 1] << 12) | b[i]);
+	}
+	return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000017650 origin=model_output original=tiziano_gib_deir_interpolate */
@@ -32979,7 +32944,7 @@ int32_t tisp_dmsc_uu_par_cfg(void)
 int32_t tisp_dmsc_alias_par_cfg(void)
 {
     uint32_t dir_thres = dmsc_alias_dir_thres_intp;
-    uint32_t par_array = dmsc_alias_par_array;
+    uint32_t par_array = *(uint32_t *)dmsc_alias_par_array;	/* OEM lw 0(par); was the array address */
     uint32_t stren_intp = dmsc_alias_stren_intp;
     uint32_t thres_1 = dmsc_alias_thres_1_intp;
     uint32_t thres_2 = dmsc_alias_thres_2_intp;
@@ -39260,7 +39225,8 @@ int32_t tisp_dpc_d_par_cfg(void)
 	m1 = (uint32_t *)&dpc_d_m1_con_par_array;
 	m2 = (uint32_t *)&dpc_d_m2_con_par_array;
 
-	s1 = (m1[0] << 26) | (m1[1] << 25) | m1[3] | (m2[0] << 24) |
+	/* OEM @0x230ec: bit 0.. comes from dpc_d_m2_con_par[2] */
+	s1 = (m1[0] << 26) | (m1[1] << 25) | m2[2] | (m2[0] << 24) |
 		(m2[1] << 23) | (m1[4] << 1) | (a1 << 22) | ((uintptr_t)a0 << 21) |
 		(v1 << 20) | ((uintptr_t)v0 << 19) | (a1 << 18) | ((uintptr_t)a0 << 17) |
 		(v1 << 16) | ((uintptr_t)v0 << 15) | ((uintptr_t)a0 << 14) | (v1 << 13) |
@@ -39387,11 +39353,11 @@ int32_t tisp_ctr_par_cfg(void)
 
 	system_reg_write(0x258, a1);
 
+	/* OEM @0x23648: both scaled terms come from ctr_con_par[4] */
 	v = p[4];
 	a1 = (v * 63) >> 4;
-	v = p[3];
-	a1 |= v << 0x10;
 	a1 |= ((v * 255) >> 4) << 6;
+	a1 |= p[3] << 0x10;
 	system_reg_write(0x25c, a1);
 
 	a1 = ctr_eh_thres_intp << 0x10;
@@ -41748,9 +41714,14 @@ int32_t tiziano_adr_params_init(void)
 	system_reg_write(0xe14, (coc[14] << 24) | (coc[13] << 16) | coc[11] | (coc[12] << 8));
 	system_reg_write(0xe18, (coc[18] << 24) | (coc[17] << 16) | coc[15] | (coc[16] << 8));
 	system_reg_write(0xe1c, (coc[20] << 8) | coc[19]);
-	system_reg_write(0xe08, (coc[5] << 16) | coc[4]);
-	system_reg_write(0xe0c, (coc[7] << 16) | coc[6]);
-	system_reg_write(0xe10, coc[3]);
+	/* OEM @0x2830c: these three come from param_adr_ct_par_array */
+	{
+		const uint32_t *ctp = (const uint32_t *)&param_adr_ct_par_array;
+
+		system_reg_write(0xe08, (ctp[5] << 16) | ctp[4]);
+		system_reg_write(0xe0c, (ctp[7] << 16) | ctp[6]);
+		system_reg_write(0xe10, ctp[3]);
+	}
 
 	system_reg_write(0xe20, (st[1] << 16) | st[0]);
 	system_reg_write(0xe24, (st[3] << 16) | st[2]);
