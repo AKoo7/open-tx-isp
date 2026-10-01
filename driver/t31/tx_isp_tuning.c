@@ -3793,6 +3793,10 @@ static DECLARE_COMPLETION(ae_algo_comp);
 
 /* AE histogram data — must be before tisp_ae_get_hist_custome usage */
 static uint8_t tisp_ae_hist[0x42c];
+/* Histogram record: 256 bins, five bucket sums at +0x400, the four
+ * SetAeHist bucket edges at +0x414 (OEM 0xc4b80) and the node counts at
+ * +0x424, defaults set by tiziano_ae_init.  Each frame only refreshes the
+ * bins and buckets. */
 static uint8_t tisp_ae_hist_last[0x42c];
 static DEFINE_SPINLOCK(ae_hist_lock);  /* OEM: protects tisp_ae_hist_last access */
 static uint32_t ae_hist_bins[256];
@@ -5138,14 +5142,28 @@ static int tisp_ae0_get_hist(void *buffer, int mode, int flag)
     uint32_t mid2_sum = 0;
     uint32_t mid3_sum = 0;
     uint32_t bright_sum = 0;
-    uint32_t dark_end = 0x0d;
-    uint32_t mid1_end = 0x40;
-    uint32_t mid2_end = 0x90;
-    uint32_t mid3_end = 0xc0;
+    uint32_t edge[4];
+    uint32_t dark_end, mid1_end, mid2_end, mid3_end;
     int i;
 
     if (!buffer)
         return -EINVAL;
+
+    /* OEM 0x4f344 takes the bucket edges from the SetAeHist block each
+     * frame (memcpy 0xc4b80 under the histogram lock). */
+    spin_lock_irqsave(&ae_hist_lock, irq_flags);
+    memcpy(edge, tisp_ae_hist_last + 0x414, sizeof(edge));
+    spin_unlock_irqrestore(&ae_hist_lock, irq_flags);
+    for (i = 0; i < 4; i++) {
+        if (edge[i] > 256)
+            edge[i] = 256;
+        if (i && edge[i] < edge[i - 1])
+            edge[i] = edge[i - 1];
+    }
+    dark_end = edge[0];
+    mid1_end = edge[1];
+    mid2_end = edge[2];
+    mid3_end = edge[3];
 
     memset(tisp_ae_hist, 0, sizeof(tisp_ae_hist));
 
@@ -5198,8 +5216,10 @@ static int tisp_ae0_get_hist(void *buffer, int mode, int flag)
         hist_words[0x104] = 0;
     }
 
+    /* bins and bucket sums only (OEM copies 0x400 + 0x14): the SetAeHist
+     * edges at +0x414 and the node counts stay as set */
     spin_lock_irqsave(&ae_hist_lock, irq_flags);
-    memcpy(tisp_ae_hist_last, tisp_ae_hist, sizeof(tisp_ae_hist));
+    memcpy(tisp_ae_hist_last, tisp_ae_hist, 0x414);
     spin_unlock_irqrestore(&ae_hist_lock, irq_flags);
 
     pr_debug("AE0 histogram unpacked from DMA: mode=%d flag=%d total=%u\n",
@@ -17099,7 +17119,6 @@ static void (*irq_func_cb[32])(void) = {NULL};
 
 /* AE parameter addresses - Safe structure-based access */
 static uint32_t *data_d04b8 = &data_b0cfc;
-static uint32_t data_d04bc[6] = {0x0d0b00, 0x040d0b00, 0x080d0b00, 0x0c0d0b00, 0x100d0b00, 0x140d0b00};
 static uint32_t *data_d04c4 = &data_afcd4;
 
 /* AE exposure threshold parameters */
@@ -17498,8 +17517,10 @@ int tiziano_ae_init(uint32_t height, uint32_t width,
     /* Binary Ninja EXACT: memset(&tisp_ae_hist, 0, 0x42c) */
     memset(&tisp_ae_hist, 0, 0x42c);
 
-    /* Binary Ninja EXACT: __builtin_memcpy(&data_d4fbc, "\x0d\x00\x00\x00\x40\x00\x00\x00\x90\x00\x00\x00\xc0\x00\x00\x00\x0f\x00\x00\x00\x0f\x00\x00\x00", 0x18) */
-    memcpy(&data_d04bc, init_data, 0x18);
+    /* Binary Ninja EXACT: __builtin_memcpy(&data_d4fbc, "\x0d\x00\x00\x00\x40\x00\x00\x00\x90\x00\x00\x00\xc0\x00\x00\x00\x0f\x00\x00\x00\x0f\x00\x00\x00", 0x18)
+     * data_d4fbc is tisp_ae_hist + 0x414: default bucket edges 13/64/144/192
+     * and 15x15 nodes, copied into the published record below. */
+    memcpy(tisp_ae_hist + 0x414, init_data, 0x18);
 
     /* Binary Ninja EXACT: memcpy(&tisp_ae_hist_last, &tisp_ae_hist, 0x42c) */
     memcpy(&tisp_ae_hist_last, &tisp_ae_hist, 0x42c);
