@@ -21618,7 +21618,12 @@ int32_t tisp_channel_stop_save(void)
     reg_val = system_reg_read(0x2304);
     ch_en = reg_val & 7;
     ch_en_masked = reg_val & 0xfffffff8;
-    *(uint32_t *)((char *)&dump_vic_reg + 0x2944) = ch_en;
+    /*
+     * OEM: sw to .bss ch_en_value, which tisp_channel_start_restore() reads
+     * back. The recovered store went to &dump_vic_reg + 0x2944, i.e. into
+     * this module's own text, on every channel attribute change.
+     */
+    *(uint32_t *)ch_en_value = ch_en;
     system_reg_write(0x2304, ch_en_masked);
     timeout = 0xbb9;
     ch_status = system_reg_read(0x2308);
