@@ -4475,6 +4475,25 @@ static uint32_t t21_ae_current_sensor_dgain_q10;
 static uint32_t t21_ae_current_isp_dgain_q10;
 static uint32_t t21_ae_measured_luma;
 static uint32_t t21_ae_frame_count;
+/*
+ * AE loop shaping for the reconstructed controller.  The luma it measures
+ * lags the exposure it writes (sensor IT/gain latch two frames late, the
+ * ISP digital gain at the next frame start, and the statistics DMA a frame
+ * behind that), so a full proportional step every third frame overshoots:
+ * once IT and analogue gain are pinned at night the ISP digital gain
+ * hunted 1.14x..1.72x with a ~0.6 s period, which the picture shows as
+ * flicker.  Each step now multiplies the exposure by the 2^ae_step_shift-th
+ * root of target/luma (a fraction of the error in the log domain, stable
+ * against one or two steps of lag in a host model), and the exposure is
+ * held while the measured luma is within ae_hold_pct percent of the
+ * target.
+ */
+static int ae_step_shift = 2;
+module_param(ae_step_shift, int, 0644);
+MODULE_PARM_DESC(ae_step_shift, "T21 AE: step by (target/luma)^(1/2^n) (0 = full step)");
+static int ae_hold_pct = 8;
+module_param(ae_hold_pct, int, 0644);
+MODULE_PARM_DESC(ae_hold_pct, "T21 AE: hold the exposure while luma is within this percent of the target");
 static uint32_t t21_ae_scene_cfg[11];
 static uint32_t nodes_num;
 static unsigned char af_array_fird0[900];
@@ -46997,6 +47016,7 @@ int32_t tisp_ae_process(void)
 	u32 current_ev;
 	u32 *reg = (u32 *)_ae_reg;
 	u32 *result = (u32 *)_ae_result;
+	bool hold = false;
 
 	BUILD_BUG_ON(sizeof(*ae_ctrl) != sizeof(tisp_ae_ctrls));
 	BUILD_BUG_ON(offsetof(struct t21_ae_ctrls_view, sensor_dgain) != 0x08);
@@ -47054,56 +47074,86 @@ int32_t tisp_ae_process(void)
 	target = t21_ae_target_for_exposure(current_ev);
 	if (target < 20 || target > 160)
 		target = 64;
-	desired = current_exposure * target;
-	desired = div_u64(desired, luma);
+	{
+		u32 tol = target * (u32)clamp_t(int, ae_hold_pct, 0, 50) / 100;
+		u32 shift = (u32)clamp_t(int, ae_step_shift, 0, 4);
+
+		if (luma + tol >= target && luma <= target + tol) {
+			hold = true;
+			desired = current_exposure;
+		} else {
+			/* desired = current * (target/luma)^(1/2^shift), at
+			 * most 8x either way per step.  Moving in the log
+			 * domain converges against a luma that lags one or two
+			 * AE steps; the old full step oscillated against one. */
+			u32 ratio = (u32)min_t(u64, div_u64((u64)target << 10, luma),
+					       64U << 10);
+			u32 i;
+
+			for (i = 0; i < shift; i++)
+				ratio = int_sqrt((unsigned long)ratio << 10);
+			ratio = clamp_t(u32, ratio, 1024 / 8, 1024 * 8);
+			desired = div_u64(current_exposure * ratio, 1024);
+		}
+	}
 	max_exposure = (u64)max_it * max_again;
 	max_exposure = div_u64(max_exposure * max_sensor_dgain, 1024);
 	max_exposure = div_u64(max_exposure * max_isp_dgain, 1024);
+	/* A lowered limit (day/night max ISP dgain, IT cap) is applied even
+	 * inside the hold band. */
+	if (hold && (current_exposure > max_exposure ||
+		     t21_ae_current_it > max_it ||
+		     t21_ae_current_isp_dgain_q10 > max_isp_dgain))
+		hold = false;
 	if (desired < (u64)min_it * 1024U)
 		desired = (u64)min_it * 1024U;
 	if (desired > max_exposure)
 		desired = max_exposure;
 
-	/* Stock spends integration time first, then sensor analogue/digital gain,
-	 * and uses ISP digital gain for the remaining budget and sensor
-	 * quantisation error.  The active tuning bank and sensor descriptor own
-	 * every limit and quantisation decision. */
-	new_it = div_u64(desired + 1023, 1024);
-	new_it = clamp_t(u32, new_it, min_it, max_it);
-	total_gain_q10 = div_u64(desired + new_it - 1, new_it);
-	requested_again = clamp_t(u32, total_gain_q10, 1024, max_again);
-	requested_sensor_dgain = div_u64((u64)total_gain_q10 * 1024 +
-					 requested_again - 1,
-					 requested_again);
-	requested_sensor_dgain = clamp_t(u32, requested_sensor_dgain,
-					  1024, max_sensor_dgain);
+	/* Holding: the sensor and the ISP digital gain keep what they have; no
+	 * register or I2C writes, so quantisation cannot dither them. */
+	if (!hold) {
+		/* Stock spends integration time first, then sensor analogue/digital gain,
+		 * and uses ISP digital gain for the remaining budget and sensor
+		 * quantisation error.  The active tuning bank and sensor descriptor own
+		 * every limit and quantisation decision. */
+		new_it = div_u64(desired + 1023, 1024);
+		new_it = clamp_t(u32, new_it, min_it, max_it);
+		total_gain_q10 = div_u64(desired + new_it - 1, new_it);
+		requested_again = clamp_t(u32, total_gain_q10, 1024, max_again);
+		requested_sensor_dgain = div_u64((u64)total_gain_q10 * 1024 +
+						 requested_again - 1,
+						 requested_again);
+		requested_sensor_dgain = clamp_t(u32, requested_sensor_dgain,
+						  1024, max_sensor_dgain);
 
-	if (ctrl->start_changes)
-		ctrl->start_changes();
-	ctrl->set_integration_time(new_it & 0xffff);
-	t21_ae_current_it = new_it;
-	actual_again = tisp_set_sensor_analog_gain(requested_again);
-	actual_sensor_dgain =
-		tisp_set_sensor_digital_gain(requested_sensor_dgain);
-	if (ctrl->end_changes)
-		ctrl->end_changes();
-	actual_again = max_t(u32, actual_again, 1);
-	actual_sensor_dgain = max_t(u32, actual_sensor_dgain, 1);
-	actual_sensor_gain = (u64)actual_again * actual_sensor_dgain;
-	isp_dgain = div_u64((u64)total_gain_q10 * 1024 * 1024,
-				 actual_sensor_gain);
-	isp_dgain = clamp_t(u32, isp_dgain, 1024, max_isp_dgain);
-	t21_ae_current_gain_q10 = actual_again;
-	t21_ae_current_sensor_dgain_q10 = actual_sensor_dgain;
-	t21_ae_current_isp_dgain_q10 = isp_dgain;
+		if (ctrl->start_changes)
+			ctrl->start_changes();
+		ctrl->set_integration_time(new_it & 0xffff);
+		t21_ae_current_it = new_it;
+		actual_again = tisp_set_sensor_analog_gain(requested_again);
+		actual_sensor_dgain =
+			tisp_set_sensor_digital_gain(requested_sensor_dgain);
+		if (ctrl->end_changes)
+			ctrl->end_changes();
+		actual_again = max_t(u32, actual_again, 1);
+		actual_sensor_dgain = max_t(u32, actual_sensor_dgain, 1);
+		actual_sensor_gain = (u64)actual_again * actual_sensor_dgain;
+		isp_dgain = div_u64((u64)total_gain_q10 * 1024 * 1024,
+					 actual_sensor_gain);
+		isp_dgain = clamp_t(u32, isp_dgain, 1024, max_isp_dgain);
+		t21_ae_current_gain_q10 = actual_again;
+		t21_ae_current_sensor_dgain_q10 = actual_sensor_dgain;
+		t21_ae_current_isp_dgain_q10 = isp_dgain;
 
-	JZ_Isp_Ae_Dg2reg(10, dg_regs, isp_dgain, linear_pair);
-	system_reg_write_ae(2, 0x408, dg_regs[0]);
-	system_reg_write_ae(2, 0x40c, dg_regs[1]);
+		JZ_Isp_Ae_Dg2reg(10, dg_regs, isp_dgain, linear_pair);
+		system_reg_write_ae(2, 0x408, dg_regs[0]);
+		system_reg_write_ae(2, 0x40c, dg_regs[1]);
+	}
 
 	/* Keep the OEM result/control records coherent for userspace queries and
 	 * for the downstream gain-driven tuning callbacks. */
-	reg[1] = isp_dgain;
+	reg[1] = t21_ae_current_isp_dgain_q10;
 	reg[2] = t21_ae_current_it;
 	reg[3] = t21_ae_current_gain_q10;
 	memcpy(result, reg, sizeof(_ae_result));
