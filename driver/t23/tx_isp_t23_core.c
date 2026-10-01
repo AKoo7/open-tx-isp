@@ -9617,6 +9617,9 @@ static int regtrace_t23_sensor_registered;
 #define REGTRACE_TISP_CTRL_TOTAL_GAIN TX_ISP_TUNING_CMD_TOTAL_GAIN
 #define REGTRACE_TISP_CTRL_AE_LUMA TX_ISP_TUNING_CMD_AE_LUMA
 #define REGTRACE_TISP_CTRL_CUSTOM_MODE 0x080000e7U
+#define REGTRACE_TISP_CTRL_AE_COMP TX_ISP_TUNING_CMD_AE_COMP
+#define REGTRACE_TISP_CTRL_SINTER TX_ISP_TUNING_CMD_SINTER
+#define REGTRACE_TISP_CTRL_RUNNING_MODE TX_ISP_TUNING_CMD_T31_RUNNING_MODE
 #define REGTRACE_TISP_TOTAL_GAIN_1X (1U << 8)
 #define REGTRACE_TISP_AE_LUMA_DAY 80U
 #define REGTRACE_TISP_WB_GAIN_NEUTRAL 256U
@@ -9625,6 +9628,11 @@ static int regtrace_t23_sensor_registered;
 
 int32_t tisp_cust_mode_s_ctrl(uint32_t arg1, uint32_t arg2);
 uint32_t tisp_cust_mode_g_ctrl(void);
+int32_t tisp_ae_s_comp(uint32_t a0);
+char tisp_ae_g_comp(uint32_t a0, char *arg2);
+uint8_t tisp_ae_g_luma(uint8_t *arg1);
+int64_t tisp_day_or_night_s_ctrl(uintptr_t a0, uint32_t a1);
+int32_t tisp_day_or_night_g_ctrl(uint32_t a0);
 int32_t system_reg_write(uint32_t a0, uint32_t a1);
 int32_t system_reg_read(uint32_t a0);
 int32_t tisp_simple_intp(int32_t arg1, int32_t arg2, void *arg3);
@@ -14466,6 +14474,104 @@ static long regtrace_isp_m0_control(unsigned int cmd, unsigned long arg)
     return ret;
 }
 
+/*
+ * Inline-value tuning controls of the T23 1.3.0 libimp that the recovered
+ * driver can serve directly.  They follow the OEM s_ctrl/g_ctrl handlers:
+ *
+ *   0x8000023 AE compensation  tisp_set_ae_comp -> tisp_ae_s_comp, and
+ *                              tisp_get_ae_comp -> tisp_ae_g_comp
+ *   0x8000033 AE luma (get)    tisp_get_ae_luma -> tisp_ae_g_luma
+ *   0x8000086 sinter strength  tisp_s_2dns_ratio -> tisp_s_sdns_ratio; the
+ *                              ratio is kept in sdns_ratio and replayed by
+ *                              the SDNS tuning load when SDNS starts later
+ *   0x80000e1 running mode     day (0) or night (1) parameter bank; an
+ *                              unchanged mode is not reapplied.  The OEM
+ *                              defers the bank switch to the next frame
+ *                              interrupt; like the custom-mode control on
+ *                              isp-m0, this driver applies it directly.
+ *   0x80000e7 custom mode      tisp_cust_mode_s_ctrl/g_ctrl, the handler
+ *                              the G/S_CTRL form of this control uses
+ *
+ * Returns 1 when the control was handled (its result in *ret), 0 when the
+ * caller should look further.  The driver has one sensor; other sensor
+ * numbers are rejected.
+ */
+static int regtrace_isp_m0_value_control(
+    struct tx_isp_tuning_t23_ext_control *ctrl, long *ret)
+{
+    bool get;
+    uint32_t value;
+
+    switch (ctrl->id) {
+    case REGTRACE_TISP_CTRL_AE_COMP:
+    case REGTRACE_TISP_CTRL_AE_LUMA:
+    case REGTRACE_TISP_CTRL_SINTER:
+    case REGTRACE_TISP_CTRL_RUNNING_MODE:
+    case REGTRACE_TISP_CTRL_CUSTOM_MODE:
+        break;
+    default:
+        return 0;
+    }
+
+    if (ctrl->count > 1 || ctrl->sensor != 0) {
+        *ret = -EINVAL;
+        return 1;
+    }
+    get = ctrl->count == 1;
+    value = ctrl->value_or_ptr;
+    *ret = 0;
+
+    switch (ctrl->id) {
+    case REGTRACE_TISP_CTRL_AE_COMP:
+        if (get)
+            ctrl->value_or_ptr = (uint8_t)tisp_ae_g_comp(0, NULL);
+        else
+            *ret = tisp_ae_s_comp(value & 0xffU);
+        break;
+    case REGTRACE_TISP_CTRL_AE_LUMA:
+        if (get)
+            ctrl->value_or_ptr = tisp_ae_g_luma(NULL);
+        else
+            *ret = -EINVAL;
+        break;
+    case REGTRACE_TISP_CTRL_SINTER:
+        if (get) {
+            memcpy(&value, sdns_ratio, sizeof(value));
+            ctrl->value_or_ptr = value;
+        } else if (value > 0xffU) {
+            *ret = -EINVAL;
+        } else if (regtrace_t23_source_sdns_initialized) {
+            *ret = tisp_s_sdns_ratio(value);
+        } else {
+            memcpy(sdns_ratio, &value, sizeof(value));
+        }
+        break;
+    case REGTRACE_TISP_CTRL_RUNNING_MODE:
+        if (get) {
+            int32_t mode = tisp_day_or_night_g_ctrl(0);
+
+            if (mode < 0)
+                *ret = mode;
+            else
+                ctrl->value_or_ptr = (uint32_t)mode & 1U;
+        } else if (value > 1U) {
+            *ret = -EINVAL;
+        } else if ((uint32_t)tisp_day_or_night_g_ctrl(0) != value) {
+            *ret = (long)tisp_day_or_night_s_ctrl(0, value);
+        }
+        break;
+    case REGTRACE_TISP_CTRL_CUSTOM_MODE:
+        if (get)
+            ctrl->value_or_ptr = tisp_cust_mode_g_ctrl();
+        else if (value > 1U)
+            *ret = -EINVAL;
+        else
+            *ret = tisp_cust_mode_s_ctrl(0, value);
+        break;
+    }
+    return 1;
+}
+
 static long regtrace_isp_m0_ext_control(unsigned long arg)
 {
     static const struct tx_isp_tuning_cmd_desc routes[] = {
@@ -14473,8 +14579,6 @@ static long regtrace_isp_m0_ext_control(unsigned long arg)
           TX_ISP_TUNING_DIR_GET | TX_ISP_TUNING_DIR_SET,
           TX_ISP_TUNING_PAYLOAD_INLINE },
         { REGTRACE_TISP_CTRL_TOTAL_GAIN, 4, TX_ISP_TUNING_DIR_GET,
-          TX_ISP_TUNING_PAYLOAD_INLINE },
-        { REGTRACE_TISP_CTRL_AE_LUMA, 4, TX_ISP_TUNING_DIR_GET,
           TX_ISP_TUNING_PAYLOAD_INLINE },
         { REGTRACE_TISP_CTRL_WB_STATIS, 4, TX_ISP_TUNING_DIR_GET,
           TX_ISP_TUNING_PAYLOAD_INLINE },
@@ -14491,6 +14595,12 @@ static long regtrace_isp_m0_ext_control(unsigned long arg)
         return -EINVAL;
     if (copy_from_user(&ctrl, (const void __user *)arg, sizeof(ctrl)))
         return -EFAULT;
+
+    if (regtrace_isp_m0_value_control(&ctrl, &ret)) {
+        if (ret)
+            return ret;
+        goto copy_out;
+    }
 
     if (regtrace_isp_m0_is_image_control(ctrl.id)) {
         if (ctrl.count == 0)
@@ -14530,9 +14640,6 @@ static long regtrace_isp_m0_ext_control(unsigned long arg)
     switch (ctrl.id) {
     case REGTRACE_TISP_CTRL_TOTAL_GAIN:
         ctrl.value_or_ptr = REGTRACE_TISP_TOTAL_GAIN_1X;
-        break;
-    case REGTRACE_TISP_CTRL_AE_LUMA:
-        ctrl.value_or_ptr = REGTRACE_TISP_AE_LUMA_DAY;
         break;
     case REGTRACE_TISP_CTRL_WB_STATIS:
         ctrl.value_or_ptr = (REGTRACE_TISP_WB_GAIN_NEUTRAL << 16) |
