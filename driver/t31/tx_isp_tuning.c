@@ -7802,7 +7802,9 @@ static int tisp_g_ev_attr(uint32_t *ev_buffer, struct isp_tuning_data *tuning)
 	/* Applied gains, followed by their combined linear Q10 gain. */
 	ev_buffer[4] = tisp_log2_fixed_to_fixed(data_c46a0, 10, 5);
 	ev_buffer[5] = tisp_log2_fixed_to_fixed(data_c46ac, 10, 5);
-	ev_buffer[6] = data_c46c4 & 0xffff;
+	/* OEM: zx.d(data_c46c4:2.w), the integer part of the Q16 log2 total
+	 * gain ("ISP Tgain DB"); the low half is only the fraction */
+	ev_buffer[6] = data_c46c4 >> 16;
 	total = fix_point_mult2_32(10, data_c46a0, data_c46ac);
 	ev_buffer[7] = total >> 2;
 
@@ -7810,7 +7812,10 @@ static int tisp_g_ev_attr(uint32_t *ev_buffer, struct isp_tuning_data *tuning)
 	ev_buffer[8] = tisp_log2_fixed_to_fixed(data_c46b0 + 4, 10, 5);
 	ev_buffer[9] = tisp_log2_fixed_to_fixed(data_c46bc + 4, 10, 5);
 	ev_buffer[10] = tisp_log2_fixed_to_fixed(data_c46a4, 10, 5);
-	ev_buffer[11] = tisp_log2_fixed_to_fixed(0x400, 10, 5);
+	/* OEM: log2 of data_c46b4, the AE0 sensor digital gain limit (Q10),
+	 * which this driver keeps in tisp_ae_ctrls[6] */
+	ev_buffer[11] = tisp_log2_fixed_to_fixed(tisp_ae_ctrls[6] ?
+						 tisp_ae_ctrls[6] : 0x400, 10, 5);
 	ev_buffer[12] = data_c46d0;
 
 	/* Preserve the OEM sparse halfword layout at offsets 0x6c/0x6e/0x7c.
