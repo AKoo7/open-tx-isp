@@ -42,6 +42,7 @@ int fs_slake_module(struct tx_isp_subdev *sd);
 int frame_channel_open(struct inode *inode, struct file *file);
 int frame_channel_release(struct inode *inode, struct file *file);
 long frame_channel_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
+unsigned int frame_channel_poll(struct file *file, struct poll_table_struct *wait);
 
 /* fs_slake_module - EXACT Binary Ninja reference implementation */
 int fs_slake_module(struct tx_isp_subdev *sd)
@@ -208,6 +209,7 @@ static const struct file_operations fs_channel_ops = {
     .release = frame_channel_release,
     .unlocked_ioctl = frame_channel_unlocked_ioctl,
     .compat_ioctl = frame_channel_unlocked_ioctl,
+    .poll = frame_channel_poll,
     .llseek = default_llseek,
 };
 

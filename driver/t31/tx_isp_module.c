@@ -2642,7 +2642,29 @@ int frame_channel_release(struct inode *inode, struct file *file)
     return 0;
 }
 
-static unsigned int frame_channel_poll(struct file *file, poll_table *wait)
+/* True if DQBUF would find a DMA-complete slot. frame_chan_event marks the
+ * slot DONE before it bumps frame_ready_count and wakes frame_wait. */
+static bool frame_channel_has_done_slot(struct frame_channel_device *fcd)
+{
+    unsigned long flags;
+    bool done = false;
+    int bi;
+
+    spin_lock_irqsave(&fcd->oem_buf_lock, flags);
+    for (bi = 0; bi < fcd->oem_buf_count && bi < 64; bi++) {
+        if (fcd->oem_bufs[bi].state == TX_ISP_FRAME_SLOT_DONE) {
+            done = true;
+            break;
+        }
+    }
+    spin_unlock_irqrestore(&fcd->oem_buf_lock, flags);
+    return done;
+}
+
+/* POLLIN only when DQBUF can return a frame, POLLERR when not streaming
+ * (as vb2_poll). frame_wait is woken by frame_chan_event for every
+ * completed frame and by STREAMOFF/release. */
+unsigned int frame_channel_poll(struct file *file, poll_table *wait)
 {
     struct frame_channel_device *fcd = file->private_data;
     struct tx_isp_channel_state *state;
@@ -2654,13 +2676,16 @@ static unsigned int frame_channel_poll(struct file *file, poll_table *wait)
     poll_wait(file, &state->frame_wait, wait);
     if (!state->streaming)
         return POLLERR;
-    if (atomic_read(&state->frame_ready_count) > 0)
+    if (atomic_read(&state->frame_ready_count) > 0 &&
+        frame_channel_has_done_slot(fcd))
         return POLLIN | POLLRDNORM;
     return 0;
 }
 
-/* Frame channel device file operations - moved up for early use */
-static const struct file_operations frame_channel_fops = {
+/* The one set of /dev/framechanN file operations. tx_isp_core.c registers
+ * the misc devices with it; without .poll, poll()/select() fall back to
+ * DEFAULT_POLLMASK and report the fd readable all the time. */
+const struct file_operations frame_channel_fops = {
     .owner = THIS_MODULE,
     .open = frame_channel_open,
     .release = frame_channel_release,

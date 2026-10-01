@@ -3352,12 +3352,9 @@ static int frame_channel_vidioc_get_fmt(void *channel_dev, void __user *arg)
     return 0;
 }
 
-static const struct file_operations frame_channel_fops = {
-    .owner = THIS_MODULE,
-    .open = frame_channel_open,
-    .release = frame_channel_release,
-    .unlocked_ioctl = frame_channel_unlocked_ioctl,
-};
+/* /dev/framechanN uses frame_channel_fops from tx_isp_module.c. A local
+ * static copy here used to shadow it and had no .poll, so poll()/select()
+ * always reported the fd readable. */
 
 
 

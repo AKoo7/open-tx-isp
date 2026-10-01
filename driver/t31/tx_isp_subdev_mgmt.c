@@ -68,6 +68,7 @@ void tx_isp_cleanup_subdev_graph(struct tx_isp_dev *isp);
 int frame_channel_open(struct inode *inode, struct file *file);
 int frame_channel_release(struct inode *inode, struct file *file);
 long frame_channel_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
+unsigned int frame_channel_poll(struct file *file, struct poll_table_struct *wait);
 
 static const struct file_operations frame_channel_fops = {
     .owner = THIS_MODULE,
@@ -75,6 +76,7 @@ static const struct file_operations frame_channel_fops = {
     .release = frame_channel_release,
     .unlocked_ioctl = frame_channel_unlocked_ioctl,
     .compat_ioctl = frame_channel_unlocked_ioctl,
+    .poll = frame_channel_poll,
 };
 
 static int graph_proc_show(struct seq_file *m, void *v)
