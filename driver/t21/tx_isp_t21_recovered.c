@@ -50492,6 +50492,9 @@ noinline int32_t system_reg_write(uint32_t offset,
 	return 0;
 }
 
+/* OEM .bss+0x18814: set after a running-mode switch, consumed next IRQ. */
+static int csc_day_pending;
+
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000330fc origin=fragment_seed original=ispcore_interrupt_service_routine */
 int32_t ispcore_interrupt_service_routine(uintptr_t a0)
 {
@@ -50593,12 +50596,30 @@ int32_t ispcore_interrupt_service_routine(uintptr_t a0)
 	 * after the current frame has reached a stable boundary.  The first-pass
 	 * ISR omitted this pending-control block, leaving Raptor's mode command
 	 * acknowledged but unapplied. */
+	/* OEM ISR @0x329d8: one IRQ after any mode switch, if the mode is day,
+	 * restore the CSC/chroma register 0x1730 to colour (0xff00ff00, same as
+	 * tisp_init).  Flag is OEM .bss+0x18814. */
+	if (csc_day_pending == 1) {
+		struct t21_tuning_state_view *tuning = runtime->tuning;
+
+		if (t21_isp_valid_ptr(tuning) && tuning->running_mode == 0)
+			system_reg_write(0x1730, 0xff00ff00);
+		csc_day_pending = 0;
+	}
+
 	if (runtime->running_mode_pending == 1) {
 		struct t21_tuning_state_view *tuning = runtime->tuning;
 
-		if (t21_isp_valid_ptr(tuning) && tuning->event)
-			tuning->event(tuning, 0x4000003, 0);
+		if (t21_isp_valid_ptr(tuning)) {
+			/* OEM @0x32a24: night mode zeroes the chroma
+			 * (0x1730 = 0xff008080, mono) before the table swap. */
+			if (tuning->running_mode == 1)
+				system_reg_write(0x1730, 0xff008080);
+			if (tuning->event)
+				tuning->event(tuning, 0x4000003, 0);
+		}
 		runtime->running_mode_pending = 0;
+		csc_day_pending = 1;
 	}
 
 	/* Match the OEM interrupt fan-out: every asserted slot gets its callback,
