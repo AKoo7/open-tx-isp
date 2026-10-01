@@ -8981,8 +8981,10 @@ static int apical_isp_core_ops_g_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
         }
 
         case 0x80000e4: { /* OEM: combined hvflip get */
-            uint32_t hf = tuning->hflip ? 2 : 0;
-            uint32_t vf = tuning->vflip ? 1 : 0;
+            /* Stock: bit 0 = mirror (core +0x170), bit 1 = flip (+0x168),
+             * the same order the 0x80000e4 set path decodes. */
+            uint32_t hf = tuning->hflip ? 1 : 0;
+            uint32_t vf = tuning->vflip ? 2 : 0;
             ctrl->value = hf | vf;
             break;
         }
