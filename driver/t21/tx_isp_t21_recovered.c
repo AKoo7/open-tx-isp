@@ -4492,10 +4492,10 @@ static uint32_t t21_ae_frame_count;
  * held while the measured luma is within ae_hold_pct percent of the
  * target.
  */
-static int ae_step_shift = 2;
+static int ae_step_shift = 3;
 module_param(ae_step_shift, int, 0644);
 MODULE_PARM_DESC(ae_step_shift, "T21 AE: step by (target/luma)^(1/2^n) (0 = full step)");
-static int ae_hold_pct = 8;
+static int ae_hold_pct = 15;
 module_param(ae_hold_pct, int, 0644);
 MODULE_PARM_DESC(ae_hold_pct, "T21 AE: hold the exposure while luma is within this percent of the target");
 static uint32_t t21_ae_scene_cfg[11];
