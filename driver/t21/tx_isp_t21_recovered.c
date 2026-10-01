@@ -46,6 +46,8 @@
 #include <linux/kthread.h>
 #include <linux/math64.h>
 #include <soc/gpio.h>
+#include <linux/vmalloc.h>
+#include <linux/crc32.h>
 #include <net/addrconf.h>
 #include <net/cfg80211.h>
 #ifdef __has_include
@@ -8657,14 +8659,179 @@ static void regtrace_patch_relocated_data(void)
     *(const void **)((char *)ispcore_sensor_ops + 0x8) = (const void *)&ispcore_sensor_ops_ioctl;
 }
 
+
+/*
+ * Debug aids for stray stores (the T23 82acd1bf class), all off by default:
+ *
+ *   text_watch=1   keep a copy of this module's core text and compare it at
+ *                  the entry and exit of every /dev/tx-isp, /dev/isp-m0 and
+ *                  non-per-frame /dev/framechanN ioctl, on proc opens and
+ *                  after every ISP event callback (AE/AWB/ADR/defog);
+ *                  report changed words with the call they were seen in.
+ *   ktext_watch=1  keep a CRC32 per 4 KiB page of the kernel text
+ *                  [ktext_start, ktext_end) (defaults: _stext/_etext of the
+ *                  thingino PC420 3.10.14 build, override from System.map)
+ *                  and compare it at the same ioctl/proc points (not per
+ *                  event: ~3.5 MiB per check).
+ *
+ * A change is reported once (the snapshot is then updated) with
+ * KERN_ERR "tx-isp-t21: TEXT CHANGED ..." / "KTEXT CHANGED ...".
+ */
+static bool t21_text_watch;
+module_param_named(text_watch, t21_text_watch, bool, 0644);
+static bool t21_ktext_watch;
+module_param_named(ktext_watch, t21_ktext_watch, bool, 0644);
+static ulong t21_ktext_start = 0x80010400UL;
+module_param_named(ktext_start, t21_ktext_start, ulong, 0444);
+static ulong t21_ktext_end = 0x803809d0UL;
+module_param_named(ktext_end, t21_ktext_end, ulong, 0444);
+static u32 *t21_text_snap;
+static size_t t21_text_words;
+static u32 *t21_ktext_crc;
+static size_t t21_ktext_pages;
+static DEFINE_SPINLOCK(t21_text_lock);
+
+static void t21_text_check_module(const char *where, unsigned int cmd)
+{
+	const u32 *text = THIS_MODULE->module_core;
+	unsigned long flags;
+	unsigned int shown = 0;
+	size_t words, i;
+	u32 *snap;
+
+	if (!t21_text_watch || !text)
+		return;
+	if (!t21_text_snap) {
+		words = THIS_MODULE->core_text_size / sizeof(u32);
+		snap = vmalloc(words * sizeof(u32));
+		if (!snap)
+			return;
+		memcpy(snap, text, words * sizeof(u32));
+		spin_lock_irqsave(&t21_text_lock, flags);
+		if (!t21_text_snap) {
+			t21_text_words = words;
+			t21_text_snap = snap;
+			snap = NULL;
+		}
+		spin_unlock_irqrestore(&t21_text_lock, flags);
+		if (snap)
+			vfree(snap);
+		else
+			printk(KERN_WARNING "tx-isp-t21: text watch armed text=%p size=0x%zx at %s\n",
+			       text, words * sizeof(u32), where);
+		return;
+	}
+	spin_lock_irqsave(&t21_text_lock, flags);
+	snap = t21_text_snap;
+	words = t21_text_words;
+	if (memcmp(snap, text, words * sizeof(u32))) {
+		for (i = 0; i < words; i++) {
+			if (snap[i] == text[i])
+				continue;
+			if (shown++ < 16)
+				printk(KERN_ERR "tx-isp-t21: TEXT CHANGED at %p (text+0x%zx) 0x%08x -> 0x%08x seen at %s cmd=0x%x pid=%d comm=%s\n",
+				       &text[i], i * sizeof(u32), snap[i], text[i],
+				       where, cmd, current->pid, current->comm);
+			snap[i] = text[i];
+		}
+		printk(KERN_ERR "tx-isp-t21: TEXT CHANGED %u words, seen at %s cmd=0x%x\n",
+		       shown, where, cmd);
+	}
+	spin_unlock_irqrestore(&t21_text_lock, flags);
+}
+
+static void t21_text_check_kernel(const char *where, unsigned int cmd)
+{
+	unsigned long start = t21_ktext_start & PAGE_MASK;
+	size_t pages, i;
+	u32 crc;
+
+	if (!t21_ktext_watch)
+		return;
+	/* KSEG0 only: always mapped, reading it cannot fault. */
+	if (start < 0x80000000UL || t21_ktext_end <= start ||
+	    t21_ktext_end > 0x9fffffffUL)
+		return;
+	pages = (t21_ktext_end - start + PAGE_SIZE - 1) >> PAGE_SHIFT;
+	if (!t21_ktext_crc) {
+		u32 *tab = vmalloc(pages * sizeof(u32));
+
+		if (!tab)
+			return;
+		for (i = 0; i < pages; i++)
+			tab[i] = crc32_le(~0, (const u8 *)(start + (i << PAGE_SHIFT)), PAGE_SIZE);
+		t21_ktext_pages = pages;
+		t21_ktext_crc = tab;
+		printk(KERN_WARNING "tx-isp-t21: kernel text watch armed %08lx-%08lx (%zu pages) at %s\n",
+		       start, t21_ktext_end, pages, where);
+		return;
+	}
+	for (i = 0; i < t21_ktext_pages; i++) {
+		crc = crc32_le(~0, (const u8 *)(start + (i << PAGE_SHIFT)), PAGE_SIZE);
+		if (crc == t21_ktext_crc[i])
+			continue;
+		printk(KERN_ERR "tx-isp-t21: KTEXT CHANGED page %08lx seen at %s cmd=0x%x pid=%d comm=%s\n",
+		       start + (i << PAGE_SHIFT), where, cmd, current->pid, current->comm);
+		t21_ktext_crc[i] = crc;
+	}
+}
+
+static void t21_text_check(const char *where, unsigned int cmd)
+{
+	t21_text_check_module(where, cmd);
+	t21_text_check_kernel(where, cmd);
+}
+
+static void t21_text_watch_free(void)
+{
+	vfree(t21_text_snap);
+	t21_text_snap = NULL;
+	vfree(t21_ktext_crc);
+	t21_ktext_crc = NULL;
+}
+
+static long t21_tx_isp_ioctl_watch(struct file *file, unsigned int cmd, unsigned long arg)
+{
+	long ret;
+
+	t21_text_check("tx_isp_ioctl-enter", cmd);
+	ret = tx_isp_unlocked_ioctl(file, cmd, arg);
+	t21_text_check("tx_isp_ioctl-exit", cmd);
+	return ret;
+}
+
+static long t21_isp_m0_ioctl_watch(struct file *file, unsigned int cmd, unsigned long arg)
+{
+	long ret;
+
+	t21_text_check("isp_m0_ioctl-enter", cmd);
+	ret = isp_core_tunning_unlocked_ioctl(file, cmd, arg);
+	t21_text_check("isp_m0_ioctl-exit", cmd);
+	return ret;
+}
+
+static int t21_isp_info_open_watch(struct inode *inode, struct file *file)
+{
+	t21_text_check("proc-isp-info-open", 0);
+	return dump_isp_info_open(inode, file);
+}
+
 static struct file_operations isp_core_tunning_fops = {
     .owner = THIS_MODULE,
-    .unlocked_ioctl = (long (*)(struct file *, unsigned int, unsigned long))isp_core_tunning_unlocked_ioctl,
+    .unlocked_ioctl = t21_isp_m0_ioctl_watch,
     .open = (int (*)(struct inode *, struct file *))isp_core_tunning_open,
     .release = (int (*)(struct inode *, struct file *))isp_core_tunning_release,
 };
+/*
+ * Stock isp_info_proc_fops (.data+0x45180): open = dump_isp_info_open,
+ * read = seq_read, llseek = seq_lseek, release = single_release.  The
+ * recovery dropped .open, so every read of /proc/jz/isp/isp-m0 ran
+ * seq_read()/single_release() on a NULL seq_file (first T21 hardware
+ * run: oopses in timpsd and cat, then a reboot).
+ */
 static struct file_operations isp_info_proc_fops = {
     .owner = THIS_MODULE,
+    .open = t21_isp_info_open_watch,
     .llseek = (loff_t (*)(struct file *, loff_t, int))seq_lseek,
     .read = (ssize_t (*)(struct file *, char __user *, size_t, loff_t *))seq_read,
     .release = (int (*)(struct inode *, struct file *))single_release,
@@ -8679,13 +8846,16 @@ static struct file_operations sinfo_fops = {
 };
 static struct file_operations tx_isp_fops = {
     .owner = THIS_MODULE,
-    .unlocked_ioctl = (long (*)(struct file *, unsigned int, unsigned long))tx_isp_unlocked_ioctl,
+    .unlocked_ioctl = t21_tx_isp_ioctl_watch,
     .open = (int (*)(struct inode *, struct file *))tx_isp_open,
     .release = (int (*)(struct inode *, struct file *))tx_isp_release,
 };
+/* Stock also has read/llseek/write; only open is wired here, so at least
+ * free the seq_file it allocates. */
 static struct file_operations video_input_cmd_fops = {
     .owner = THIS_MODULE,
     .open = (int (*)(struct inode *, struct file *))video_input_cmd_open,
+    .release = (int (*)(struct inode *, struct file *))single_release,
 };
 static struct miscdevice misc_registered = {
     .minor = MISC_DYNAMIC_MINOR,
@@ -10160,43 +10330,14 @@ int32_t isp_vic_interrupt_service_routine(void *arg1)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000001904 origin=fragment_seed original=dump_isp_vic_frd_open */
 int32_t dump_isp_vic_frd_open(uint32_t a0, uint32_t a1)
 {
-    uint32_t local_10 = 0;
-    uint32_t local_14 = 0;
-    uint32_t a2 = 0;
-    uint32_t a3 = 0;
-    uint32_t ra = 0;
-    uint32_t s0 = 0;
-    uint32_t t9 = 0;
-    uint32_t *v0 = 0;
-
-    /* fragment 0: Prologue */
-    /* function prologue: stack frame and callee-saved register setup */
-
-    /* fragment 1: CallSetup */
-    s0 = a1;
-    v0 = (uintptr_t *)PDE_DATA((void *)(int32_t *)a0); /* jalr target resolved by relocation */
-
-    /* fragment 2: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    /* fragment 3: Arithmetic */
-    a0 = s0;
-    a1 = (uintptr_t)&slock;
-
-    /* fragment 4: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    /* fragment 5: Arithmetic */
-    t9 = (uintptr_t)&private_single_open_size;
-    a1 = a1 + 6476;
-    a2 = v0;
-    a3 = 1024;
-    t9 = t9;
-
-    /* fragment 6: IndirectTailCall */
-    return private_single_open_size(a0, a1, a2, a3);
-
-    return 0;
+	/*
+	 * Stock: single_open_size(file, isp_vic_frd_show, PDE_DATA(inode), size).
+	 * The recovery passed &slock + 6476 (a .text offset bound to a data
+	 * symbol) as the show callback, i.e. a data address to execute.
+	 */
+	return private_single_open_size((struct file *)(uintptr_t)a1,
+		(int (*)(struct seq_file *, void *))isp_vic_frd_show,
+		PDE_DATA((struct inode *)(uintptr_t)a0), 1024);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000194c origin=model_output original=isp_vic_frd_show */
@@ -11663,43 +11804,14 @@ int tx_isp_vin_activate_subdev(void *arg1)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000002eac origin=fragment_seed original=video_input_cmd_open */
 int32_t video_input_cmd_open(uint32_t a0, uint32_t a1)
 {
-    uint32_t local_10 = 0;
-    uint32_t local_14 = 0;
-    uint32_t a2 = 0;
-    uint32_t a3 = 0;
-    uint32_t ra = 0;
-    uint32_t s0 = 0;
-    uint32_t t9 = 0;
-    uint32_t *v0 = 0;
-
-    /* fragment 0: Prologue */
-    /* function prologue: stack frame and callee-saved register setup */
-
-    /* fragment 1: CallSetup */
-    s0 = a1;
-    v0 = (uintptr_t *)PDE_DATA((void *)(int32_t *)a0); /* jalr target resolved by relocation */
-
-    /* fragment 2: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    /* fragment 3: Arithmetic */
-    a0 = s0;
-    a1 = (uintptr_t)&slock;
-
-    /* fragment 4: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    /* fragment 5: Arithmetic */
-    t9 = (uintptr_t)&private_single_open_size;
-    a1 = a1 + 14200;
-    a2 = v0;
-    a3 = 512;
-    t9 = t9;
-
-    /* fragment 6: IndirectTailCall */
-    return private_single_open_size(a0, a1, a2, a3);
-
-    return 0;
+	/*
+	 * Stock: single_open_size(file, video_input_cmd_show, PDE_DATA(inode), size).
+	 * The recovery passed &slock + 14200 (a .text offset bound to a data
+	 * symbol) as the show callback, i.e. a data address to execute.
+	 */
+	return private_single_open_size((struct file *)(uintptr_t)a1,
+		video_input_cmd_show,
+		PDE_DATA((struct inode *)(uintptr_t)a0), 512);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000002ef4 origin=model_output original=video_input_cmd_set */
@@ -15807,43 +15919,14 @@ int32_t fs_activate_module(void *arg1)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000007704 origin=fragment_seed original=dump_isp_framesource_open */
 int32_t dump_isp_framesource_open(uint32_t a0, uint32_t a1)
 {
-    uint32_t local_10 = 0;
-    uint32_t local_14 = 0;
-    uint32_t a2 = 0;
-    uint32_t a3 = 0;
-    uint32_t ra = 0;
-    uint32_t s0 = 0;
-    uint32_t t9 = 0;
-    uint32_t *v0 = 0;
-
-    /* fragment 0: Prologue */
-    /* function prologue: stack frame and callee-saved register setup */
-
-    /* fragment 1: CallSetup */
-    s0 = a1;
-    v0 = (uintptr_t *)PDE_DATA((void *)(int32_t *)a0); /* jalr target resolved by relocation */
-
-    /* fragment 2: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    /* fragment 3: Arithmetic */
-    a0 = s0;
-    a1 = (uintptr_t)&slock;
-
-    /* fragment 4: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    /* fragment 5: Arithmetic */
-    t9 = (uintptr_t)&private_single_open_size;
-    a1 = a1 + 30540;
-    a2 = v0;
-    a3 = 2048;
-    t9 = t9;
-
-    /* fragment 6: IndirectTailCall */
-    return private_single_open_size(a0, a1, a2, a3);
-
-    return 0;
+	/*
+	 * Stock: single_open_size(file, isp_framesource_show, PDE_DATA(inode), size).
+	 * The recovery passed &slock + 30540 (a .text offset bound to a data
+	 * symbol) as the show callback, i.e. a data address to execute.
+	 */
+	return private_single_open_size((struct file *)(uintptr_t)a1,
+		(int (*)(struct seq_file *, void *))isp_framesource_show,
+		PDE_DATA((struct inode *)(uintptr_t)a0), 2048);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000774c origin=fragment_seed original=isp_framesource_show */
@@ -16766,6 +16849,10 @@ static long frame_channel_unlocked_ioctl(struct file *file, unsigned int cmd,
 
 	if (!t21_isp_valid_ptr(ch))
 		return -ENODEV;
+
+	/* text_watch: every call but the per-frame QBUF/DQBUF/frame wait */
+	if (cmd != 0xc044560f && cmd != 0xc0445611 && cmd != 0x400456bf)
+		t21_text_check("framechan_ioctl", cmd);
 
 	switch (cmd) {
 	case 0xc0145608: {
@@ -22235,6 +22322,7 @@ int32_t tisp_event_process(void)
 	struct t21_event_node *node;
 	t21_event_cb_t cb = NULL;
 	uint32_t args[8];
+	uint32_t event;
 
 	result = private_wait_for_completion_timeout(&tevent_info.ready, 20);
 	if (result == 0xfffffe00UL) {
@@ -22255,17 +22343,20 @@ int32_t tisp_event_process(void)
 	node = list_first_entry(&tevent_info.pending,
 				struct t21_event_node, link);
 	list_del_init(&node->link);
-	if (node->event < ARRAY_SIZE(tisp_event_cb_table))
-		cb = tisp_event_cb_table[node->event];
+	event = node->event;
+	if (event < ARRAY_SIZE(tisp_event_cb_table))
+		cb = tisp_event_cb_table[event];
 	memcpy(args, node->args, sizeof(args));
 	list_add_tail(&node->link, &tevent_info.free);
 	arch_local_irq_restore(flags);
 
 	/* Sensor callbacks perform I2C transfers.  Dispatching them with local
 	 * IRQs disabled was both unnecessary and unsafe. */
-	if (cb)
+	if (cb) {
 		cb(args[0], args[1], args[2], args[3],
 		   args[4], args[5], args[6], args[7]);
+		t21_text_check_module("isp-event", event);
+	}
 	return 0;
 }
 
@@ -53402,6 +53493,7 @@ void cleanup_module(void)
 	tx_isp_t21_v4l2_cleanup();
 	tx_isp_sinfo_exit();
 	tx_isp_exit();
+	t21_text_watch_free();
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000345bc origin=model_output original=tx_isp_vic_remove */
