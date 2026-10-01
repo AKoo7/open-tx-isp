@@ -3065,15 +3065,20 @@ static unsigned char dmsc_sp_ud_dark_thres_array[36];
 static unsigned char dmsc_sp_ud_w_stren_array[36];
 static unsigned char dmsc_uu_stren_array[36];
 static unsigned char dmsc_uu_thres_array[36];
-static uint32_t gain_old;
 /*
  * OEM tx-isp-t21 keeps a separate static gain_old per tuning module
- * (.data+0x41fe0 sharpen, +0x41ff0 sdns, +0x42008 mdns, +0x42010 dpc).
+ * (.data+0x41fe0 sharpen, +0x41ff0 sdns, +0x42008 mdns, +0x42010 dpc,
+ * dmsc in its own "gain_old" symbol).  The recovery shared one variable
+ * between dmsc, sdns and mdns: dmsc refreshes first in tisp_tgain_update,
+ * so sdns/mdns always saw a gain delta of 0 and stayed at init strength.
  * The recovery addressed the sharpen and dpc ones as text offsets of
  * get_isp_clk() and as tparams+0x1590/0x15c0 (HI16 0x40000 dropped).
  */
 static uint32_t sharpen_gain_old = 0xffffffffU;
 static uint32_t dpc_gain_old = 0xffffffffU;
+static uint32_t dmsc_gain_old = 0xffffffffU;
+static uint32_t sdns_gain_old = 0xffffffffU;
+static uint32_t mdns_gain_old = 0xffffffffU;
 static volatile unsigned char __attribute__((aligned(4))) gain_thres[4] = {
     0x00, 0x01, 0x00, 0x00,
 };
@@ -3170,7 +3175,6 @@ static unsigned char __attribute__((aligned(4))) sdns_y_fus_stren_array[36];
 static unsigned char __attribute__((aligned(4))) sdns_y_lum_divop_array[36];
 static unsigned char __attribute__((aligned(4))) sdns_y_lum_segop_array[36];
 static unsigned char __attribute__((aligned(4))) sdns_y_lum_stren_array[36];
-static uint32_t tiziano_sdns_gain_old;
 static uintptr_t mdns_sta_size_intp;
 static uintptr_t mdns_pbt_size_intp;
 static uint32_t mdns_pbt_ponit_array[2];
@@ -6632,7 +6636,7 @@ static unsigned char __attribute__((aligned(4))) tparams_night[0x15380] = {
 static uintptr_t (*flicker_hz)();
 static unsigned char custom_eff[0x1e8];
 static unsigned char sensor_info[76];
-static unsigned char mdns_ratio[360];
+static unsigned char __attribute__((aligned(4))) mdns_ratio[360];
 struct sensor_ops_entry {
     int pad[14];
     void *ops;
@@ -22228,16 +22232,16 @@ int32_t tisp_init(int32_t *arg1)
 	memcpy(custom_eff + 0x1c4, tparams_night + 0xf954, 0x24);
 
 	memset(mdns_ratio, 0x80, 0x168);
-	memcpy(mdns_ratio, tparams_day + 0x8c4, 0x24);
-	memcpy(mdns_ratio + 0x24, tparams_day + 0x8e8, 0x24);
-	memcpy(mdns_ratio + 0x48, tparams_day + 0x90c, 0x24);
-	memcpy(mdns_ratio + 0x6c, tparams_day + 0xc38, 0x24);
-	memcpy(mdns_ratio + 0x90, tparams_day + 0xc14, 0x24);
-	memcpy(mdns_ratio + 0xb4, tparams_night + 0x8c4, 0x24);
-	memcpy(mdns_ratio + 0xd8, tparams_night + 0x8e8, 0x24);
-	memcpy(mdns_ratio + 0xfc, tparams_night + 0x90c, 0x24);
-	memcpy(mdns_ratio + 0x120, tparams_night + 0xc38, 0x24);
-	memcpy(mdns_ratio + 0x144, tparams_night + 0xc14, 0x24);
+	memcpy(mdns_ratio, tparams_day + 0x108c4, 0x24);
+	memcpy(mdns_ratio + 0x24, tparams_day + 0x108e8, 0x24);
+	memcpy(mdns_ratio + 0x48, tparams_day + 0x1090c, 0x24);
+	memcpy(mdns_ratio + 0x6c, tparams_day + 0x10c38, 0x24);
+	memcpy(mdns_ratio + 0x90, tparams_day + 0x10c14, 0x24);
+	memcpy(mdns_ratio + 0xb4, tparams_night + 0x108c4, 0x24);
+	memcpy(mdns_ratio + 0xd8, tparams_night + 0x108e8, 0x24);
+	memcpy(mdns_ratio + 0xfc, tparams_night + 0x1090c, 0x24);
+	memcpy(mdns_ratio + 0x120, tparams_night + 0x10c38, 0x24);
+	memcpy(mdns_ratio + 0x144, tparams_night + 0x10c14, 0x24);
 	pr_debug("tx-isp-t21: tisp tables prepared irq_disabled=%d pid=%d\n",
 		irqs_disabled(), current->pid);
 
@@ -33475,11 +33479,11 @@ int32_t tisp_dmsc_intp_reg_refresh(int32_t arg1)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000019cb8 origin=model_output original=tisp_dmsc_par_refresh */
 int32_t tisp_dmsc_par_refresh(uint32_t a0, uint32_t a1, uint32_t a2)
 {
-	uint32_t gain_old_1 = *(uint32_t *)&gain_old;
+	uint32_t gain_old_1 = *(uint32_t *)&dmsc_gain_old;
 	uint32_t diff;
 
 	if (gain_old_1 == 0xffffffff) {
-		*(uint32_t *)&gain_old = a0;
+		*(uint32_t *)&dmsc_gain_old = a0;
 		tisp_dmsc_all_reg_refresh(a0);
 	} else {
 		if (a0 < gain_old_1)
@@ -33488,7 +33492,7 @@ int32_t tisp_dmsc_par_refresh(uint32_t a0, uint32_t a1, uint32_t a2)
 			diff = a0 - gain_old_1;
 
 		if (diff >= a1) {
-			*(uint32_t *)&gain_old = a0;
+			*(uint32_t *)&dmsc_gain_old = a0;
 			tisp_dmsc_intp_reg_refresh(a0);
 		}
 	}
@@ -33566,11 +33570,11 @@ int32_t tiziano_dmsc_dn_params_refresh(void)
     /* function prologue: stack frame and callee-saved register setup */
 
     /* fragment 1: CallSetup */
-    *(uint32_t *)((char *)((char *)&gain_old)) = ((*(uint32_t *)((char *)((char *)&gain_old))) + 512);
+    *(uint32_t *)((char *)((char *)&dmsc_gain_old)) = ((*(uint32_t *)((char *)((char *)&dmsc_gain_old))) + 512);
     v0 = (uintptr_t *)((uintptr_t (*)(int32_t *))(uintptr_t)tiziano_dmsc_params_refresh)(a0); /* jalr target resolved by relocation */
 
     /* fragment 2: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(int32_t *))(uintptr_t)tisp_dmsc_all_reg_refresh)(*(uint32_t *)((char *)((char *)&gain_old))); /* jalr target resolved by relocation */
+    v0 = (uintptr_t *)((uintptr_t (*)(int32_t *))(uintptr_t)tisp_dmsc_all_reg_refresh)(*(uint32_t *)((char *)((char *)&dmsc_gain_old))); /* jalr target resolved by relocation */
 
     /* fragment 3: Epilogue */
     /* function epilogue: restore registers and return */
@@ -33587,7 +33591,7 @@ int32_t tiziano_dmsc_dn_params_refresh(void)
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001a1fc origin=model_output original=tiziano_dmsc_init */
 int32_t tiziano_dmsc_init(void)
 {
-	gain_old = -1;
+	dmsc_gain_old = -1;
 	tiziano_dmsc_params_refresh();
 	tisp_dmsc_par_refresh(0x10000, 0x10000, 0);
 	return 0;
@@ -34002,7 +34006,7 @@ int32_t tisp_dmsc_param_array_set(int32_t param_id, const void *src)
 	}
 
 	memcpy(dst, src, size);
-	tisp_dmsc_all_reg_refresh((uint32_t)(uintptr_t)gain_old + 0x200);
+	tisp_dmsc_all_reg_refresh((uint32_t)(uintptr_t)dmsc_gain_old + 0x200);
 	return 0;
 }
 
@@ -35521,7 +35525,7 @@ int32_t tisp_sdns_intp_reg_refresh(int32_t arg1)
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001cebc origin=model_output original=tisp_sdns_par_refresh */
 int32_t tisp_sdns_par_refresh(uint32_t a0, uint32_t a1)
 {
-	uint32_t gain_old_value = gain_old;
+	uint32_t gain_old_value = sdns_gain_old;
 	uint32_t diff;
 
 	if (gain_old_value != 0xffffffff) {
@@ -35533,10 +35537,10 @@ int32_t tisp_sdns_par_refresh(uint32_t a0, uint32_t a1)
 		if (diff < a1)
 			return 0;
 
-		*(uint32_t *)&gain_old_value = a0;
+		sdns_gain_old = a0;
 		tisp_sdns_intp_reg_refresh(a0);
 	} else {
-		*(uint32_t *)&gain_old_value = a0;
+		sdns_gain_old = a0;
 		tisp_sdns_all_reg_refresh(a0);
 	}
 
@@ -35598,9 +35602,9 @@ int32_t tiziano_sdns_params_refresh(void)
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001d21c origin=model_output original=tiziano_sdns_dn_params_refresh */
 int32_t tiziano_sdns_dn_params_refresh(void)
 {
-	tiziano_sdns_gain_old += 0x200;
+	sdns_gain_old += 0x200;
 	tiziano_sdns_params_refresh();
-	tisp_sdns_all_reg_refresh(tiziano_sdns_gain_old);
+	tisp_sdns_all_reg_refresh(sdns_gain_old);
 	return 0;
 }
 
@@ -35615,7 +35619,7 @@ int32_t tiziano_sdns_init(void)
     uint32_t v1 = 0;
 
     /* fragment 0: CallSetup */
-    gain_old = 0xffffffffU; /* OEM sdns gain_old, not tparams+0x15a0 */
+    sdns_gain_old = 0xffffffffU; /* OEM sdns gain_old, not tparams+0x15a0 */
     v0 = (uintptr_t *)((uintptr_t (*)(int32_t *))(uintptr_t)tiziano_sdns_params_refresh)(a0); /* jalr target resolved by relocation */
 
     /* fragment 1: CallSetup */
@@ -38466,7 +38470,7 @@ int32_t tisp_mdns_intp_reg_refresh(int32_t arg1)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000020cc0 origin=model_output original=tisp_mdns_par_refresh */
 int32_t tisp_mdns_par_refresh(uint32_t arg1, int32_t arg2)
 {
-	uint32_t gain_old_1 = gain_old;
+	uint32_t gain_old_1 = mdns_gain_old;
 
 	if (gain_old_1 != 0xffffffffu) {
 		uint32_t diff = arg1 - gain_old_1;
@@ -38475,11 +38479,11 @@ int32_t tisp_mdns_par_refresh(uint32_t arg1, int32_t arg2)
 			diff = gain_old_1 - arg1;
 
 		if (diff >= (uint32_t)arg2) {
-			gain_old = arg1;
+			mdns_gain_old = arg1;
 			tisp_mdns_intp_reg_refresh(arg1);
 		}
 	} else {
-		gain_old = arg1;
+		mdns_gain_old = arg1;
 		tisp_mdns_all_reg_refresh(arg1);
 		system_reg_write(0x1b50, 0x101);
 	}
@@ -38654,16 +38658,16 @@ int32_t tisp_mdns_bypass(uint32_t a0)
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000219c0 origin=fragment_seed original=tiziano_mdns_dn_params_refresh */
 int32_t tiziano_mdns_dn_params_refresh(void)
 {
-	gain_old += 512;
+	mdns_gain_old += 512;
 	tiziano_mdns_params_refresh();
-	tisp_mdns_all_reg_refresh(gain_old);
+	tisp_mdns_all_reg_refresh(mdns_gain_old);
 	return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000021a10 origin=fragment_seed original=tiziano_mdns_init */
 int32_t tiziano_mdns_init(uint32_t a0, uint32_t a1)
 {
-	gain_old = UINT_MAX;
+	mdns_gain_old = UINT_MAX;
 	vin_width = a0;
 	vin_height = a1;
 	tiziano_mdns_params_refresh();
@@ -38909,7 +38913,7 @@ int32_t tisp_mdns_param_array_set(int32_t param_id, const void *src)
 		return 0;
 	case 0xe6:
 		memcpy(&mdns_y_ref_wei_min_array, (void *)src, 0x24);
-		tisp_mdns_all_reg_refresh(gain_old + 0x200);
+		tisp_mdns_all_reg_refresh(mdns_gain_old + 0x200);
 		return 0;
 	case 0xe7:
 		memcpy(&mdns_y_ref_wei_max_array, (void *)src, 0x24);
@@ -39012,15 +39016,15 @@ int32_t tisp_mdns_param_array_set(int32_t param_id, const void *src)
 		return 0;
 	case 0x108:
 		memcpy(&mdns_y_rs_npv_array, (void *)src, 0x40);
-		tisp_mdns_all_reg_refresh(gain_old + 0x200);
+		tisp_mdns_all_reg_refresh(mdns_gain_old + 0x200);
 		return 0;
 	case 0x109:
 		memcpy(&mdns_y_rm_npv_array, (void *)src, 0x40);
-		tisp_mdns_all_reg_refresh(gain_old + 0x200);
+		tisp_mdns_all_reg_refresh(mdns_gain_old + 0x200);
 		return 0;
 	case 0x10a:
 		memcpy(&mdns_y_shp_c_0_npv_array, (void *)src, 0x24);
-		tisp_mdns_all_reg_refresh(gain_old + 0x200);
+		tisp_mdns_all_reg_refresh(mdns_gain_old + 0x200);
 		return 0;
 	case 0x10b:
 		memcpy(&mdns_y_shp_c_1_npv_array, (void *)src, 0x24);
@@ -39231,7 +39235,7 @@ int32_t tisp_mdns_param_array_set(int32_t param_id, const void *src)
 		return 0;
 	case 0x150:
 		memcpy(&mdns_c_adj_wcrm_n_array, (void *)src, 0x20);
-		tisp_mdns_all_reg_refresh(gain_old + 0x200);
+		tisp_mdns_all_reg_refresh(mdns_gain_old + 0x200);
 		return 0;
 	}
 	return 0;
@@ -49155,62 +49159,63 @@ tisp_s_ae_hist0x38:
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000031228 origin=model_output original=tisp_s_3dns_ratio */
 int32_t tisp_s_3dns_ratio(int32_t arg1)
 {
-	int32_t arr0[9];
-	int32_t arr1[9];
-	int32_t arr2[9];
-	int32_t arr3[9];
-	int32_t arr4[9];
-	int32_t arr5[9];
-	int32_t arr6[9];
-	int32_t arr7[9];
-	int32_t arr8[9];
-	int32_t arr9[9];
-	int32_t i;
-	int32_t *ratio_ptr;
-	int32_t delta;
-	int32_t val;
+	uint32_t arr0[9];
+	uint32_t arr1[9];
+	uint32_t arr2[9];
+	uint32_t arr3[9];
+	uint32_t arr4[9];
+	uint32_t arr5[9];
+	uint32_t arr6[9];
+	uint32_t arr7[9];
+	uint32_t arr8[9];
+	uint32_t arr9[9];
+	uint32_t i;
+	const uint32_t *ratio_ptr;
+	uint32_t delta;
+	uint32_t val;
+	uint32_t ratio = (uint32_t)arg1;	/* OEM: unsigned mul/srl */
 
 
-	ratio_ptr = (int32_t *)&mdns_ratio;
-	delta = arg1 - 0x80;
+	ratio_ptr = (const uint32_t *)mdns_ratio;
+	delta = ratio - 0x80;
 
 	/* mdns_ratio contains ten banks of nine 32-bit tuning values.  The OEM
 	 * loop advances its byte offset by four; in C these are element indexes.
 	 * Treating the byte offset as an int32_t index walked off every local
 	 * table and corrupted the dispatcher's return state. */
 	for (i = 0; i < ARRAY_SIZE(arr0); i++) {
-		if (arg1 >= 0x81) {
+		if (ratio >= 0x81) {
 			val = *ratio_ptr;
-			((uintptr_t *)(uintptr_t)(arr0))[i] = (((0x40 - val) * delta) >> 7) + val;
+			arr0[i] = (((0x40 - val) * delta) >> 7) + val;
 			val = ratio_ptr[9];
-			((uintptr_t *)(uintptr_t)(arr1))[i] = (((0x40 - val) * delta) >> 7) + val;
+			arr1[i] = (((0x40 - val) * delta) >> 7) + val;
 			val = ratio_ptr[0x12];
-			((uintptr_t *)(uintptr_t)(arr2))[i] = (((0x40 - val) * delta) >> 7) + val;
+			arr2[i] = (((0x40 - val) * delta) >> 7) + val;
 			val = ratio_ptr[0x1b];
-			((uintptr_t *)(uintptr_t)(arr3))[i] = (((0xfa - val) * delta) >> 7) + val;
+			arr3[i] = (((0xfa - val) * delta) >> 7) + val;
 			val = ratio_ptr[0x24];
-			((uintptr_t *)(uintptr_t)(arr4))[i] = (((0xc8 - val) * delta) >> 7) + val;
+			arr4[i] = (((0xc8 - val) * delta) >> 7) + val;
 			val = ratio_ptr[0x2d];
-			((uintptr_t *)(uintptr_t)(arr5))[i] = (((0x40 - val) * delta) >> 7) + val;
+			arr5[i] = (((0x40 - val) * delta) >> 7) + val;
 			val = ratio_ptr[0x36];
-			((uintptr_t *)(uintptr_t)(arr6))[i] = (((0x40 - val) * delta) >> 7) + val;
+			arr6[i] = (((0x40 - val) * delta) >> 7) + val;
 			val = ratio_ptr[0x3f];
-			((uintptr_t *)(uintptr_t)(arr7))[i] = (((0x40 - val) * delta) >> 7) + val;
+			arr7[i] = (((0x40 - val) * delta) >> 7) + val;
 			val = ratio_ptr[0x48];
-			((uintptr_t *)(uintptr_t)(arr8))[i] = (((0xfa - val) * delta) >> 7) + val;
+			arr8[i] = (((0xfa - val) * delta) >> 7) + val;
 			val = ratio_ptr[0x51];
-			((uintptr_t *)(uintptr_t)(arr9))[i] = (((0xc8 - val) * delta) >> 7) + val;
+			arr9[i] = (((0xc8 - val) * delta) >> 7) + val;
 		} else {
-			((uintptr_t *)(uintptr_t)(arr0))[i] = (arg1 * *ratio_ptr) >> 7;
-			((uintptr_t *)(uintptr_t)(arr1))[i] = (arg1 * ratio_ptr[9]) >> 7;
-			((uintptr_t *)(uintptr_t)(arr2))[i] = (arg1 * ratio_ptr[0x12]) >> 7;
-			((uintptr_t *)(uintptr_t)(arr3))[i] = (((ratio_ptr[0x1b] - 0xa) * arg1) >> 7) + 0xa;
-			((uintptr_t *)(uintptr_t)(arr4))[i] = (arg1 * ratio_ptr[0x24]) >> 7;
-			((uintptr_t *)(uintptr_t)(arr5))[i] = (arg1 * ratio_ptr[0x2d]) >> 7;
-			((uintptr_t *)(uintptr_t)(arr6))[i] = (arg1 * ratio_ptr[0x36]) >> 7;
-			((uintptr_t *)(uintptr_t)(arr7))[i] = (arg1 * ratio_ptr[0x3f]) >> 7;
-			((uintptr_t *)(uintptr_t)(arr8))[i] = (((ratio_ptr[0x48] - 0xa) * arg1) >> 7) + 0xa;
-			((uintptr_t *)(uintptr_t)(arr9))[i] = (arg1 * ratio_ptr[0x51]) >> 7;
+			arr0[i] = (ratio * *ratio_ptr) >> 7;
+			arr1[i] = (ratio * ratio_ptr[9]) >> 7;
+			arr2[i] = (ratio * ratio_ptr[0x12]) >> 7;
+			arr3[i] = (((ratio_ptr[0x1b] - 0xa) * ratio) >> 7) + 0xa;
+			arr4[i] = (ratio * ratio_ptr[0x24]) >> 7;
+			arr5[i] = (ratio * ratio_ptr[0x2d]) >> 7;
+			arr6[i] = (ratio * ratio_ptr[0x36]) >> 7;
+			arr7[i] = (ratio * ratio_ptr[0x3f]) >> 7;
+			arr8[i] = (((ratio_ptr[0x48] - 0xa) * ratio) >> 7) + 0xa;
+			arr9[i] = (ratio * ratio_ptr[0x51]) >> 7;
 		}
 		ratio_ptr++;
 	}
@@ -49229,16 +49234,18 @@ int32_t tisp_s_3dns_ratio(int32_t arg1)
 		tisp_mdns_param_array_set(0xe6, arr4);
 	}
 
-	memcpy((void *)&tparams_day, arr0, 0x24);
-	memcpy((void *)((char *)((char *)&tparams_day + 0x8e8)), arr1, 0x24);
-	memcpy((void *)((char *)((char *)&tparams_day + 0x90c)), arr2, 0x24);
-	memcpy((void *)((char *)((char *)&tparams_day + 0xc38)), arr3, 0x24);
-	memcpy((void *)((char *)((char *)&tparams_day + 0xc14)), arr4, 0x24);
-	memcpy((void *)&tparams_night, arr5, 0x24);
-	memcpy((void *)((char *)((char *)&tparams_night + 0x8e8)), arr6, 0x24);
-	memcpy((void *)((char *)((char *)&tparams_night + 0x90c)), arr7, 0x24);
-	memcpy((void *)((char *)((char *)&tparams_night + 0xc38)), arr8, 0x24);
-	memcpy((void *)((char *)((char *)&tparams_night + 0xc14)), arr9, 0x24);
+	/* OEM @0x30c84: banks live at tparams_{day,night}+0x108c4.. (lui 0x1);
+	 * the recovery wrote to +0x8c4.. and to the bank header at +0. */
+	memcpy((void *)((char *)&tparams_day + 0x108c4), arr0, 0x24);
+	memcpy((void *)((char *)((char *)&tparams_day + 0x108e8)), arr1, 0x24);
+	memcpy((void *)((char *)((char *)&tparams_day + 0x1090c)), arr2, 0x24);
+	memcpy((void *)((char *)((char *)&tparams_day + 0x10c38)), arr3, 0x24);
+	memcpy((void *)((char *)((char *)&tparams_day + 0x10c14)), arr4, 0x24);
+	memcpy((void *)((char *)&tparams_night + 0x108c4), arr5, 0x24);
+	memcpy((void *)((char *)((char *)&tparams_night + 0x108e8)), arr6, 0x24);
+	memcpy((void *)((char *)((char *)&tparams_night + 0x1090c)), arr7, 0x24);
+	memcpy((void *)((char *)((char *)&tparams_night + 0x10c38)), arr8, 0x24);
+	memcpy((void *)((char *)((char *)&tparams_night + 0x10c14)), arr9, 0x24);
 
 	return 0;
 }
