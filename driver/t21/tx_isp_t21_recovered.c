@@ -4522,17 +4522,14 @@ static int ae_dbg_zone_n = 5;
 module_param_array(ae_dbg_zone, uint, &ae_dbg_zone_n, 0444);
 
 /*
- * ISP TOP bypass bit 4 is the ADR (local tone mapping) block: the bit order
- * follows the pipeline (2 LSC, 3 WB, 4 ADR, 5 DMSC, 6 CCM; night bypasses
- * 2/3/6).  On the PC420, setting it alone takes the day picture from Y 231
- * (blown out) to Y 97 with normal AE: the AE statistics are taken before
- * ADR, and the reconstructed dynamic ADR (Tiziano_adr_fpga) is not the
- * stock algorithm, so its curves add ~2.4x gain the AE never sees.  Until
- * the stock ADR is ported, keep ADR bypassed by default.
+ * ISP TOP bypass bit 4 is the ADR (local tone mapping) block (pipeline
+ * order: 2 LSC, 3 WB, 4 ADR, 5 DMSC, 6 CCM).  The dynamic ADR is now the
+ * stock code (lifted, emulator-verified), so ADR runs by default again;
+ * adr_bypass=1 forces the block off as a diagnostic.
  */
-static int adr_bypass = 1;
+static int adr_bypass;
 module_param(adr_bypass, int, 0644);
-MODULE_PARM_DESC(adr_bypass, "T21: force TOP bypass bit 4 (ADR) (default 1 until the stock ADR is ported)");
+MODULE_PARM_DESC(adr_bypass, "T21: force TOP bypass bit 4 (ADR) off (diagnostic, default 0)");
 
 static inline uint32_t t21_top_bypass_fix(uint32_t v)
 {
@@ -6832,8 +6829,8 @@ static unsigned char __attribute__((aligned(4))) ispcore_sensor_ops[24] = {
 static unsigned char __attribute__((aligned(4))) ct[4] = {
     0x88, 0x13, 0x00, 0x00,
 };
-static uintptr_t width_def;
-static uintptr_t height_def;
+static uintptr_t width_def = 1920;	/* OEM .data 0x43b0c */
+static uintptr_t height_def = 1080;	/* OEM .data 0x43b10 */
 static unsigned char __attribute__((aligned(4))) min_it[4] = {
     0x01, 0x00, 0x00, 0x00,
 };
@@ -7041,7 +7038,7 @@ struct t21_adr_fpga_args {
 };
 
 static struct t21_adr_fpga_args TizianoAdrFpgaStructMe;
-static uintptr_t adr_ratio;
+static uintptr_t adr_ratio = 0x80;	/* OEM .data 0x43b14 = 128 */
 static unsigned char y_zone[900];
 static unsigned char y_zone_last[900];
 static uintptr_t (*ag_new)();
@@ -40152,80 +40149,32 @@ int32_t tisp_clm_param_array_set(int32_t param_id, int32_t param)
 	return 0;
 }
 
+/*
+ * Dynamic ADR (local tone mapping) and defog: lifted 1:1 from oem-t21.ko by
+ * scratchpad lift.py (tisp_adr_process, tiziano_adr_algorithm,
+ * Tiziano_adr_fpga, subsection, subsection_map, tiziano_adr_get_data,
+ * tiziano_adr_interrupt_static, tisp_adr_ev_update, tisp_s_adr_str_internal,
+ * the defog algorithm/fpga/get_data/IRQ/ev_update and their math helpers).  The previous reconstruction kept every block on the
+ * min-kneepoint curve.  Verified against stock in a MIPS emulator.
+ */
+#include "tx_isp_t21_adr_oem.inc"
+
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000025360 origin=model_output original=tisp_defog_ev_update */
 int32_t tisp_defog_ev_update(uint32_t arg1, uint32_t arg2)
 {
-    tisp_defog_ev_changed = 1;
-    tisp_defog_ev_now = (arg2 << 0x16) | (arg1 >> 0xa);
-    return 0;
+	return (int32_t)L_tisp_defog_ev_update(arg1, arg2, 0, 0, 0);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000025388 origin=model_output original=tiziano_defog_get_data */
 uint32_t *tiziano_defog_get_data(void *arg1)
 {
-	uint32_t *src = (void *)((uintptr_t)arg1 + 2);
-	uint32_t *b = defog_meam_block_b;
-	uint32_t *g = defog_meam_block_g;
-	uint32_t *r = defog_meam_block_r;
-	uint32_t *y = defog_meam_block_y;
-	uint32_t *d = defog_detial_block;
-	uint32_t *v = defog_variance_block;
-	uint32_t mask = 0x1fffff;
-	uint32_t i = 0;
-	uint32_t w0, w1, w2, w3;
-	uint32_t idx;
-
-	while (i != 200) {
-		w0 = src[0];
-		w1 = src[1];
-		w2 = src[2];
-		w3 = src[3];
-		idx = i * 10;
-		((void **)(uintptr_t)b)[idx] = w0 & mask;
-		((void **)(uintptr_t)g)[idx] = ((w1 & 0x3ff) << 11) | (w0 >> 21);
-		((void **)(uintptr_t)r)[idx] = (w1 >> 10) & mask;
-		((void **)(uintptr_t)y)[idx] = ((w1 >> 31) << 20) | (w3 >> 12);
-		((void **)(uintptr_t)d)[idx] = w2 & mask;
-		((void **)(uintptr_t)v)[idx] = ((w3 & 0xfff) << 11) | (w2 >> 21);
-		i++;
-		src = (void *)(uintptr_t)((uintptr_t)src + (4));
-	}
-	return v;
+	return (uint32_t *)(uintptr_t)L_tiziano_defog_get_data((uint32_t)(uintptr_t)arg1, 0, 0, 0, 0);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000025498 origin=model_output original=tiziano_defog_interrupt_static */
 int32_t tiziano_defog_interrupt_static(void)
 {
-	/*
-	 * OEM (stock 0x24bb8): read register 0x1500 and compare it with the
-	 * defog DMA bank in tispinfo (+0x3c virtual, +0x40 physical, four
-	 * 0x1000-byte pages).  The recovered body passed the address of the
-	 * "BGGR" string as the register offset, used tisp_init()'s text as
-	 * tispinfo and stepped a u32 pointer by 0x1000 elements.  Not registered
-	 * with system_irq_func_set() in this driver (the OEM uses slot 21).
-	 */
-	uint32_t status = system_reg_read(0x1500);
-	uint32_t *info = (uint32_t *)tispinfo;
-	uint32_t buf = info[15];
-	uint32_t irq_val = info[16];
-	uint32_t event[12] = { 0 };
-	uint32_t page;
-
-	if (!buf)
-		return 1;
-
-	for (page = 0; page < 4; page++) {
-		if (status == irq_val + page * 0x1000) {
-			dma_cache_sync(0, (void *)(uintptr_t)(buf + page * 0x1000),
-				       0x1000, 0);
-			tiziano_defog_get_data((void *)(uintptr_t)(buf + page * 0x1000));
-			break;
-		}
-	}
-
-	event[2] = 3;
-	tisp_event_push(event);
-	return 1;
+	return (int32_t)L_tiziano_defog_interrupt_static(0, 0, 0, 0, 0);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002560c origin=model_output original=tiziano_defog_algorithm */
@@ -40502,8 +40451,7 @@ int32_t tiziano_defog_algorithm(void)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000025d50 origin=model_output original=tisp_defog_process */
 int32_t tisp_defog_process(void)
 {
-	tiziano_defog_algorithm();
-	return 0;
+	return (int32_t)L_tisp_defog_process(0, 0, 0, 0, 0);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000025d78 origin=fragment_seed original=tiziano_defog_params_init */
@@ -40969,8 +40917,8 @@ int32_t tiziano_defog_init(uint32_t arg1, uint32_t arg2)
 	system_reg_write(0x1348, arg1);
 
 	tiziano_defog_params_init();
-	/* The recovered statistics unpacker is still being audited.  Do not
-	 * publish a hard-IRQ callback until it is safe on live DMA data. */
+	/* OEM tiziano_defog_init: statistics IRQ slot 21, event 3. */
+	system_irq_func_set(21, tiziano_defog_interrupt_static);
 	tisp_event_set_cb(3, (uint32_t)(uintptr_t)tisp_defog_process);
 
 	return 0;
@@ -41176,95 +41124,19 @@ int32_t tisp_defog_param_array_set(int32_t param_id, int32_t src)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000027590 origin=model_output original=tisp_adr_ev_update */
 int32_t tisp_adr_ev_update(uint32_t arg1, uint32_t arg2)
 {
-    tisp_adr_ev_changed = 1;
-    tisp_adr_ev_now = (arg2 << 0x16) | (arg1 >> 0xa);
-    return 0;
+	return (int32_t)L_tisp_adr_ev_update(arg1, arg2, 0, 0, 0);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000275b8 origin=fragment_seed original=tiziano_adr_get_data */
 int64_t tiziano_adr_get_data(uintptr_t a0)
 {
-	const uint8_t *src = (const uint8_t *)a0;
-	uint32_t *block_hist = (uint32_t *)adr_block_hist;
-	uint32_t *block_y = (uint32_t *)adr_block_y;
-	uint32_t *hist = (uint32_t *)adr_hist;
-	uint32_t row;
-	uint32_t col;
-	uint32_t group;
-
-	/* The statistics DMA packs a 4x5 luminance grid and five one-byte
-	 * histogram values for each cell into the first 160 bytes. */
-	for (row = 0; row < 4; row++) {
-		for (col = 0; col < 5; col++) {
-			const uint8_t *cell = src + row * 40 + col * 8;
-			uint32_t out = col * 20 + row * 5;
-
-			block_y[col * 4 + row] =
-				(*(const uint32_t *)(cell + 8)) & 0x00ffffff;
-			block_hist[out + 4] = cell[11];
-			block_hist[out + 3] = cell[12];
-			block_hist[out + 2] = cell[13];
-			block_hist[out + 1] = cell[14];
-			block_hist[out] = cell[15];
-		}
-	}
-
-	/* The remainder contains 512 packed 12-bit histogram bins.  The first
-	 * 510 arrive five-at-a-time in eight bytes; the final pair share the
-	 * last word. */
-	for (group = 0; group < 102; group++) {
-		const uint8_t *packed = src + 168 + group * 8;
-		uint32_t low = *(const uint32_t *)packed;
-		uint32_t high = *(const uint32_t *)(packed + 4);
-		uint32_t out = group * 5;
-
-		hist[out + 4] = low & 0xfff;
-		hist[out + 3] = (low >> 12) & 0xfff;
-		hist[out + 2] = ((high & 0xf) << 8) | packed[3];
-		hist[out + 1] = (high >> 4) & 0xfff;
-		hist[out] = (*(const uint16_t *)(packed + 6)) & 0xfff;
-	}
-	hist[511] = (*(const uint32_t *)(src + 988) >> 4) & 0xfff;
-	hist[510] = (*(const uint16_t *)(src + 990)) & 0xfff;
-
-	return 0;
+	return (int32_t)L_tiziano_adr_get_data((uint32_t)a0, 0, 0, 0, 0);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000027700 origin=model_output original=tiziano_adr_interrupt_static */
 int32_t tiziano_adr_interrupt_static(void)
 {
-	uint32_t status = system_reg_read(0xe3c);
-	uint32_t *info = (uint32_t *)tispinfo;
-	uint32_t data_ptr = info[12];
-	uint32_t irq_base = info[13];
-	uint32_t event[12] = { 0 };
-
-	if (!data_ptr)
-		return 0;
-
-	if (status == irq_base) {
-		dma_cache_sync(0, (void *)data_ptr, 0x1000, 0);
-		tiziano_adr_get_data(data_ptr);
-	}
-
-	if (status == irq_base + 0x1000) {
-		dma_cache_sync(0, (void *)(data_ptr + 0x1000), 0x1000, 0);
-		tiziano_adr_get_data(data_ptr + 0x1000);
-	}
-
-	if (status == irq_base + 0x2000) {
-		dma_cache_sync(0, (void *)(data_ptr + 0x2000), 0x1000, 0);
-		tiziano_adr_get_data(data_ptr + 0x2000);
-	}
-
-	if (status == irq_base + 0x3000) {
-		dma_cache_sync(0, (void *)(data_ptr + 0x3000), 0x1000, 0);
-		tiziano_adr_get_data(data_ptr + 0x3000);
-	}
-
-	event[2] = 2;
-	tisp_event_push(event);
-	return 1;
+	return (int32_t)L_tiziano_adr_interrupt_static(0, 0, 0, 0, 0);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000027874 origin=model_output original=tiziano_adr_algorithm */
@@ -41591,62 +41463,7 @@ int32_t tiziano_adr_algorithm(void)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000027ea8 origin=model_output original=tisp_adr_process */
 int32_t tisp_adr_process(void)
 {
-	uint32_t *knee;
-	uint32_t *min_knee;
-	uint32_t *ctc_x;
-	uint32_t *ctc_mux;
-	uint32_t *cw;
-	uint32_t *par;
-	uint32_t i;
-	uint32_t j;
-	uint32_t reg;
-	uint32_t val;
-
-	tiziano_adr_algorithm();
-
-	knee = (uint32_t *)&map_kneepoint_y;
-	for (i = 0; i != 20; i++) {
-		for (j = 5; j != 0; j--) {
-			uint32_t *entry =
-				(uint32_t *)((char *)knee - j * 2 * sizeof(*knee));
-
-			reg = (i * 6 + 677 - j) << 2;
-			val = (entry[11] << 16) | entry[10];
-			system_reg_write(reg, val);
-		}
-		reg = i * 24 + 2708;
-		val = *(uint32_t *)((char *)knee + 40);
-		system_reg_write(reg, val);
-		knee = (uint32_t *)((char *)knee + 44);
-	}
-
-	min_knee = (uint32_t *)&min_kneepoint_y + 1;
-	for (i = 3528; i != 3548; i += 4) {
-		val = (*(uint32_t *)(uintptr_t)min_knee << 16) | *(uint32_t *)((uintptr_t)min_knee - 4);
-		system_reg_write(i, val);
-		min_knee += 2;
-	}
-
-	system_reg_write(3548, *(uint32_t *)((char *)&min_kneepoint_y + 0x28));
-
-	ctc_x = (uint32_t *)&ctc_kneepoint_x;
-	system_reg_write(3344, (*(uint32_t *)((uintptr_t)ctc_x + 8) << 16) | *(uint32_t *)((uintptr_t)ctc_x + 4));
-	system_reg_write(3348, *(uint32_t *)((char *)ctc_x + 12));
-
-	ctc_mux = (uint32_t *)&ctc_kneepoint_mux;
-	system_reg_write(3488, *(uint32_t *)((char *)ctc_mux + 8));
-	system_reg_write(3492, *(uint32_t *)((char *)ctc_mux + 12));
-
-	cw = (uint32_t *)&contrast_w_distance;
-	for (i = 3360; i != 3488; i += 4) {
-		system_reg_write(i, *(uint32_t *)((char *)cw + i - 3360));
-	}
-
-	par = (uint32_t *)&param_adr_ct_par_array;
-	val = (*(uint32_t *)((uintptr_t)par + 8) << 16) | (*(uint32_t *)((uintptr_t)par + 4) << 8) | *(uint32_t *)(uintptr_t)par;
-	system_reg_write(3496, val);
-
-	return 0;
+	return (int32_t)L_tisp_adr_process(0, 0, 0, 0, 0);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000028098 origin=model_output original=tiziano_adr_params_init */
@@ -42069,88 +41886,7 @@ uint32_t tisp_g_adr_str_internal(uintptr_t a0)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000029280 origin=model_output original=tisp_s_adr_str_internal */
 int32_t tisp_s_adr_str_internal(uint32_t a0)
 {
-	uint32_t *i = &adr_mapb4_list;
-	uint32_t *v0 = &tparams;
-	uint32_t *a3 = &adr_mapb1_list;
-	uint32_t *a2 = &adr_mapb2_list;
-	uint32_t *a1 = &adr_mapb3_list;
-	uint32_t t0 = a0 - 128;
-	uint32_t t3 = (uint32_t)i + 36;
-	uint32_t t4 = a0 < 129;
-	uint32_t t5 = 450;
-	uint32_t t6 = 500;
-	uint32_t t7 = 600;
-	uint32_t t8 = 800;
-	uint32_t t1 = 5;
-	uint32_t t2;
-	uint32_t t9;
-
-	adr_ratio = a0;
-
-	do {
-		t2 = *v0;
-		if (t4 == 0) {
-			t9 = t5 - t2;
-			t9 = t9 * t0;
-			t9 = t9 >> 7;
-			t2 = t9 + t2;
-			*a3 = t2;
-			t2 = v0[9];
-			t9 = t6 - t2;
-			t9 = t9 * t0;
-			t9 = t9 >> 7;
-			t2 = t9 + t2;
-			*a2 = t2;
-			t2 = v0[0x12];
-			t9 = t7 - t2;
-			t9 = t9 * t0;
-			t9 = t9 >> 7;
-			t2 = t9 + t2;
-			*a1 = t2;
-			t2 = v0[0x1b];
-			t9 = t8 - t2;
-			t9 = t9 * t0;
-			t9 = t9 >> 7;
-			t2 = t9 + t2;
-		} else {
-			t2 = a0 * t2;
-			t2 = t2 >> 7;
-			t9 = t2 < 5;
-			if (t9 != 0)
-				t2 = t1;
-			*a3 = t2;
-			t2 = v0[9];
-			t2 = a0 * t2;
-			t2 = t2 >> 7;
-			t9 = t2 < 5;
-			if (t9 != 0)
-				t2 = t1;
-			*a2 = t2;
-			t2 = v0[0x12];
-			t2 = a0 * t2;
-			t2 = t2 >> 7;
-			t9 = t2 < 5;
-			if (t9 != 0)
-				t2 = t1;
-			*a1 = t2;
-			t2 = v0[0x1b];
-			t2 = a0 * t2;
-			t2 = t2 >> 7;
-			t9 = t2 < 5;
-			if (t9 != 0)
-				t2 = t1;
-		}
-		*i = t2;
-		i++;
-		v0++;
-		a3++;
-		a2++;
-		a1++;
-	} while ((uint32_t)i != t3);
-
-	tiziano_adr_params_init();
-	ev_changed = 1; /* OEM ev_changed, not awb_array_g+0x6c */
-	return (int32_t)&sinfo_root;
+	return (int32_t)L_tisp_s_adr_str_internal(a0, 0, 0, 0, 0);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000293d8 origin=model_output original=tiziano_adr_params_refresh */
