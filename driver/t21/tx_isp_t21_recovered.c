@@ -8681,6 +8681,23 @@ static bool t21_text_watch;
 module_param_named(text_watch, t21_text_watch, bool, 0644);
 static bool t21_ktext_watch;
 module_param_named(ktext_watch, t21_ktext_watch, bool, 0644);
+
+/*
+ * stop_trace=<ms>: log every step of the stream-off / link / release paths
+ * at KERN_ERR and sleep <ms> after each, so the last step before a silent
+ * hang or watchdog reset still leaves the camera over the network
+ * (cat /proc/kmsg via ssh).  Only used in process context.  0 = off.
+ */
+static uint t21_stop_trace;
+module_param_named(stop_trace, t21_stop_trace, uint, 0644);
+#define T21_STOP_TRACE(fmt, ...)						\
+	do {								\
+		if (t21_stop_trace) {					\
+			printk(KERN_ERR "tx-isp-t21 stop: " fmt "\n",	\
+			       ##__VA_ARGS__);				\
+			msleep(t21_stop_trace);				\
+		}							\
+	} while (0)
 static ulong t21_ktext_start = 0x80010400UL;
 module_param_named(ktext_start, t21_ktext_start, ulong, 0444);
 static ulong t21_ktext_end = 0x803809d0UL;
@@ -11337,7 +11354,12 @@ int32_t vin_s_stream(void *arg1, int32_t arg2)
         video = sensor->ops ? sensor->ops->video : NULL;
         if (video == NULL || video->s_stream == NULL)
             return -515;
+        if (!arg2)
+            T21_STOP_TRACE("vin: sensor %p s_stream(0) fn=%pS", sensor,
+                           video->s_stream);
         state = video->s_stream(sensor, arg2);
+        if (!arg2)
+            T21_STOP_TRACE("vin: sensor s_stream(0) ret=%d", state);
         if (state != 0)
             return state;
     }
@@ -16767,9 +16789,13 @@ int32_t frame_channel_release(uint32_t a0, uintptr_t a1, uint32_t a2)
         ret = -22;
     } else {
         ret = 0;
+        T21_STOP_TRACE("framechan release chan=%p state=%d", (void *)s0,
+                       *(int32_t *)((char *)s0 + 0x2a4));
         if (*(int32_t *)((char *)s0 + 0x2a4) == 4) {
             __frame_channel_vb2_streamoff((void *)s0, *(int32_t *)((char *)s0 + 0x24), a2);
+            T21_STOP_TRACE("framechan release streamoff done");
             __vb2_queue_free((uintptr_t)((char *)s0 + 0x24), *(uint32_t *)((char *)s0 + 0x20c));
+            T21_STOP_TRACE("framechan release queue freed");
             *(int32_t *)((char *)s0 + 0x2a4) = 2;
         }
     }
@@ -17649,7 +17675,12 @@ int32_t tx_isp_video_s_stream(void *arg1, int32_t arg2)
 		if (video == NULL || video->s_stream == NULL)
 			continue;
 
+		if (!arg2)
+			T21_STOP_TRACE("s_stream(0) subdev[%d]=%p fn=%pS", i,
+				       subdev, video->s_stream);
 		result = video->s_stream(subdev, arg2);
+		if (!arg2)
+			T21_STOP_TRACE("s_stream(0) subdev[%d] ret=%d", i, result);
         if (result != 0 && result != -515) {
             int32_t j;
 
@@ -17683,7 +17714,13 @@ int32_t tx_isp_video_link_stream(void *arg1, int32_t arg2)
 		if (video == NULL || video->link_stream == NULL)
 			continue;
 
+		if (!arg2)
+			T21_STOP_TRACE("link_stream(0) subdev[%d]=%p fn=%pS", i,
+				       subdev, video->link_stream);
 		result = video->link_stream(subdev, arg2);
+		if (!arg2)
+			T21_STOP_TRACE("link_stream(0) subdev[%d] ret=%d", i,
+				       result);
 		if (result != 0 && result != -515) {
 			int32_t j;
 
@@ -18312,6 +18349,8 @@ int32_t tx_isp_video_link_destroy_isra_1(void *arg1)
 		pad2 = (u8 *)(uintptr_t)find_subdev_link_pad(arg1,
 					(int32_t *)&link->sink);
 
+		T21_STOP_TRACE("link_destroy set=%d link=%u pads=%p/%p", idx, i,
+			       pad1, pad2);
 		if (pad1 && pad2) {
 			ret = subdev_video_destroy_link((uintptr_t)(pad1 + 8));
 			if (ret && ret != -515)
@@ -18417,6 +18456,8 @@ int32_t tx_isp_release(int32_t arg1, void *arg2)
 	void *internal;
 	int32_t link_val;
 
+	T21_STOP_TRACE("tx_isp_release count=%d link=%d", count,
+		       *(int32_t *)((char *)dev + 0x10c));
 	if (count == 0) {
 		for (i = 0; i < 0x40; i += 4) {
 			link = *(void **)((char *)dev + i - 0xc + 0x38);
@@ -18430,7 +18471,10 @@ int32_t tx_isp_release(int32_t arg1, void *arg2)
 				result = -515;
 				continue;
 			}
+			T21_STOP_TRACE("tx_isp_release slake[%d]=%p fn=%pS", i / 4,
+				       link, release_fn);
 			ret = release_fn(link);
+			T21_STOP_TRACE("tx_isp_release slake[%d] ret=%d", i / 4, ret);
 			if (ret == 0)
 				continue;
 			if (ret == -515) {
@@ -19448,8 +19492,11 @@ static long tx_isp_unlocked_ioctl(struct file *file, unsigned int cmd,
 		pr_debug("tx-isp-t21: ioctl stream on\n");
 		return tx_isp_video_s_stream(base, 1);
 	case 0x80045613:
-		pr_debug("tx-isp-t21: ioctl stream off\n");
-		return tx_isp_video_s_stream(base, 0);
+		T21_STOP_TRACE("ioctl DISABLE_SENSOR (stream off) pid=%d",
+			       current->pid);
+		ret = tx_isp_video_s_stream(base, 0);
+		T21_STOP_TRACE("ioctl DISABLE_SENSOR ret=%d", ret);
+		return ret;
 	case 0x800456d0:
 		if (private_copy_from_user(&val, (void __user *)arg, sizeof(val))) {
 			isp_printf(2, "[%s][%d] copy from user error\n",
@@ -19461,15 +19508,18 @@ static long tx_isp_unlocked_ioctl(struct file *file, unsigned int cmd,
 		pr_debug("tx-isp-t21: ioctl link setup ret=%d\n", ret);
 		return ret;
 	case 0x800456d1:
-		pr_debug("tx-isp-t21: ioctl link destroy\n");
+		T21_STOP_TRACE("ioctl DESTROY_LINKS");
 		tx_isp_video_link_destroy_isra_1(base);
+		T21_STOP_TRACE("ioctl DESTROY_LINKS done");
 		return 0;
 	case 0x800456d2:
 		pr_debug("tx-isp-t21: ioctl link stream on\n");
 		return tx_isp_video_link_stream(base, 1);
 	case 0x800456d3:
-		pr_debug("tx-isp-t21: ioctl link stream off\n");
-		return tx_isp_video_link_stream(base, 0);
+		T21_STOP_TRACE("ioctl DISABLE_LINKS");
+		ret = tx_isp_video_link_stream(base, 0);
+		T21_STOP_TRACE("ioctl DISABLE_LINKS ret=%d", ret);
+		return ret;
 	case 0x805056c1:
 	case 0x805056c2:
 	case 0xc050561a:
@@ -51751,8 +51801,13 @@ int32_t ispcore_video_s_stream(void *arg1, int32_t arg2)
 			while (1) {
 				void *ch = (void *)((char *)(uintptr_t)ch_base + ch_off);
 				ch_off += 0xa0;
-				if (*(int32_t *)((char *)ch + 0x50) == 4)
+				if (*(int32_t *)((char *)ch + 0x50) == 4) {
+					T21_STOP_TRACE("ispcore: channel %d streamoff",
+						       ch_off / 0xa0 - 1);
 					ispcore_frame_channel_streamoff(*(int32_t **)((char *)ch + 0x54));
+					T21_STOP_TRACE("ispcore: channel %d streamoff done",
+						       ch_off / 0xa0 - 1);
+				}
 				if (ch_off == 0x1e0)
 					break;
 				ch_base = *(void **)((char *)s0 + 0x14c);
@@ -51782,7 +51837,13 @@ int32_t ispcore_video_s_stream(void *arg1, int32_t arg2)
 				if (ops_fn == 0) {
 					result = -515;
 				} else {
+					if (!arg2)
+						T21_STOP_TRACE("ispcore: child %p s_stream(0) fn=%pS",
+							       dev, ops_fn);
 					result = ops_fn(dev, arg2);
+					if (!arg2)
+						T21_STOP_TRACE("ispcore: child s_stream(0) ret=%d",
+							       result);
 					if (result != 0) {
 						if (result != -515)
 							break;
@@ -51801,6 +51862,7 @@ int32_t ispcore_video_s_stream(void *arg1, int32_t arg2)
 
 	hw = *(void **)((char *)arg1 + 0xb8);
 	if (arg2 == 0) {
+		T21_STOP_TRACE("ispcore: irq mask write hw=%p", hw);
 		*(int32_t *)((char *)hw + 0x80) = 0;
 		irq_fn = tx_isp_disable_irq;
 	} else {
@@ -51808,6 +51870,8 @@ int32_t ispcore_video_s_stream(void *arg1, int32_t arg2)
 		irq_fn = tx_isp_enable_irq;
 	}
 	irq_fn((uintptr_t)arg1);
+	if (!arg2)
+		T21_STOP_TRACE("ispcore: s_stream(0) done result=%d", result);
 
 	if (result == -515)
 		result = 0;
