@@ -2463,8 +2463,16 @@ static void *tparams_cust = NULL;
 static void *tparams_active = NULL;
 static u32 tisp_ae_backlight_calibrated = 1;
 static u32 tisp_ae_highlight_calibrated = 1;
-static int tisp_ae_backlight_requested;
-static int tisp_ae_highlight_requested;
+/* IMP level [0, 10] once userspace has set it; UNSET keeps the bank value */
+static int tisp_ae_backlight_requested = TX_ISP_T31_AE_SCENE_UNSET;
+static int tisp_ae_highlight_requested = TX_ISP_T31_AE_SCENE_UNSET;
+
+static int tisp_ae_scene_level(int level)
+{
+	/* the control value is unsigned on the wire: clamp, never "unset" */
+	return (u32)level > TX_ISP_T31_AE_SCENE_LEVEL_MAX ?
+	       TX_ISP_T31_AE_SCENE_LEVEL_MAX : level;
+}
 static uint8_t tispPollValue;
 static wait_queue_head_t dumpQueue;  /* OEM: poll wait queue for /dev/isp-m0 day/night events */
 static bool tuning_bin_loaded = false;
@@ -2681,10 +2689,10 @@ static void tisp_sync_active_ae_scene_controls(const void *src)
 	memcpy(&highlight,
 	       (const u8 *)src + TISP_PARAM_AE_SCENE_OFFSET + 6 * sizeof(u32),
 	       sizeof(highlight));
-	tisp_ae_backlight_calibrated =
-		tx_isp_t31_ae_scene_strength(backlight, 0);
-	tisp_ae_highlight_calibrated =
-		tx_isp_t31_ae_scene_strength(highlight, 0);
+	tisp_ae_backlight_calibrated = tx_isp_t31_ae_scene_strength(
+		backlight, TX_ISP_T31_AE_SCENE_UNSET);
+	tisp_ae_highlight_calibrated = tx_isp_t31_ae_scene_strength(
+		highlight, TX_ISP_T31_AE_SCENE_UNSET);
 
 	backlight = tx_isp_t31_ae_scene_strength(
 		tisp_ae_backlight_calibrated, tisp_ae_backlight_requested);
@@ -33846,12 +33854,18 @@ static int tisp_mdns_reg_trigger(void)
     return 0;
 }
 
-/* OEM tisp_s_BacklightComp (0x63ac4 in the stock T31 module).
+/* OEM tisp_s_BacklightComp (0x63194 in the stock T31 module).
  *
- * Generic streamers initialize both scalar controls to zero.  Treat zero as
- * no user override so it cannot erase sensor-calibrated scene strengths from
- * the active tuning bank.  A nonzero level keeps the OEM level + 1 encoding.
- * Applying either scalar also preserves the other control. */
+ * Stock stores level + 1 (1 = off), so IMP level 0 disables the function
+ * and GetBacklightComp reports 0; the level is clamped to the documented
+ * IMP range [0, 10].  Until userspace sets a level the active tuning bank's
+ * calibrated strength stays in force.  The requested level is re-applied
+ * on every bank load (day/night, custom), which stock does not do.
+ *
+ * Deviation: stock also forces the other scalar (highlight depress) to 1
+ * (off) on every set, so only one of the two can be active.  Here applying
+ * either scalar preserves the other, because streamers persist and replay
+ * both. */
 int tisp_s_BacklightComp(int comp_level)
 {
     struct scene_para scene;
@@ -33863,7 +33877,7 @@ int tisp_s_BacklightComp(int comp_level)
     else
         memcpy(&scene, &_scene_para, sizeof(scene));
 
-    tisp_ae_backlight_requested = comp_level;
+    tisp_ae_backlight_requested = tisp_ae_scene_level(comp_level);
     scene.data[0] = 1;
     scene.data[5] = tx_isp_t31_ae_scene_strength(
         tisp_ae_backlight_calibrated, tisp_ae_backlight_requested);
@@ -33879,7 +33893,8 @@ int tisp_s_BacklightComp(int comp_level)
 }
 EXPORT_SYMBOL(tisp_s_BacklightComp);
 
-/* OEM tisp_s_Hilightdepress (0x63984 in the stock T31 module). */
+/* OEM tisp_s_Hilightdepress (0x63054 in the stock T31 module); see
+ * tisp_s_BacklightComp for the level encoding. */
 int tisp_s_Hilightdepress(int depress_level)
 {
     struct scene_para scene;
@@ -33891,7 +33906,7 @@ int tisp_s_Hilightdepress(int depress_level)
     else
         memcpy(&scene, &_scene_para, sizeof(scene));
 
-    tisp_ae_highlight_requested = depress_level;
+    tisp_ae_highlight_requested = tisp_ae_scene_level(depress_level);
     scene.data[0] = 1;
     scene.data[5] = tx_isp_t31_ae_scene_strength(
         tisp_ae_backlight_calibrated, tisp_ae_backlight_requested);
