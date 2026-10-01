@@ -36,6 +36,8 @@ static uint32_t regtrace_t23_awb_hlil_history_count;
 static bool regtrace_t23_awb_hlil_pending;
 /* Set while a parameter-bank switch reloads the blocks; blocks new work. */
 static bool regtrace_t23_awb_hlil_paused;
+/* WB_GOL_STATIS r/b and WB_STATIS r/b ratios, Q8 (0x10000 / mf gain). */
+static uint32_t regtrace_t23_awb_statis[4];
 static DEFINE_SPINLOCK(regtrace_t23_awb_hlil_lock);
 
 static void regtrace_t23_source_awb_hlil_work(struct work_struct *work);
@@ -493,12 +495,19 @@ static void regtrace_t23_source_awb_hlil_work_body(struct work_struct *work)
     regtrace_t23_source_awb_hlil_status = ret ? 1U : 0U;
 
     if (!ret) {
+        uint32_t raw_mf_rg = regtrace_t23_awb_hlil_ratio_to_mf(result.rg);
+        uint32_t raw_mf_bg = regtrace_t23_awb_hlil_ratio_to_mf(result.bg);
+
+        regtrace_t23_awb_statis[0] = raw_mf_rg ? 0x10000U / raw_mf_rg : 0x100U;
+        regtrace_t23_awb_statis[1] = raw_mf_bg ? 0x10000U / raw_mf_bg : 0x100U;
         regtrace_t23_awb_hlil_history_update(
             &result.rg, &result.bg, &result.ct);
         auto_mf_rg = regtrace_t23_awb_hlil_ratio_to_mf(result.rg);
         auto_mf_bg = regtrace_t23_awb_hlil_ratio_to_mf(result.bg);
         regtrace_t23_source_awb_last_mf_rg = auto_mf_rg;
         regtrace_t23_source_awb_last_mf_bg = auto_mf_bg;
+        regtrace_t23_awb_statis[2] = auto_mf_rg ? 0x10000U / auto_mf_rg : 0x100U;
+        regtrace_t23_awb_statis[3] = auto_mf_bg ? 0x10000U / auto_mf_bg : 0x100U;
         ((uint32_t *)(void *)_awb_mf_para)[4] = auto_mf_rg;
         ((uint32_t *)(void *)_awb_mf_para)[5] = auto_mf_bg;
 

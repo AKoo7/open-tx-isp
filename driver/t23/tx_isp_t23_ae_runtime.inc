@@ -54,6 +54,50 @@ static int regtrace_t23_ae_hlil_append(uint32_t integration,
     return 0;
 }
 
+/*
+ * Anti-flicker (V4L2 power line frequency: 0 off, 1 50 Hz, 2 60 Hz).  The
+ * OEM AE quantises the integration time to whole periods of the light
+ * flicker (1 / (2 * mains frequency)) once the exposure reaches one period
+ * (tisp_s_antiflick -> tiziano_deflicker_expt_tune).  This driver's AE
+ * walks a ladder of exposures, so the ladder itself is quantised: rungs
+ * below one period stay (bright scenes), every longer rung is a multiple
+ * of the period, and the gain rungs start at the longest such multiple.
+ */
+static uint32_t regtrace_t23_ae_flicker_mode;   /* 0, 1 (50 Hz), 2 (60 Hz) */
+static uint32_t regtrace_t23_ae_flicker_lines;  /* period in use, lines */
+
+static uint32_t regtrace_t23_sensor_held_fps(void);
+
+static uint32_t regtrace_t23_ae_flicker_step(void)
+{
+    static const uint32_t hz_of_mode[3] = { 0, 50U, 60U };
+    unsigned char *attr = regtrace_t23_sensor_owned_attr();
+    uint32_t hz;
+    uint32_t fps;
+    uint32_t num;
+    uint32_t den;
+    uint32_t vts;
+
+    if (regtrace_t23_ae_flicker_mode >= ARRAY_SIZE(hz_of_mode) || !attr)
+        return 0;
+    hz = hz_of_mode[regtrace_t23_ae_flicker_mode];
+    if (!hz)
+        return 0;
+    /* No FPS mutex here: callers may hold it (sensor FPS retime). */
+    fps = regtrace_t23_sensor_held_fps();
+    if (!fps)
+        fps = regtrace_t23_sensor_fps_request ?
+            regtrace_t23_sensor_fps_request : regtrace_t23_source_sensor_fps;
+    num = fps >> 16;
+    den = fps & 0xffffU;
+    vts = regtrace_t23_get_le16(attr + REGTRACE_T23_ATTR_TOTAL_HEIGHT);
+    if (!num || !den || !vts)
+        return 0;
+    /* lines per second / (2 * hz), rounded */
+    return (uint32_t)div64_u64((uint64_t)num * vts + (uint64_t)den * hz,
+                               (uint64_t)den * 2U * hz);
+}
+
 static int regtrace_t23_ae_hlil_build_ladder(void)
 {
     uint32_t integration;
@@ -61,6 +105,8 @@ static int regtrace_t23_ae_hlil_build_ladder(void)
     uint32_t gain_step;
     uint32_t gain;
     uint32_t unity_states;
+    uint32_t gain_it = regtrace_t23_source_sensor_max_it;
+    uint32_t step;
     int ret;
 
     if (!regtrace_t23_source_sensor_min_it ||
@@ -69,18 +115,50 @@ static int regtrace_t23_ae_hlil_build_ladder(void)
         return -EINVAL;
 
     regtrace_t23_ae_hlil_state_count = 0;
-    integration = regtrace_t23_source_sensor_min_it;
-    for (;;) {
-        ret = regtrace_t23_ae_hlil_append(integration, 0U);
-        if (ret)
-            return ret;
-        if (integration == regtrace_t23_source_sensor_max_it)
-            break;
-        next = integration + max(integration >> 1, 1U);
-        if (next < integration ||
-            next > regtrace_t23_source_sensor_max_it)
-            next = regtrace_t23_source_sensor_max_it;
-        integration = next;
+    step = regtrace_t23_ae_flicker_step();
+    if (step && step >= regtrace_t23_source_sensor_min_it &&
+        step <= regtrace_t23_source_sensor_max_it) {
+        uint32_t periods;
+        uint32_t max_periods =
+            regtrace_t23_source_sensor_max_it / step;
+
+        integration = regtrace_t23_source_sensor_min_it;
+        while (integration < step) {
+            ret = regtrace_t23_ae_hlil_append(integration, 0U);
+            if (ret)
+                return ret;
+            next = integration + max(integration >> 1, 1U);
+            if (next <= integration)
+                break;
+            integration = next;
+        }
+        for (periods = 1; periods <= max_periods;) {
+            ret = regtrace_t23_ae_hlil_append(periods * step, 0U);
+            if (ret)
+                return ret;
+            if (periods == max_periods)
+                break;
+            /* about 1.5x per rung, as the plain ladder */
+            next = max(periods + 1U, periods + (periods >> 1));
+            periods = min(next, max_periods);
+        }
+        gain_it = max_periods * step;
+        regtrace_t23_ae_flicker_lines = step;
+    } else {
+        regtrace_t23_ae_flicker_lines = 0;
+        integration = regtrace_t23_source_sensor_min_it;
+        for (;;) {
+            ret = regtrace_t23_ae_hlil_append(integration, 0U);
+            if (ret)
+                return ret;
+            if (integration == regtrace_t23_source_sensor_max_it)
+                break;
+            next = integration + max(integration >> 1, 1U);
+            if (next < integration ||
+                next > regtrace_t23_source_sensor_max_it)
+                next = regtrace_t23_source_sensor_max_it;
+            integration = next;
+        }
     }
 
     unity_states = regtrace_t23_ae_hlil_state_count;
@@ -95,25 +173,24 @@ static int regtrace_t23_ae_hlil_build_ladder(void)
         for (gain = gain_step;
              gain < regtrace_t23_source_sensor_max_again;
              gain += gain_step) {
-            ret = regtrace_t23_ae_hlil_append(
-                regtrace_t23_source_sensor_max_it, gain);
+            ret = regtrace_t23_ae_hlil_append(gain_it, gain);
             if (ret)
                 return ret;
             if (gain > 0xffffffffU - gain_step)
                 break;
         }
         ret = regtrace_t23_ae_hlil_append(
-            regtrace_t23_source_sensor_max_it,
-            regtrace_t23_source_sensor_max_again);
+            gain_it, regtrace_t23_source_sensor_max_again);
         if (ret)
             return ret;
     }
 
     printk(KERN_INFO
-           "tx_isp_t23_recovered: generic AE ladder states=%u it=%u..%u max_again_log2=0x%x initial=0x%08x\n",
+           "tx_isp_t23_recovered: generic AE ladder states=%u it=%u..%u flicker=%u lines max_again_log2=0x%x initial=0x%08x\n",
            regtrace_t23_ae_hlil_state_count,
            regtrace_t23_source_sensor_min_it,
            regtrace_t23_source_sensor_max_it,
+           regtrace_t23_ae_flicker_lines,
            regtrace_t23_source_sensor_max_again,
            regtrace_t23_source_ae_initial_packed);
     return 0;
@@ -381,7 +458,8 @@ static void regtrace_t23_source_ae_hlil_reset(void)
  * the frame gets shorter, the current rung may exceed the new limit and is
  * reprogrammed at once.
  */
-static int regtrace_t23_ae_hlil_retime(uint32_t max_it, const char *reason)
+static int regtrace_t23_ae_hlil_retime_force(uint32_t max_it,
+                                             const char *reason, bool force)
 {
     static struct regtrace_t23_ae_hlil_rung
         saved[REGTRACE_T23_AE_HLIL_MAX_STATES];
@@ -400,7 +478,7 @@ static int regtrace_t23_ae_hlil_retime(uint32_t max_it, const char *reason)
         return 0;   /* resolve_sensor_config reads the new limit later */
     if (!max_it || max_it < regtrace_t23_source_sensor_min_it)
         return -EINVAL;
-    if (max_it == regtrace_t23_source_sensor_max_it)
+    if (max_it == regtrace_t23_source_sensor_max_it && !force)
         return 0;
 
     spin_lock_irqsave(&regtrace_t23_ae_hlil_lock, flags);
@@ -456,6 +534,29 @@ static int regtrace_t23_ae_hlil_retime(uint32_t max_it, const char *reason)
            regtrace_t23_ae_hlil_state_count,
            regtrace_t23_source_ae_hlil_state,
            regtrace_t23_source_ae_hlil_ev, ret, reason ? reason : "?");
+    return ret;
+}
+
+static int regtrace_t23_ae_hlil_retime(uint32_t max_it, const char *reason)
+{
+    return regtrace_t23_ae_hlil_retime_force(max_it, reason, false);
+}
+
+/* Anti-flicker change: rebuild the ladder for the same frame length. */
+static int regtrace_t23_ae_set_antiflicker(uint32_t mode)
+{
+    uint32_t old = regtrace_t23_ae_flicker_mode;
+    int ret;
+
+    if (mode > 2U)
+        return -EINVAL;
+    regtrace_t23_ae_flicker_mode = mode;
+    if (mode == old)
+        return 0;
+    ret = regtrace_t23_ae_hlil_retime_force(
+        regtrace_t23_source_sensor_max_it, "antiflicker", true);
+    if (ret)
+        regtrace_t23_ae_flicker_mode = old;
     return ret;
 }
 
