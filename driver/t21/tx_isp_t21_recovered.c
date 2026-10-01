@@ -3059,6 +3059,14 @@ static unsigned char dmsc_sp_ud_w_stren_array[36];
 static unsigned char dmsc_uu_stren_array[36];
 static unsigned char dmsc_uu_thres_array[36];
 static uint32_t gain_old;
+/*
+ * OEM tx-isp-t21 keeps a separate static gain_old per tuning module
+ * (.data+0x41fe0 sharpen, +0x41ff0 sdns, +0x42008 mdns, +0x42010 dpc).
+ * The recovery addressed the sharpen and dpc ones as text offsets of
+ * get_isp_clk() and as tparams+0x1590/0x15c0 (HI16 0x40000 dropped).
+ */
+static uint32_t sharpen_gain_old = 0xffffffffU;
+static uint32_t dpc_gain_old = 0xffffffffU;
 static volatile unsigned char __attribute__((aligned(4))) gain_thres[4] = {
     0x00, 0x01, 0x00, 0x00,
 };
@@ -21223,19 +21231,20 @@ int32_t tisp_param_operate_process(void *payload, int payload_len)
 
 		if (msg_id == 0) {
 			memcpy(ae_buf, (char *)arg + 0x18, 0x40);
-			*(int32_t *)&tisp_ae_tune = ae_buf[0];
-			*(int32_t *)((char *)&tisp_ae_tune + 4) = ae_buf[1];
-			*(int32_t *)((char *)&tisp_ae_tune + 8) = ae_buf[2];
-			*(int32_t *)((char *)&tisp_ae_tune + 12) = ae_buf[3];
-			*(int32_t *)((char *)&tisp_ae_tune + 16) = ae_buf[4];
-			*(int32_t *)((char *)&tisp_ae_tune + 20) = ae_buf[5];
-			*(int32_t *)((char *)&tisp_ae_tune + 24) = ae_buf[6];
-			*(int32_t *)((char *)&tisp_ae_tune + 28) = ae_buf[7];
-			*(int32_t *)((char *)&tisp_ae_tune + 32) = ae_buf[8];
-			*(int32_t *)((char *)&tisp_ae_tune + 48) = ae_buf[12];
-			*(int32_t *)((char *)&tisp_ae_tune + 52) = ae_buf[13];
-			*(int32_t *)((char *)&tisp_ae_tune + 56) = ae_buf[14];
-			*(int32_t *)((char *)&tisp_ae_tune + 60) = ae_buf[15];
+			/* OEM stores to tisp_ae_ctrls; the recovery wrote tisp_ae_tune()'s text */
+			*(int32_t *)tisp_ae_ctrls = ae_buf[0];
+			*(int32_t *)((char *)tisp_ae_ctrls + 4) = ae_buf[1];
+			*(int32_t *)((char *)tisp_ae_ctrls + 8) = ae_buf[2];
+			*(int32_t *)((char *)tisp_ae_ctrls + 12) = ae_buf[3];
+			*(int32_t *)((char *)tisp_ae_ctrls + 16) = ae_buf[4];
+			*(int32_t *)((char *)tisp_ae_ctrls + 20) = ae_buf[5];
+			*(int32_t *)((char *)tisp_ae_ctrls + 24) = ae_buf[6];
+			*(int32_t *)((char *)tisp_ae_ctrls + 28) = ae_buf[7];
+			*(int32_t *)((char *)tisp_ae_ctrls + 32) = ae_buf[8];
+			*(int32_t *)((char *)tisp_ae_ctrls + 48) = ae_buf[12];
+			*(int32_t *)((char *)tisp_ae_ctrls + 52) = ae_buf[13];
+			*(int32_t *)((char *)tisp_ae_ctrls + 56) = ae_buf[14];
+			*(int32_t *)((char *)tisp_ae_ctrls + 60) = ae_buf[15];
 		} else if (msg_id == 1) {
 			system_reg_write(0xc, arg[2]);
 		} else if (msg_id == 2) {
@@ -21271,7 +21280,7 @@ int32_t tisp_param_operate_process(void *payload, int payload_len)
 		reply[5] = 0;
 
 		if (msg_id == 0) {
-			memcpy((char *)reply + 0x18, &tisp_ae_tune, 0x40);
+			memcpy((char *)reply + 0x18, tisp_ae_ctrls, 0x40);
 			netlink_send_msg(reply, 0x58);
 			return 0;
 		}
@@ -34671,26 +34680,24 @@ int32_t tisp_sharpen_intp_reg_refresh(int32_t arg1)
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001bbe4 origin=model_output original=tisp_sharpen_par_refresh */
 int32_t tisp_sharpen_par_refresh(uint32_t arg1, int32_t arg2, int32_t arg3)
 {
-	uint32_t *gain_old;
 	uint32_t diff;
 
-	gain_old = *(uint32_t *)((char *)&get_isp_clk + 8176);
-
-	if (gain_old != 0xffffffff) {
-		if (arg1 < gain_old)
-			diff = gain_old - arg1;
-		else
-			diff = arg1 - (uintptr_t)gain_old;
-
-		if (diff < (uint32_t)arg2) {
-			*(uint32_t *)((char *)&get_isp_clk + 8176) = arg1;
-			tisp_sharpen_intp_reg_refresh(arg1);
-		} else {
-			tisp_sharpen_all_reg_refresh(arg1);
-		}
-	} else {
-		*(uint32_t *)((char *)&get_isp_clk + 8176) = arg1;
+	/*
+	 * OEM (stock 0x1b304): the first call and every gain step of at least
+	 * arg2 store the gain and refresh; smaller steps only retrigger.  The
+	 * recovered body kept the gain in get_isp_clk()'s text (+8176) and had
+	 * the threshold test inverted.
+	 */
+	if (sharpen_gain_old == 0xffffffffU) {
+		sharpen_gain_old = arg1;
 		tisp_sharpen_all_reg_refresh(arg1);
+	} else {
+		diff = arg1 < sharpen_gain_old ? sharpen_gain_old - arg1 :
+						 arg1 - sharpen_gain_old;
+		if (diff >= (uint32_t)arg2) {
+			sharpen_gain_old = arg1;
+			tisp_sharpen_intp_reg_refresh(arg1);
+		}
 	}
 
 	if (arg3 == 1)
@@ -34711,7 +34718,7 @@ int32_t tiziano_sharpen_init(void)
     uint32_t v1 = 0;
 
     /* fragment 0: CallSetup */
-    *(uint32_t *)((char *)((char *)&tparams + 0x1590)) = (-1);
+    sharpen_gain_old = 0xffffffffU; /* OEM .data gain_old, not tparams+0x1590 */
     v0 = (uintptr_t *)((uintptr_t (*)(int32_t *))(uintptr_t)tiziano_sharpen_params_refresh)(a0); /* jalr target resolved by relocation */
 
     /* fragment 1: CallSetup */
@@ -34742,7 +34749,7 @@ int32_t tisp_sharpen_refresh(uint32_t arg1)
 int32_t tiziano_sharpen_dn_params_refresh(void)
 {
 	tiziano_sharpen_params_refresh();
-	tisp_sharpen_all_reg_refresh(gain_old);
+	tisp_sharpen_all_reg_refresh(sharpen_gain_old);
 	return 0;
 }
 
@@ -34882,7 +34889,7 @@ int32_t tisp_sharpen_param_array_set(int32_t param_id, int32_t src)
 		size = 0x24;
 		break;
 	case 0x8f:
-		tisp_sharpen_all_reg_refresh(gain_old + 0x200);
+		tisp_sharpen_all_reg_refresh(sharpen_gain_old + 0x200);
 		dst = (int32_t *)&sharpen_con_par_array;
 		size = 0x20;
 		break;
@@ -35941,7 +35948,7 @@ int32_t tiziano_sdns_init(void)
     uint32_t v1 = 0;
 
     /* fragment 0: CallSetup */
-    *(uint32_t *)((char *)((char *)&tparams + 0x15a0)) = (-1);
+    gain_old = 0xffffffffU; /* OEM sdns gain_old, not tparams+0x15a0 */
     v0 = (uintptr_t *)((uintptr_t (*)(int32_t *))(uintptr_t)tiziano_sdns_params_refresh)(a0); /* jalr target resolved by relocation */
 
     /* fragment 1: CallSetup */
@@ -40073,20 +40080,19 @@ int32_t tisp_dpc_intp_reg_refresh(int32_t arg1)
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002456c origin=model_output original=tisp_dpc_par_refresh */
 int32_t tisp_dpc_par_refresh(uint32_t a0, uint32_t a1, uint32_t a2)
 {
-	static uint32_t gain_old_value = UINT_MAX;
 	uint32_t diff;
 
-	if (gain_old_value == UINT_MAX) {
-		gain_old_value = a0;
+	if (dpc_gain_old == UINT_MAX) {
+		dpc_gain_old = a0;
 		tisp_dpc_all_reg_refresh(a0);
 	} else {
-		if (a0 < gain_old_value)
-			diff = gain_old_value - a0;
+		if (a0 < dpc_gain_old)
+			diff = dpc_gain_old - a0;
 		else
-			diff = a0 - gain_old_value;
+			diff = a0 - dpc_gain_old;
 
 		if (diff >= a1) {
-			gain_old_value = a0;
+			dpc_gain_old = a0;
 			tisp_dpc_intp_reg_refresh(a0);
 		}
 	}
@@ -40162,11 +40168,11 @@ int32_t tiziano_dpc_dn_params_refresh(void)
     /* function prologue: stack frame and callee-saved register setup */
 
     /* fragment 1: CallSetup */
-    *(uint32_t *)((char *)((char *)&tparams + 0x15c0)) = ((*(uint32_t *)((char *)((char *)&tparams + 0x15c0))) + 512);
+    dpc_gain_old += 512; /* OEM .data gain_old, not tparams+0x15c0 */
     v0 = (uintptr_t *)((uintptr_t (*)(int32_t *))(uintptr_t)tiziano_dpc_params_refresh)(a0); /* jalr target resolved by relocation */
 
     /* fragment 2: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t))(uintptr_t)tisp_dpc_all_reg_refresh)(*(uint32_t *)((char *)((char *)&tparams + 0x15c0))); /* jalr target resolved by relocation */
+    tisp_dpc_all_reg_refresh(dpc_gain_old);
 
     /* fragment 3: Epilogue */
     /* function epilogue: restore registers and return */
@@ -40192,7 +40198,7 @@ int32_t tiziano_dpc_init(void)
     uint32_t v1 = 0;
 
     /* fragment 0: CallSetup */
-    *(uint32_t *)((char *)((char *)&tparams + 0x15c0)) = (-1);
+    dpc_gain_old = 0xffffffffU; /* OEM .data gain_old, not tparams+0x15c0 */
     v0 = (uintptr_t *)((uintptr_t (*)(int32_t *))(uintptr_t)tiziano_dpc_params_refresh)(a0); /* jalr target resolved by relocation */
 
     /* fragment 1: CallSetup */
@@ -40477,7 +40483,8 @@ int32_t tisp_dpc_param_array_set(int32_t param_id, int32_t src)
 		return 0;
 	case 0xb0:
 		memcpy(&rdns_con_par_array, (void *)src, 40);
-		tisp_dpc_all_reg_refresh(*(int32_t *)((char *)&get_isp_clk + 8224) + 512);
+		/* OEM: dpc gain_old + 0x200; recovered read get_isp_clk()'s text */
+		tisp_dpc_all_reg_refresh(dpc_gain_old + 512);
 		return 0;
 	}
 	return 0;
@@ -40659,44 +40666,35 @@ uint32_t *tiziano_defog_get_data(void *arg1)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000025498 origin=model_output original=tiziano_defog_interrupt_static */
 int32_t tiziano_defog_interrupt_static(void)
 {
-	uint32_t status;
-	uint32_t *info;
-	uint32_t *buf;
-	uint32_t irq_val;
-	uint32_t event_type;
-	uint32_t *event_data;
+	/*
+	 * OEM (stock 0x24bb8): read register 0x1500 and compare it with the
+	 * defog DMA bank in tispinfo (+0x3c virtual, +0x40 physical, four
+	 * 0x1000-byte pages).  The recovered body passed the address of the
+	 * "BGGR" string as the register offset, used tisp_init()'s text as
+	 * tispinfo and stepped a u32 pointer by 0x1000 elements.  Not registered
+	 * with system_irq_func_set() in this driver (the OEM uses slot 21).
+	 */
+	uint32_t status = system_reg_read(0x1500);
+	uint32_t *info = (uint32_t *)tispinfo;
+	uint32_t buf = info[15];
+	uint32_t irq_val = info[16];
+	uint32_t event[12] = { 0 };
+	uint32_t page;
 
-	status = system_reg_read(((char *)&LC1));
-	info = (uint32_t *)tisp_init;
-	buf = (uint32_t *)(*(uint32_t *)((char *)info + 60));
-	irq_val = *(uint32_t *)((char *)info + 64);
+	if (!buf)
+		return 1;
 
-	if (status == irq_val) {
-		dma_cache_sync(0, (void *)buf, 0x1000, 0);
-		tiziano_defog_get_data((void *)buf);
-		buf = (uint32_t *)(*(uint32_t *)((char *)info + 60));
+	for (page = 0; page < 4; page++) {
+		if (status == irq_val + page * 0x1000) {
+			dma_cache_sync(0, (void *)(uintptr_t)(buf + page * 0x1000),
+				       0x1000, 0);
+			tiziano_defog_get_data((void *)(uintptr_t)(buf + page * 0x1000));
+			break;
+		}
 	}
 
-	if (status == irq_val + 0x1000) {
-		dma_cache_sync(0, (void *)(buf + 0x1000), 0x1000, 0);
-		tiziano_defog_get_data((void *)(buf + 0x1000));
-		buf = (uint32_t *)(*(uint32_t *)((char *)info + 60));
-	}
-
-	if (status == irq_val + 0x2000) {
-		dma_cache_sync(0, (void *)(buf + 0x2000), 0x1000, 0);
-		tiziano_defog_get_data((void *)(buf + 0x2000));
-		buf = (uint32_t *)(*(uint32_t *)((char *)info + 60));
-	}
-
-	if (status == irq_val + 0x3000) {
-		dma_cache_sync(0, (void *)(buf + 0x3000), 0x1000, 0);
-		tiziano_defog_get_data((void *)(buf + 0x3000));
-	}
-
-	event_type = 3;
-	event_data = 0;
-	tisp_event_push(&event_type);
+	event[2] = 3;
+	tisp_event_push(event);
 	return 1;
 }
 
@@ -42616,7 +42614,7 @@ int32_t tisp_s_adr_str_internal(uint32_t a0)
 	} while ((uint32_t)i != t3);
 
 	tiziano_adr_params_init();
-	*(uint32_t *)((char *)((char *)&awb_array_g + 0x6c)) = 1;
+	ev_changed = 1; /* OEM ev_changed, not awb_array_g+0x6c */
 	return (int32_t)&sinfo_root;
 }
 
@@ -45606,20 +45604,28 @@ Tiziano_ae_fpga0x340:
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002c768 origin=model_output original=tisp_set_ag_func */
 uint32_t tisp_set_ag_func(void *arg1, void *arg2, void *arg3, int32_t *arg4)
 {
+	/*
+	 * NOTE: the OEM receives IspAeTuneParam (17 words) by value and reads
+	 * words 0, 4, 5 and 13; this recovered 4-argument form does not match.
+	 * Its only caller, tisp_ae_process_impl(), is unreachable because
+	 * tisp_ae_process() is the rewritten AE.  Fixed only so that it no
+	 * longer reads and writes module and kernel text.
+	 */
 	uint32_t dg_max = *(uint32_t *)((char *)arg1 + 0x10);
 	uint32_t old_ag = *(uint32_t *)((char *)arg2 + 0xc);
 	uint32_t old_dg = *(uint32_t *)((char *)arg2 + 0x4);
 	uint32_t cur_ag = *(uint32_t *)((char *)arg3 + 0xc);
 	uint32_t cur_dg = *(uint32_t *)((char *)arg3 + 0x4);
 	uint32_t shift = *arg4;
-	uint32_t ftune = *(uint32_t *)(PDE_DATA + 0x4a7c);
+	uint32_t ftune_val = (uint32_t)ftune; /* OEM .data ftune; recovered read kernel text at PDE_DATA+0x4a7c */
+	uint8_t *ae = tisp_ae_ctrls; /* OEM: tisp_ae_ctrls, not the AE tune function's text */
 	uint32_t ag_val;
 	uint32_t dg_val;
 	uint32_t dg_result;
 	uint32_t ag_new;
 	uint32_t dg_new;
 
-	if (ftune == 1) {
+	if (ftune_val == 1) {
 		goto do_update;
 	}
 
@@ -45632,23 +45638,23 @@ uint32_t tisp_set_ag_func(void *arg1, void *arg2, void *arg3, int32_t *arg4)
 	}
 
 	dg_val = dg_new;
-	if (tisp_ae_tune == 0) {
+	if (*(uint32_t *)ae == 0) {
 		goto store_result;
 	}
 
 do_update:
-	if (tisp_ae_tune != 0) {
-		cur_ag = *(uint32_t *)(tisp_ae_tune + 4);
-		dg_val = fix_point_mult2_32(shift, *(uint32_t *)(tisp_ae_tune + 8), *(uint32_t *)(tisp_ae_tune + 16), 0);
+	if (*(uint32_t *)ae != 0) {
+		cur_ag = *(uint32_t *)(ae + 4);
+		dg_val = fix_point_mult2_32(shift, *(uint32_t *)(ae + 8), *(uint32_t *)(ae + 16), 0);
 	}
 
 	ag_val = tisp_set_sensor_analog_gain(cur_ag);
 	ag_new = (uintptr_t (*)())(uintptr_t)ag_val;
-	*(uint32_t *)(tisp_ae_tune + 4) = ag_val;
+	*(uint32_t *)(ae + 4) = ag_val;
 
 	dg_val = tisp_set_sensor_digital_gain(dg_val);
 	dg_new = (uintptr_t (*)())(uintptr_t)dg_val;
-	*(uint32_t *)(tisp_ae_tune + 8) = dg_val;
+	*(uint32_t *)(ae + 8) = dg_val;
 
 	{
 		uint32_t num = fix_point_mult2_32(shift, cur_ag, dg_val, 0);
@@ -45661,8 +45667,8 @@ do_update:
 	}
 
 	dg_new = (uintptr_t (*)())(uintptr_t)dg_max;
-	*(uint32_t *)(tisp_ae_tune + 16) = dg_max;
-	*(uint32_t *)(PDE_DATA + 0x4a7c) = 0;
+	*(uint32_t *)(ae + 16) = dg_max;
+	ftune = 0;
 	dg_val = dg_new;
 
 store_result:
@@ -45902,8 +45908,10 @@ int tiziano_ae_params_refresh(void)
 int32_t tiziano_ae_compensation_set(uint32_t a0)
 {
     ae_compensation = (uintptr_t (*)())(uintptr_t)a0;
-    *(uint32_t *)((char *)((char *)&d_linear + 0x1014)) = 1;
-    *(uint32_t *)((char *)((char *)&d_linear + 0x1004)) = 1;
+    /* OEM: trig = force_trig = 1; the recovery wrote both into d_linear
+     * (the LSC table) at +0x1014/+0x1004 (HI16 0x10000 dropped). */
+    trig = 1;
+    force_trig = 1;
     return 0;
 }
 
@@ -47056,7 +47064,7 @@ int32_t tisp_ae_manual_set(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, u
     *(uint32_t *)((char *)v0 + 52) = v1;
     *(uint32_t *)((char *)v0 + 12) = a3;
     v0 = (uintptr_t *)&isp_clk;
-    *(uint32_t *)((char *)((char *)&tparams + 0x4020)) = 0;
+    *(uint32_t *)trig_cal = 0; /* OEM trig_cal, not tparams+0x4020 */
     local_0 = a0;
     local_4 = a1;
     local_8 = a2;
@@ -47095,13 +47103,15 @@ uint8_t tisp_ae_get_luma(uint8_t *arg1)
     uint8_t result;
 
     for (i = 0; i < 256; i++) {
-        hist_val = *(uint32_t *)((char *)tisp_s_ae_hist + (i << 2));
+        /* OEM: .bss tisp_ae_hist; the recovery read the text of tisp_s_ae_hist() */
+        hist_val = *(uint32_t *)((char *)tisp_ae_hist + (i << 2));
         sum += i * hist_val;
     }
 
-    sensor_val = *(uint32_t *)&sensor_init;
-    denom = (*(uint32_t *)((char *)&sensor_init + 4) * sensor_val) / 4;
-    result = (uint8_t)(sum / denom);
+    /* OEM: sensor_info width/height; the recovery read the text of sensor_init() */
+    sensor_val = *(uint32_t *)sensor_info;
+    denom = (*(uint32_t *)(sensor_info + 4) * sensor_val) / 4;
+    result = denom ? (uint8_t)(sum / denom) : 0;
     *arg1 = result;
     return result;
 }
@@ -48560,8 +48570,15 @@ int32_t tisp_set_fps(int32_t fps)
 	fps_frame = fps & 0xffff;
 	fps_hz = fps_hz / fps_frame;
 
-	get_fps = *(int32_t (*)(int32_t, void *))(void *)&sensor_ctrl;
-	ret = get_fps(fps_hz & 0xff, &sensor_ctrl);
+	/*
+	 * OEM: jalr through sensor_ctrl+0x80 (fps_control).  The recovered
+	 * call jumped to the address of sensor_ctrl itself, i.e. into data.
+	 */
+	get_fps = (int32_t (*)(int32_t, void *))
+		((struct t21_sensor_ctrl_view *)sensor_ctrl)->fps_control;
+	if (!get_fps)
+		return -1;
+	ret = get_fps(fps_hz & 0xff, sensor_ctrl);
 
 	if (ret < 0) {
 		isp_printf(2, "fps get wrong!\n", ret);
@@ -48574,15 +48591,16 @@ int32_t tisp_set_fps(int32_t fps)
 	flicker_a = *(int16_t *)((char *)((char *)&sensor_ctrl + 0x2));
 	flicker_b = *(int16_t *)((char *)((char *)&sensor_ctrl + 0x4));
 
-	*(int32_t *)((char *)&tisp_ae_tune + 28) = ae_ctrls_val;
-	*(int16_t *)((char *)&sensor_init + 48) = sensor_val;
-	*(int16_t *)((char *)&sensor_init + 50) = sensor_val;
-	*(int16_t *)((char *)&sensor_init + 52) = ae_ctrls_val;
-	*(int16_t *)((char *)&sensor_init + 64) = ae_ctrls_val;
-	*(int16_t *)((char *)&sensor_init + 54) = sensor_val32;
-	*(int32_t *)((char *)&sensor_init + 44) = ret;
-	*(int16_t *)((char *)&sensor_init + 60) = flicker_a;
-	*(int16_t *)((char *)&sensor_init + 62) = flicker_b;
+	*(int32_t *)((char *)tisp_ae_ctrls + 28) = ae_ctrls_val;
+	/* OEM stores these into sensor_info; the recovery wrote sensor_init()'s text. */
+	*(int16_t *)(sensor_info + 48) = sensor_val;
+	*(int16_t *)(sensor_info + 50) = sensor_val;
+	*(int16_t *)(sensor_info + 52) = ae_ctrls_val;
+	*(int16_t *)(sensor_info + 64) = ae_ctrls_val;
+	*(int16_t *)(sensor_info + 54) = sensor_val32;
+	*(int32_t *)(sensor_info + 44) = ret;
+	*(int16_t *)(sensor_info + 60) = flicker_a;
+	*(int16_t *)(sensor_info + 62) = flicker_b;
 
 	flicker_hz_val = flicker_hz;
 	if (flicker_hz_val != 0) {
