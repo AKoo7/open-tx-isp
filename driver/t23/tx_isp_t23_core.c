@@ -9243,6 +9243,37 @@ uint32_t tisp_set_fps(uint32_t unused, uint32_t fps);
 static uint32_t regtrace_t23_sensor_fps_request;
 static int regtrace_t23_sensor_fps_stream_on(const char *reason);
 static uint32_t regtrace_t23_sensor_fps_report(void);
+
+/*
+ * Live AE read-back in the units of the OEM tisp_g_ev_attr() block, which
+ * feeds GetExpr (0x8000025), GetEVAttr (0x8000026), GetTotalGain (0x8000027)
+ * and the isp-m0 "ISP INFO" dump.  Gains marked log2 are in IMP units, 32
+ * per doubling (tisp_log2_fixed_to_fixed(gain_q10, 10, 5)).
+ */
+struct regtrace_t23_ev_info {
+    bool sensor_ok;         /* a sensor is bound and initialized */
+    bool valid;             /* an exposure has been programmed */
+    uint32_t manual;        /* AE not running: forced or disabled */
+    uint32_t it;            /* integration time, lines */
+    uint32_t it_min;        /* AE integration-time window, lines */
+    uint32_t it_max;
+    uint32_t line_us;       /* one line, us (truncated, as stock) */
+    uint32_t expr_us;       /* integration time, us */
+    uint32_t vts;
+    uint32_t fps;           /* num << 16 | den */
+    uint32_t again;         /* sensor analog gain, log2 */
+    uint32_t max_again;
+    uint32_t sensor_dgain;  /* sensor digital gain, log2 */
+    uint32_t max_sensor_dgain;
+    uint32_t isp_dgain;     /* ISP digital gain, log2 */
+    uint32_t max_isp_dgain;
+    uint32_t tgain_log2;    /* integer log2 of the total gain */
+    uint32_t total_gain;    /* [24.8] linear, 256 = 1x */
+    uint32_t ev;            /* integration lines x total gain */
+    uint32_t ev_log2;       /* log2(ev), Q16 */
+};
+
+static void regtrace_t23_ev_info_get(struct regtrace_t23_ev_info *info);
 static void regtrace_t23_install_sensor_notify(uintptr_t sd);
 static int regtrace_t23_ensure_sensor_client(struct i2c_driver *drv,
                                              unsigned short addr,
@@ -9642,7 +9673,6 @@ static int regtrace_t23_sensor_registered;
 #define REGTRACE_TISP_CTRL_SINTER TX_ISP_TUNING_CMD_SINTER
 #define REGTRACE_TISP_CTRL_RUNNING_MODE TX_ISP_TUNING_CMD_T31_RUNNING_MODE
 #define REGTRACE_TISP_TOTAL_GAIN_1X (1U << 8)
-#define REGTRACE_TISP_AE_LUMA_DAY 80U
 #define REGTRACE_TISP_WB_GAIN_NEUTRAL 256U
 #define REGTRACE_T23_VIDIOC_STREAMON TX_ISP_FRAME_IOCTL_LEGACY_STREAM_ON
 #define REGTRACE_T23_VIDIOC_STREAMOFF TX_ISP_FRAME_IOCTL_LEGACY_STREAM_OFF
@@ -11098,9 +11128,12 @@ static int regtrace_t23_call_sensor_ioctl(uint32_t event, uint32_t *value)
     return ret;
 }
 
+static void regtrace_t23_expo_note(uint32_t packed);
+
 static int regtrace_t23_call_sensor_exposure(uint32_t packed,
                                              const char *reason)
 {
+    const uint32_t requested = packed;
     uint32_t integration = packed & 0xffffU;
     uint32_t again = packed >> 16;
     int ret;
@@ -11116,6 +11149,8 @@ static int regtrace_t23_call_sensor_exposure(uint32_t packed,
             ret = regtrace_t23_call_sensor_ioctl(
                 REGTRACE_TX_ISP_EVENT_SENSOR_AGAIN, &again);
     }
+    if (!ret)
+        regtrace_t23_expo_note(requested);
     printk(KERN_WARNING
            "tx_isp_t23_recovered: sensor exposure packed=0x%08x again=0x%x int=%u ret=%d reason=%s\n",
            packed, packed >> 16, packed & 0xffffU, ret,
@@ -14658,30 +14693,47 @@ static long regtrace_isp_m0_ext_control(unsigned long arg)
     }
 
     switch (ctrl.id) {
-    case REGTRACE_TISP_CTRL_TOTAL_GAIN:
-        ctrl.value_or_ptr = REGTRACE_TISP_TOTAL_GAIN_1X;
+    case REGTRACE_TISP_CTRL_TOTAL_GAIN: {
+        struct regtrace_t23_ev_info info;
+
+        regtrace_t23_ev_info_get(&info);
+        ctrl.value_or_ptr = info.total_gain;
         break;
+    }
     case REGTRACE_TISP_CTRL_WB_STATIS:
         ctrl.value_or_ptr = (REGTRACE_TISP_WB_GAIN_NEUTRAL << 16) |
                             REGTRACE_TISP_WB_GAIN_NEUTRAL;
         break;
     case REGTRACE_TISP_CTRL_GET_EXPR:
+        /* OEM apical_isp_expr_g_ctrl: IMPISPExpr.g_attr, 12 bytes. */
         if (ctrl.value_or_ptr) {
+            struct regtrace_t23_ev_info info;
             struct tx_isp_tuning_expr expr;
 
-            tx_isp_tuning_expr_pack(&expr, 0, 1000, 1, 1125, 30);
+            regtrace_t23_ev_info_get(&info);
+            tx_isp_tuning_expr_pack(&expr, info.manual, info.it,
+                                    info.it_min, info.it_max,
+                                    info.line_us);
             if (copy_to_user((void __user *)(uintptr_t)ctrl.value_or_ptr,
                              &expr, sizeof(expr)))
                 return -EFAULT;
         }
         break;
     case REGTRACE_TISP_CTRL_GET_EV_ATTR:
+        /*
+         * OEM apical_isp_ev_g_attr: IMPISPEVAttr, 24 bytes, taken from
+         * tisp_g_ev_attr words 2, 4, 6, 7, 8 and 9: EV, exposure in us,
+         * EV log2 (Q16), sensor analog gain and ISP digital gain (log2,
+         * 32 per doubling) and the integer log2 of the total gain.
+         */
         if (ctrl.value_or_ptr) {
+            struct regtrace_t23_ev_info info;
             struct tx_isp_tuning_ev_attr ev;
 
-            tx_isp_tuning_ev_pack(&ev, REGTRACE_TISP_AE_LUMA_DAY, 30000,
-                                  0, REGTRACE_TISP_TOTAL_GAIN_1X,
-                                  REGTRACE_TISP_TOTAL_GAIN_1X, 0);
+            regtrace_t23_ev_info_get(&info);
+            tx_isp_tuning_ev_pack(&ev, info.ev, info.expr_us,
+                                  info.ev_log2, info.again,
+                                  info.isp_dgain, info.tgain_log2);
             if (copy_to_user((void __user *)(uintptr_t)ctrl.value_or_ptr,
                              &ev, sizeof(ev)))
                 return -EFAULT;
@@ -91821,26 +91873,209 @@ static uint32_t regtrace_t23_sensor_fps_report(void)
     return fps ? fps : 0x00190001U;
 }
 
+/* tisp_log2_fixed_to_fixed(gain_q10, 10, 5): IMP log2 gain, 32 per 2x. */
+static uint32_t regtrace_t23_gain_q16_to_imp_log2(uint32_t gain_q16)
+{
+    uint32_t gain_q10 = gain_q16 >> 6;
+
+    if (gain_q10 <= 0x400U)
+        return 0;
+    return (uint32_t)tisp_log2_fixed_to_fixed(gain_q10, 10U, 5U);
+}
+
+/*
+ * Fill *info from the AE state this driver runs (see tx_isp_t23_ae_runtime.inc
+ * regtrace_t23_expo_note()).  Mirrors the OEM tisp_g_ev_attr() block:
+ *
+ *   word 0      integration time, lines        ctrls+0x0c
+ *   words 2/3   EV (64-bit, Q10 >> 10)         ctrls+0x28/0x2c
+ *   word 4      exposure us = it*1e6*den/(num*VTS)
+ *   word 6      log2(EV) Q16                   log2(ctrls+0x28, 10, 16)
+ *   word 7      sensor again, log2 /32         ctrls+0x04
+ *   word 8      ISP dgain, log2 /32            ctrls+0x10
+ *   word 9      total gain, integer log2       ctrls+0x32 (u16)
+ *   word 10     total gain [24.8] = again * ISP dgain (the 0x8000027 value)
+ *   words 11-14 max again, max ISP dgain, sensor dgain, max sensor dgain
+ *   0x78/0x7a   AE integration-time window min/max (u16)
+ *   0x88        one line, us (u16)
+ *
+ * This driver's AE steps the sensor integration time and analog gain only;
+ * sensor digital gain and ISP digital gain stay at unity, so they and their
+ * AE limits read 0.  Process context only (takes the FPS mutex); touches no
+ * hardware.
+ */
+static void regtrace_t23_ev_info_get(struct regtrace_t23_ev_info *info)
+{
+    struct regtrace_t23_expo_live live;
+    unsigned char *attr = regtrace_t23_sensor_owned_attr();
+    uint32_t num;
+    uint32_t den;
+    uint64_t ev_q10;
+    uint32_t max_again_q10;
+
+    memset(info, 0, sizeof(*info));
+    regtrace_t23_expo_get_live(&live);
+
+    info->sensor_ok = attr && regtrace_t23_sensor_initialized;
+    info->valid = live.valid;
+    info->manual = (regtrace_t23_source_ae_force_packed ||
+                    !regtrace_t23_source_ae_hlil) ? 1U : 0U;
+    info->fps = regtrace_t23_sensor_fps_report();
+    num = info->fps >> 16;
+    den = info->fps & 0xffffU;
+
+    info->it_min = regtrace_t23_source_sensor_min_it;
+    info->it_max = regtrace_t23_source_sensor_max_it;
+    if (attr) {
+        info->vts = regtrace_t23_get_le16(attr +
+                                          REGTRACE_T23_ATTR_TOTAL_HEIGHT);
+        if (!info->it_min)
+            info->it_min = regtrace_t23_get_le16(attr +
+                                                 REGTRACE_T23_ATTR_MIN_IT);
+        if (!info->it_max)
+            info->it_max = regtrace_t23_get_le16(attr +
+                                                 REGTRACE_T23_ATTR_MAX_IT);
+    }
+    if (!info->vts)
+        info->vts = regtrace_t23_source_sensor_height;
+    if (num && den && info->vts) {
+        uint64_t frame_lines = (uint64_t)num * info->vts;
+
+        info->line_us = (uint32_t)div64_u64((uint64_t)den * 1000000U,
+                                            frame_lines) & 0xffffU;
+        info->expr_us = (uint32_t)div64_u64(
+            (uint64_t)live.it * den * 1000000U, frame_lines);
+    }
+
+    info->it = live.valid ? live.it : 0U;
+    if (regtrace_t23_source_sensor_max_again) {
+        max_again_q10 = tisp_math_exp2(regtrace_t23_source_sensor_max_again,
+                                       16U, 10U);
+        info->max_again = (uint32_t)tisp_log2_fixed_to_fixed(
+            max_again_q10 + 4U, 10U, 5U);
+    }
+
+    if (!live.valid) {
+        info->total_gain = REGTRACE_TISP_TOTAL_GAIN_1X;
+        return;
+    }
+    info->again = regtrace_t23_gain_q16_to_imp_log2(live.gain_q16);
+    info->total_gain = live.gain_q16 >> 8;
+    if (live.gain_q16 > 0x10000U)
+        info->tgain_log2 = (uint32_t)tisp_log2_fixed_to_fixed(
+            live.gain_q16, 16U, 16U) >> 16;
+    ev_q10 = ((uint64_t)live.it * live.gain_q16) >> 6;
+    if (ev_q10 > 0xffffffffULL)
+        ev_q10 = 0xffffffffULL;
+    info->ev = (uint32_t)(ev_q10 >> 10);
+    if (ev_q10 > 0x400U)
+        info->ev_log2 = (uint32_t)tisp_log2_fixed_to_fixed(
+            (uint32_t)ev_q10, 10U, 16U);
+}
+
+static const char *regtrace_t23_raw_pattern(uint32_t mbus_code)
+{
+    static const char *const names[] = { "RGGB", "BGGR", "GRBG", "GBRG" };
+    uint32_t bayer;
+
+    if (regtrace_t23_bayer_from_mbus(mbus_code, &bayer) || bayer > 3U)
+        return "The format of isp input is RGB or YUV422";
+    return names[bayer];
+}
+
+/*
+ * /proc/jz/isp/isp-m0: the OEM isp_info_show() "ISP INFO" block (labels,
+ * order and units of the stock T23 1.3.0 tx-isp-t23.ko), followed by this
+ * driver's own state.  Lines the stock module prints from hardware or from
+ * state this driver does not keep (ISP Top Value, Antiflicker, Mirror/Flip,
+ * AWB Start, debug counters) are left out.  The extra lines below the
+ * separator must not repeat a stock label: readers match labels by prefix
+ * or substring and take the first or the last match.
+ */
 static int regtrace_t23_isp_m0_proc_show(struct seq_file *seq, void *unused)
 {
-    unsigned char *attr = regtrace_t23_sensor_owned_attr();
-    uint32_t fps = regtrace_t23_sensor_fps_report();
+    struct regtrace_t23_ev_info info;
+    char name[32];
+    uint32_t rgain = regtrace_t23_source_awb_last_rgain;
+    uint32_t bgain = regtrace_t23_source_awb_last_bgain;
+    unsigned char *attr;
+    int32_t mode;
 
     (void)unused;
-    seq_printf(seq, "ISP OUTPUT FPS : %u / %u\n", fps >> 16, fps & 0xffffU);
-    seq_printf(seq, "SENSOR FPS REQUEST : %u / %u\n",
+    regtrace_t23_ev_info_get(&info);
+
+    seq_printf(seq, "****************** ISP INFO **********************\n");
+    if (!info.sensor_ok) {
+        seq_printf(seq, "sensor doesn't work, please enable sensor\n");
+    } else {
+        if (tx_isp_sinfo_get_driver(0, name, sizeof(name), NULL))
+            strlcpy(name, "unknown", sizeof(name));
+        mode = tisp_day_or_night_g_ctrl(0);
+
+        seq_printf(seq, "Software Version : %s\n", "open-tx-isp-t23");
+        seq_printf(seq, "SENSOR NAME : %s\n", name);
+        seq_printf(seq, "SENSOR OUTPUT WIDTH : %u\n",
+                   regtrace_t23_source_sensor_width);
+        seq_printf(seq, "SENSOR OUTPUT HEIGHT : %u\n",
+                   regtrace_t23_source_sensor_height);
+        seq_printf(seq, "ISP OUTPUT FPS : %u / %u\n",
+                   info.fps >> 16, info.fps & 0xffffU);
+        seq_printf(seq, "SENSOR OUTPUT RAW PATTERN : %s\n",
+                   regtrace_t23_raw_pattern(
+                       regtrace_t23_source_sensor_mbus_code));
+        seq_printf(seq, "ISP Runing Mode : %s\n",
+                   mode == 1 ? "Night" : "Day");
+        seq_printf(seq, "ISP WDR Mode : %s\n", "Disable");
+        seq_printf(seq, "SENSOR Integration Time : %u lines\n", info.it);
+        seq_printf(seq, "SENSOR Max Integration Time : %u lines\n",
+                   info.it_max);
+        seq_printf(seq, "SENSOR analog gain : %u\n", info.again);
+        seq_printf(seq, "MAX SENSOR analog gain : %u\n", info.max_again);
+        seq_printf(seq, "SENSOR digital gain : %u\n", info.sensor_dgain);
+        seq_printf(seq, "MAX SENSOR digital gain : %u\n",
+                   info.max_sensor_dgain);
+        seq_printf(seq, "ISP digital gain : %u\n", info.isp_dgain);
+        seq_printf(seq, "MAX ISP digital gain : %u\n", info.max_isp_dgain);
+        seq_printf(seq, "ISP Tgain DB : %u\n", info.tgain_log2);
+        seq_printf(seq, "ISP EV value: %u\n", info.ev);
+        seq_printf(seq, "ISP EV value log2: %u\n", info.ev_log2);
+        seq_printf(seq, "ISP EV value us: %u\n", info.expr_us);
+        seq_printf(seq, "ISP EV min int: %u\n", info.it_min);
+        seq_printf(seq, "ISP EV min again: %u\n", 0U);
+        /* AWB gains are Q10 here; the stock dump prints them Q8. */
+        seq_printf(seq, "ISP WB weighted rgain: %u\n", rgain >> 2);
+        seq_printf(seq, "ISP WB weighted bgain: %u\n", bgain >> 2);
+        seq_printf(seq, "ISP WB color temperature: %u\n",
+                   regtrace_t23_source_awb_hlil_ct);
+        seq_printf(seq, "Saturation : %u\n", tisp_bcsh_g_saturation());
+        seq_printf(seq, "Sharpness : %u\n", tisp_get_sharpness());
+        seq_printf(seq, "Contrast : %u\n", tisp_bcsh_g_contrast());
+        seq_printf(seq, "Brightness : %u\n", tisp_bcsh_g_brightness());
+    }
+
+    /* Driver state; keep these labels distinct from the stock ones. */
+    attr = regtrace_t23_sensor_owned_attr();
+    seq_printf(seq, "---------------- open-tx-isp t23 -----------------\n");
+    seq_printf(seq, "drv sensor fps request : %u / %u\n",
                regtrace_t23_sensor_fps_request >> 16,
                regtrace_t23_sensor_fps_request & 0xffffU);
     if (attr) {
-        seq_printf(seq, "SENSOR VTS : %u\n",
-                   regtrace_t23_get_le16(attr +
-                                         REGTRACE_T23_ATTR_TOTAL_HEIGHT));
-        seq_printf(seq, "SENSOR MAX INTEGRATION TIME : %u\n",
+        seq_printf(seq, "drv sensor vts : %u\n", info.vts);
+        seq_printf(seq, "drv sensor attr max it : %u\n",
                    regtrace_t23_get_le16(attr + REGTRACE_T23_ATTR_MAX_IT));
     }
-    seq_printf(seq, "AE MAX INTEGRATION TIME : %u\n",
-               regtrace_t23_source_sensor_max_it);
-    seq_printf(seq, "SENSOR STATE : %s\n",
+    seq_printf(seq, "drv ae it window : %u .. %u lines, %u us/line\n",
+               info.it_min, info.it_max, info.line_us);
+    seq_printf(seq, "drv ae total gain : %u (x256), %s\n", info.total_gain,
+               info.manual ? "manual" : "auto");
+    seq_printf(seq, "drv ae luma : %u target %u\n",
+               regtrace_t23_source_ae_hlil_luma,
+               regtrace_t23_source_ae_hlil_target);
+    seq_printf(seq, "drv ae state : %u of %u updates %u\n",
+               regtrace_t23_source_ae_hlil_state,
+               regtrace_t23_ae_hlil_state_count,
+               regtrace_t23_source_ae_hlil_updates);
+    seq_printf(seq, "drv sensor state : %s\n",
                regtrace_t23_sensor_streaming ? "streaming" :
                regtrace_t23_sensor_initialized ? "initialized" : "idle");
     return 0;

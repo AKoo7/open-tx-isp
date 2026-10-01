@@ -4,6 +4,8 @@ struct regtrace_t23_ae_hlil_rung {
     uint32_t packed;
     uint32_t gain_q16;
     uint32_t ev_q10;
+    uint32_t it;            /* integration time the sensor allocated, lines */
+    uint32_t gain_log2;     /* sensor analog gain allocated, log2 Q16 */
 };
 
 #define REGTRACE_T23_AE_HLIL_MAX_STATES 64U
@@ -43,6 +45,8 @@ static int regtrace_t23_ae_hlil_append(uint32_t integration,
         regtrace_t23_ae_hlil_state_count++];
     rung->packed = packed;
     rung->gain_q16 = gain_q16;
+    rung->it = actual_it;
+    rung->gain_log2 = actual_gain_log2;
     ev_q10 = (uint64_t)actual_it * gain_q16;
     ev_q10 >>= 6;
     rung->ev_q10 = ev_q10 > 0xffffffffULL ?
@@ -449,4 +453,66 @@ static int regtrace_t23_ae_hlil_retime(uint32_t max_it, const char *reason)
            regtrace_t23_source_ae_hlil_state,
            regtrace_t23_source_ae_hlil_ev, ret, reason ? reason : "?");
     return ret;
+}
+
+/*
+ * Exposure the sensor was last programmed with, for the read-back paths
+ * (GetExpr/GetEVAttr/GetTotalGain and /proc/jz/isp/isp-m0).  Every sensor
+ * exposure goes through regtrace_t23_call_sensor_exposure(), which reports a
+ * successful write here; the values come from the ladder rung that produced
+ * the packed register word.  A word that is no rung (source_ae_force_packed
+ * set by hand) keeps its integration time and is reported at unity gain,
+ * since the sensor's gain register cannot be mapped back to a gain.
+ *
+ * Writers run in process context (AE work, ioctl, stream-on); readers too,
+ * but the spinlock keeps the snapshot consistent without sleeping.
+ */
+struct regtrace_t23_expo_live {
+    uint32_t packed;
+    uint32_t it;            /* lines */
+    uint32_t gain_log2;     /* sensor analog gain, log2 Q16 */
+    uint32_t gain_q16;      /* sensor analog gain, linear Q16 */
+    bool valid;
+    bool gain_known;
+};
+
+static struct regtrace_t23_expo_live regtrace_t23_expo_live;
+static DEFINE_SPINLOCK(regtrace_t23_expo_lock);
+
+static void regtrace_t23_expo_note(uint32_t packed)
+{
+    struct regtrace_t23_expo_live live;
+    unsigned long flags;
+    uint32_t state;
+
+    memset(&live, 0, sizeof(live));
+    live.packed = packed;
+    live.it = packed & 0xffffU;
+    live.gain_q16 = 0x10000U;
+    for (state = 0; state < REGTRACE_T23_AE_HLIL_STATE_COUNT; ++state) {
+        const struct regtrace_t23_ae_hlil_rung *rung =
+            &regtrace_t23_ae_hlil_rungs[state];
+
+        if (rung->packed != packed)
+            continue;
+        live.it = rung->it;
+        live.gain_log2 = rung->gain_log2;
+        live.gain_q16 = rung->gain_q16;
+        live.gain_known = true;
+        break;
+    }
+    live.valid = live.it != 0;
+
+    spin_lock_irqsave(&regtrace_t23_expo_lock, flags);
+    regtrace_t23_expo_live = live;
+    spin_unlock_irqrestore(&regtrace_t23_expo_lock, flags);
+}
+
+static void regtrace_t23_expo_get_live(struct regtrace_t23_expo_live *out)
+{
+    unsigned long flags;
+
+    spin_lock_irqsave(&regtrace_t23_expo_lock, flags);
+    *out = regtrace_t23_expo_live;
+    spin_unlock_irqrestore(&regtrace_t23_expo_lock, flags);
 }
