@@ -730,7 +730,7 @@ static const char LC18[] = "RGGI";
 static const char LC19[] = "BGGI";
 static const char LC20[] = "GRIG";
 static uintptr_t test_addr;
-static unsigned char data_a8f96[16384];
+static unsigned char data_a8f96[256]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static uintptr_t vaddr;
 static uintptr_t (*st_vic_save_par)();
 static uint32_t slock_af_hist;
@@ -2747,9 +2747,9 @@ typedef struct {
     int32_t field_10f0;
     int32_t field_10f4;
 } tparams_day_struct_t;
-static unsigned char data_a0000[16384];
-static unsigned char data_c2cdc[16384];
-static unsigned char data_c2d00[16384];
+static unsigned char data_a0000[8]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
+static unsigned char data_c2cdc[64]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
+static unsigned char data_c2d00[64]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char __attribute__((aligned(4))) data_c2d24[16384];
 static unsigned char __attribute__((aligned(4))) data_c4d20[16384];
 static unsigned char __attribute__((aligned(4))) data_c6d1c[16384];
@@ -2821,7 +2821,7 @@ static unsigned char __attribute__((aligned(4))) cm_ev_list_now[4] = {
 static unsigned char __attribute__((aligned(4))) cm_sat_list_now[4] = {
     0x00, 0x00, 0x00, 0x00, 
 };
-static unsigned char data_b9024[16384];
+static unsigned char data_b9024[4]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char ccm_ct_list[16];
 static unsigned char cm_ev_list[36];
 static unsigned char cm_ev_list_wdr[36];
@@ -5795,10 +5795,10 @@ static unsigned char __attribute__((aligned(4))) dg1_cache[36] = {
     0x00, 0x04, 0x00, 0x00, 
 };
 static unsigned char data_a028[16384];
-static unsigned char data_c8044[16384];
+static unsigned char data_c8044[8]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char data_c8048[16384];
-static unsigned char data_c804c[16384];
-static unsigned char data_c8050[16384];
+static unsigned char data_c804c[8]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
+static unsigned char data_c8050[8]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char data_c807c[16384];
 static unsigned char data_c8080[16384];
 static unsigned char data_c8084[16384];
@@ -5818,14 +5818,14 @@ static unsigned char frame_cunt[8];
 static uintptr_t total_gain_new;
 static uintptr_t total_gain_old;
 static uintptr_t ae_show_info;
-static unsigned char data_c805c[16384];
+static unsigned char data_c805c[8]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char data_a81c8[16384];
 static unsigned char data_a81d0[16384];
 static unsigned char data_a81d4[16384];
 static unsigned char data_c80c4[16384];
 static unsigned char data_a81d8[16384];
 static unsigned char data_c80b8[16384];
-static unsigned char data_a81e0[16384];
+static unsigned char data_a81e0[8]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char data_c8054[16384];
 static unsigned char data_c8060[16384];
 static unsigned char data_c80c0[16384];
@@ -5837,9 +5837,9 @@ static unsigned char af_array_iird0[900];
 static unsigned char af_array_iird1[900];
 static unsigned char af_array_y_sum[900];
 static int32_t frame_num;
-static unsigned char data_98300[16384];
-static unsigned char data_986c0[16384];
-static unsigned char data_98848[16384];
+static unsigned char data_98300[1024]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
+static unsigned char data_986c0[32]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
+static unsigned char data_98848[256]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char IspAfStaticParam[56];
 static unsigned char data_c9e90[16384];
 static unsigned char data_c9e94[16384];
@@ -5854,7 +5854,7 @@ static unsigned char data_c9eb4[16384];
 static unsigned char data_c9eb8[16384];
 static uintptr_t (*data_9884c)();
 static uintptr_t (*data_98854)();
-static unsigned char data_986dc[16384];
+static unsigned char data_986dc[32]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char data_986e0[16384];
 static unsigned char data_986e4[16384];
 static unsigned char data_986e8[16384];
@@ -5868,11 +5868,11 @@ static unsigned char data_98724[16384];
 static unsigned char data_98728[16384];
 static unsigned char data_9872c[16384];
 static unsigned char data_98730[16384];
-static unsigned char data_98734[16384];
+static unsigned char data_98734[32]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char data_98738[16384];
 static unsigned char data_9873c[16384];
 static unsigned char data_98740[16384];
-static unsigned char data_98744[16384];
+static unsigned char data_98744[64]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char data_98748[16384];
 static unsigned char data_9874c[16384];
 static unsigned char data_98750[16384];
@@ -5880,17 +5880,17 @@ static unsigned char data_98754[16384];
 static unsigned char data_98758[16384];
 static unsigned char data_9875c[16384];
 static unsigned char data_98760[16384];
-static unsigned char data_98764[16384];
+static unsigned char data_98764[64]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char data_9876c[16384];
 static unsigned char data_98770[16384];
 static unsigned char data_98774[16384];
 static unsigned char data_98784[16384];
 static unsigned char data_98788[16384];
-static unsigned char data_9878c[16384];
+static unsigned char data_9878c[32]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char data_98790[16384];
 static unsigned char data_98794[16384];
 static unsigned char data_98798[16384];
-static unsigned char data_9879c[16384];
+static unsigned char data_9879c[64]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char data_987a0[16384];
 static unsigned char data_987a4[16384];
 static unsigned char data_987a8[16384];
@@ -5898,16 +5898,16 @@ static unsigned char data_987ac[16384];
 static unsigned char data_987b0[16384];
 static unsigned char data_987b4[16384];
 static unsigned char data_987b8[16384];
-static unsigned char data_987bc[16384];
+static unsigned char data_987bc[32]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char data_987c0[16384];
 static unsigned char data_987c4[16384];
 static unsigned char data_987c8[16384];
 static unsigned char data_987cc[16384];
-static unsigned char data_987d0[16384];
+static unsigned char data_987d0[32]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char data_987d4[16384];
 static unsigned char data_987d8[16384];
 static unsigned char data_987dc[16384];
-static unsigned char data_98800[16384];
+static unsigned char data_98800[32]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char data_98804[16384];
 static unsigned char data_98808[16384];
 static unsigned char data_9880c[16384];
@@ -5946,15 +5946,15 @@ static unsigned char data_988cc[16384];
 static unsigned char data_c9ebc[16384];
 static uintptr_t (*data_c9ec0)();
 static uintptr_t af_first;
-static unsigned char data_98814[16384];
-static unsigned char data_987e0[16384];
-static unsigned char data_9870c[16384];
-static unsigned char data_986ec[16384];
+static unsigned char data_98814[64]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
+static unsigned char data_987e0[64]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
+static unsigned char data_9870c[64]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
+static unsigned char data_986ec[64]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char AFParam_Fv[12];
-static unsigned char data_98684[16384];
-static unsigned char data_986d4[16384];
+static unsigned char data_98684[64]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
+static unsigned char data_986d4[16]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char csccr_para_test[16];
-static unsigned char data_ca658[16384];
+static unsigned char data_ca658[16]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char dmsc_awb_gain_array[12];
 static unsigned char dmsc_deir_b_array[32];
 static unsigned char dmsc_deir_con_par_array[12];
@@ -8437,7 +8437,7 @@ static unsigned char data_c800c[16384];
 static unsigned char data_c7fc4[16384];
 static unsigned char data_a719c[16384];
 static unsigned char data_a71a0[16384];
-static unsigned char data_c8068[16384];
+static unsigned char data_c8068[8]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char data_c806c[16384];
 static unsigned char data_a71ac[16384];
 static unsigned char data_a71a4[16384];
@@ -8469,7 +8469,7 @@ static uint32_t regtrace_t23_ta_custom_ev;
 static uint32_t regtrace_t23_ta_custom_tgain;
 static uint32_t regtrace_t23_ta_custom_again;
 static uint32_t regtrace_t23_ae_wdr_en;
-static unsigned char data_982bc[16384];
+static unsigned char data_982bc[64]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char Cluster_rgbg_weight[900];
 static unsigned char __attribute__((aligned(4))) AFParam_Tilt[20] = {
     0x13, 0x00, 0x00, 0x00, 0x3a, 0x00, 0x00, 0x00, 0x2a, 0x00, 0x00, 0x00, 0x16, 0x00, 0x00, 0x00, 
@@ -9937,6 +9937,10 @@ static const unsigned char *regtrace_t23_source_active_bank;
 #define REGTRACE_T23_CLM_TUNING_SIZE    0x24fcU
 #define REGTRACE_T23_HLDC_TUNING_OFFSET 0x14b44U
 static uint regtrace_t23_source_core_bayer = UINT_MAX;
+/* source_core_bayer was derived from the media-bus code, not set by hand */
+static bool regtrace_t23_core_bayer_from_mbus;
+/* Bayer index for reg 0x8 at the next core interrupt, UINT_MAX = none */
+static uint32_t regtrace_t23_bayer_pending = UINT_MAX;
 static uint regtrace_t23_source_core_mode = 0x1cU;
 static bool regtrace_t23_direct_csi_start;
 static bool regtrace_t23_direct_vic_start;
@@ -14187,6 +14191,7 @@ static int regtrace_t23_source_resolve_sensor_config(void)
             return ret;
         }
         regtrace_t23_source_core_bayer = bayer;
+        regtrace_t23_core_bayer_from_mbus = true;
     } else if (regtrace_t23_source_core_bayer > 3U) {
         return -EINVAL;
     }
@@ -14304,6 +14309,7 @@ static int regtrace_t23_source_core_set_stream(int enable,
     system_reg_write(0x800U, 0);
     system_reg_write(0x4U,
                      (regtrace_t23_source_sensor_width << 16) | regtrace_t23_source_sensor_height);
+    ACCESS_ONCE(regtrace_t23_bayer_pending) = UINT_MAX;
     system_reg_write(0x8U, regtrace_t23_source_core_bayer);
     system_reg_write(0x1cU, 0);
     system_reg_write(0x2cU, 0x400040U);
@@ -32815,6 +32821,12 @@ int32_t isp_irq_handle(int32_t irq, void *dev_id)
         regtrace_t23_source_awb_stats_irq(status0,
                                           regtrace_t23_core_irq_count);
 
+        /* OEM: mbus_to_bayer_write() after a sensor Bayer change. */
+        if (ACCESS_ONCE(regtrace_t23_bayer_pending) != UINT_MAX) {
+            system_reg_write(0x8U, ACCESS_ONCE(regtrace_t23_bayer_pending));
+            ACCESS_ONCE(regtrace_t23_bayer_pending) = UINT_MAX;
+        }
+
         /* OEM T23 drains MSCA completion FIFOs from the core ISR. */
         if (regtrace_t23_source_frame_done) {
             for (channel = 0; channel < 3; channel++) {
@@ -38279,12 +38291,48 @@ int32_t tx_isp_open(int32_t arg1, void *arg2) {
  * sync_sensor_attr ops; here those copies are the seeded sensor caches.
  * Other notifications have no consumer in this driver.
  */
+/*
+ * Runtime Bayer re-sync after a sensor mirror/flip.  A sensor whose readout
+ * order changes with the flip reports the new media-bus code (and sets
+ * video.mbus_change) through TX_ISP_EVENT_SYNC_SENSOR_ATTR.  The OEM
+ * ispcore_sync_sensor_attr copies the video struct into the core, and the
+ * next ispcore_interrupt_service_routine calls mbus_to_bayer_write() (ISP
+ * input pattern, reg 0x8) and clears the flag.  The same happens here: the
+ * new index is posted for the core interrupt.  The GIB black levels follow
+ * at the next gain update (tisp_gib_gain_interpolation reads reg 0x8), the
+ * LSC mesh follows the flip in regtrace_t23_sensor_flip_set(), AWB has no
+ * pattern-dependent setup.  The trigger is a changed pattern rather than
+ * mbus_change, so a sensor that forgets the flag is covered too; a
+ * source_core_bayer set by hand is left alone.  sc2336 shifts its window
+ * on flip and keeps SBGGR10, so it never triggers this.
+ */
+static void regtrace_t23_bayer_follow_sensor(void)
+{
+    uint32_t bayer;
+
+    if (!regtrace_t23_core_bayer_from_mbus ||
+        regtrace_t23_bayer_from_mbus(regtrace_t23_source_sensor_mbus_code,
+                                     &bayer) ||
+        bayer == regtrace_t23_source_core_bayer)
+        return;
+    printk(KERN_INFO
+           "tx_isp_t23_recovered: sensor Bayer %u -> %u (mbus=0x%x)%s\n",
+           regtrace_t23_source_core_bayer, bayer,
+           regtrace_t23_source_sensor_mbus_code,
+           regtrace_t23_core_started ? ", reg 0x8 at next frame" : "");
+    regtrace_t23_source_core_bayer = bayer;     /* also for the next start */
+    if (regtrace_t23_core_started)
+        ACCESS_ONCE(regtrace_t23_bayer_pending) = bayer;
+}
+
 int tx_isp_notify(void *module, unsigned int notification, void *data)
 {
     (void)module;
     (void)data;
-    if (notification == REGTRACE_TX_ISP_EVENT_SYNC_SENSOR_ATTR)
+    if (notification == REGTRACE_TX_ISP_EVENT_SYNC_SENSOR_ATTR) {
         regtrace_t23_seed_sensor_caches("sensor-sync-attr");
+        regtrace_t23_bayer_follow_sensor();
+    }
     return 0;
 }
 
@@ -78867,7 +78915,7 @@ int32_t system_reg_write_ae(int32_t arg1, int32_t arg2, int32_t arg3) {
     } else if (arg1 == 2) {
         system_reg_write((const void *)0xa800, 1);
     } else if (arg1 == 3) {
-        system_reg_write((const void *)0x4208, 1);
+        system_reg_write((const void *)0x1070, 1);  /* OEM: 4208 decimal */
     }
     return system_reg_write((const void *)(uintptr_t)arg2, arg3);
 }
@@ -92379,10 +92427,10 @@ static uint32_t regtrace_t23_gain_q16_to_imp_log2(uint32_t gain_q16)
  *   0x78/0x7a   AE integration-time window min/max (u16)
  *   0x88        one line, us (u16)
  *
- * This driver's AE steps the sensor integration time and analog gain only;
- * sensor digital gain and ISP digital gain stay at unity, so they and their
- * AE limits read 0.  Process context only (takes the FPS mutex); touches no
- * hardware.
+ * This driver's AE steps the sensor integration time, the analog gain and,
+ * above the analog limit, the ISP digital gain up to MAX_DGAIN; sensor
+ * digital gain stays at unity, so it and its limit read 0.  Process context
+ * only (takes the FPS mutex); touches no hardware.
  */
 static void regtrace_t23_ev_info_get(struct regtrace_t23_ev_info *info)
 {
@@ -92392,9 +92440,13 @@ static void regtrace_t23_ev_info_get(struct regtrace_t23_ev_info *info)
     uint32_t den;
     uint64_t ev_q10;
     uint32_t max_again_q10;
+    uint32_t dgain_q10 = ACCESS_ONCE(regtrace_t23_ae_isp_dgain_q10);
+    uint32_t total_q16;
 
     memset(info, 0, sizeof(*info));
     regtrace_t23_expo_get_live(&live);
+    info->max_isp_dgain = min(regtrace_t23_ae_user_max_dgain << 11,
+                              REGTRACE_T23_AE_ISP_DGAIN_MAX_LOG2) >> 11;
 
     info->sensor_ok = attr && regtrace_t23_sensor_initialized;
     info->valid = live.valid;
@@ -92440,11 +92492,16 @@ static void regtrace_t23_ev_info_get(struct regtrace_t23_ev_info *info)
         return;
     }
     info->again = regtrace_t23_gain_q16_to_imp_log2(live.gain_q16);
-    info->total_gain = live.gain_q16 >> 8;
-    if (live.gain_q16 > 0x10000U)
+    if (dgain_q10 > 0x400U)
+        info->isp_dgain = (uint32_t)tisp_log2_fixed_to_fixed(
+            dgain_q10, 10U, 5U);
+    total_q16 = (uint32_t)min_t(uint64_t,
+        ((uint64_t)live.gain_q16 * dgain_q10) >> 10, 0xffffffffULL);
+    info->total_gain = total_q16 >> 8;
+    if (total_q16 > 0x10000U)
         info->tgain_log2 = (uint32_t)tisp_log2_fixed_to_fixed(
-            live.gain_q16, 16U, 16U) >> 16;
-    ev_q10 = ((uint64_t)live.it * live.gain_q16) >> 6;
+            total_q16, 16U, 16U) >> 16;
+    ev_q10 = ((uint64_t)live.it * total_q16) >> 6;
     if (ev_q10 > 0xffffffffULL)
         ev_q10 = 0xffffffffULL;
     info->ev = (uint32_t)(ev_q10 >> 10);
