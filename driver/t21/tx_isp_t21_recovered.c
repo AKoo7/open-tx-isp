@@ -53757,9 +53757,24 @@ static void t21_ramlog_start(void)
 	size_t bytes = PAGE_SIZE << T21_RAMLOG_ORDER;
 	unsigned long phys;
 
+	unsigned long spare[8];
+	unsigned int i, n = 0;
+
 	if (!t21_ramlog)
 		return;
-	t21_ramlog_pages = __get_free_pages(GFP_KERNEL, T21_RAMLOG_ORDER);
+	/* Low RAM is rewritten by the bootloader and the kernel image on the
+	 * way back up; keep the highest of a few candidate blocks. */
+	for (i = 0; i < ARRAY_SIZE(spare); i++) {
+		spare[n] = __get_free_pages(GFP_KERNEL, T21_RAMLOG_ORDER);
+		if (spare[n])
+			n++;
+	}
+	for (i = 0; i < n; i++)
+		if (spare[i] > t21_ramlog_pages)
+			t21_ramlog_pages = spare[i];
+	for (i = 0; i < n; i++)
+		if (spare[i] != t21_ramlog_pages)
+			free_pages(spare[i], T21_RAMLOG_ORDER);
 	if (!t21_ramlog_pages)
 		return;
 	memset((void *)t21_ramlog_pages, 0, bytes);
