@@ -3567,6 +3567,9 @@ int tisp_event_process(void);
 /* Additional function declarations needed for Binary Ninja reference */
 int tisp_get_ae_comp(uint32_t *value);
 int tisp_g_aeroi_weight(void *buffer);
+int tisp_s_aeroi_weight(uint32_t *roi);
+static int apical_isp_expr_s_ctrl(void __user *uptr);
+static int apical_isp_ae_s_roi(void __user *uptr);
 int tisp_ae_param_array_get(int param_type, void *buffer, int *size);
 int tisp_ae_get_hist_custome(void *buffer);
 int apical_isp_max_again_g_ctrl(struct tx_isp_dev *dev, struct isp_core_ctrl *ctrl);
@@ -9602,11 +9605,11 @@ static int apical_isp_core_ops_s_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
         }
 
         case 0x8000024: /* OEM: apical_isp_ae_s_roi */
-            ret = 0; /* OEM routes through isra helper */
+            ret = apical_isp_ae_s_roi((void __user *)(unsigned long)ctrl->value);
             break;
 
         case 0x8000025: /* OEM: apical_isp_expr_s_ctrl */
-            ret = 0; /* OEM routes through isra helper */
+            ret = apical_isp_expr_s_ctrl((void __user *)(unsigned long)ctrl->value);
             break;
 
         case 0x800002a: /* OEM: tisp_s_Hilightdepress */
@@ -10741,16 +10744,11 @@ int apical_isp_ae_g_roi(struct tx_isp_dev *dev, struct isp_core_ctrl *ctrl)
     result = tisp_g_aeroi_weight(buffer);
 
     if (result == 0) {
-        /* Binary Ninja: Complex nested loop to copy data */
-        int a2_1 = 0;
-
+        /* 15x15 u32 weights to 15x15 bytes; OEM 0x71c8 steps the source
+         * row offset after advancing i, so row r reads words r*15.. */
         for (i = 0; i != 0xe1; i += 0xf) {
-            for (j = 0; j != 0xf; j++) {
-                /* Binary Ninja: char $a0_4 = (*($v0 + (j << 2) + $a2_1)).b */
-                char byte_val = *((char*)buffer + (j << 2) + a2_1);
-                var_f8[j + i] = byte_val;
-            }
-            a2_1 = i << 2;
+            for (j = 0; j != 0xf; j++)
+                var_f8[j + i] = (char)((uint32_t *)buffer)[i + j];
         }
 
         /* Binary Ninja: private_copy_to_user(*arg1, &var_f8, 0xe1) */
@@ -15981,18 +15979,87 @@ static int tiziano_isp_ae_manual_attr_g_ctrl(void __user *uptr)
     return 0;
 }
 
-/* OEM EXACT: apical_isp_expr_s_ctrl — set exposure control.
- * Decompiled from OEM at 0x566c. Parses user exposure params and calls tisp_s_ae_attr. */
-static int apical_isp_expr_s_ctrl(void *sd, void __user *uptr)
+/* tisp_s_ae_attr_it - OEM tisp_s_ae_attr (0x63e4c): the current AE
+ * control object with word 3 (integration time) and word 13 (pin the
+ * integration time) replaced, applied through tisp_ae_manual_set. */
+static int tisp_s_ae_attr_it(uint32_t it, uint32_t manual)
 {
-    uint32_t params[3]; /* mode, unit, value */
-    if (private_copy_from_user(params, uptr, 0xc))
-        return -EFAULT;
+    uint32_t w[0x98 / 4];
 
-    /* OEM builds an AE attr struct from the params and calls tisp_s_ae_attr.
-     * Pass the raw params buffer — tisp_s_ae_attr handles the struct internally. */
-    tisp_s_ae_attr(params);
-    return 0;
+    memcpy(w, tisp_ae_ctrls, sizeof(w));
+    w[3] = it;
+    w[13] = manual;
+    return tisp_ae_manual_set(w);
+}
+
+/* apical_isp_expr_s_ctrl - SetExpr (0x8000025), OEM 0x566c.
+ * IMPISPExpr.s_attr: { mode (0 auto, 1 manual), unit (0 lines, 1 us),
+ * uint16 time }.  Microseconds are converted with the sensor's
+ * one_line_expr_in_us. */
+static int apical_isp_expr_s_ctrl(void __user *uptr)
+{
+    struct {
+        uint32_t mode;
+        uint32_t unit;
+        uint16_t time;
+        uint16_t pad;
+    } expr;
+    uint32_t it = tisp_ae_ctrls[3];
+
+    if (copy_from_user(&expr, uptr, sizeof(expr)))
+        return -EFAULT;
+    if (expr.mode > 1) {
+        pr_err("Err:%s,%d can not support this mode\n", __func__, __LINE__);
+        return -EINVAL;
+    }
+    if (expr.mode == 1) {
+        if (expr.unit == 1) {
+            uint32_t line_us = tisp_si_one_line_expr_in_us(&sensor_info);
+
+            if (!line_us) {
+                pr_err("err: %s,%d one_line_expr_in_us = %d\n", __func__,
+                       __LINE__, 0);
+                return -EINVAL;
+            }
+            it = expr.time / line_us;
+        } else if (expr.unit == 0) {
+            it = expr.time;
+        } else {
+            pr_err("Err:%s,%d can not support this unit\n", __func__,
+                   __LINE__);
+            return -EINVAL;
+        }
+    }
+    return tisp_s_ae_attr_it(it, expr.mode);
+}
+
+/* apical_isp_ae_s_roi - SetAeROI (0x8000024), OEM 0x57b0: 15x15 bytes of
+ * weights 0..8 widened to u32 for tisp_s_aeroi_weight. */
+static int apical_isp_ae_s_roi(void __user *uptr)
+{
+    uint8_t in[0xe1];
+    uint32_t *roi;
+    int i, ret = 0;
+
+    if (!uptr)
+        return -EINVAL;
+    if (copy_from_user(in, uptr, sizeof(in)))
+        return -EFAULT;
+    roi = kmalloc(0x384, GFP_KERNEL);
+    if (!roi)
+        return -ENOMEM;
+    for (i = 0; i < 0xe1; i++) {
+        if (in[i] >= 9) {
+            pr_err("%s:%d::ae weight overflow!!!\n", __func__, __LINE__);
+            ret = -EINVAL;
+            goto out;
+        }
+        roi[i] = in[i];
+    }
+    tisp_s_aeroi_weight(roi);
+out:
+    kfree(roi);
+    return ret;
 }
 
 /* OEM EXACT: subsection_up — LSC mesh subsection interpolation.
@@ -35547,8 +35614,9 @@ int tisp_g_ae_attr(uint32_t *out)
 {
     uint32_t buf[40];
     tisp_get_ae_attr(buf);
-    out[0] = buf[3];  /* ae mode */
-    out[0xc] = buf[12]; /* additional attr */
+    /* OEM 0x63f00: integration time (word 3) and its pin flag (word 13) */
+    out[0] = buf[3];
+    out[0xc] = buf[13];
     return 0;
 }
 
