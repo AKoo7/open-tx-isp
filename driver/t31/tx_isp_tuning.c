@@ -4242,7 +4242,12 @@ static uint32_t data_a0de4 = 0;    /* AE DN state flag (OEM: data_a0de4) */
 static uint32_t data_a0de8 = 0;    /* AE DN state flag (OEM: data_a0de8) */
 static uint32_t data_a0df0 = 0;    /* AE DN state flag (OEM: data_a0df0) */
 static uint32_t data_a0e08 = 0;    /* AE DN state flag (OEM: data_a0e08) */
-static uint32_t data_a0c08 = 0x80; /* AE compensation target (OEM: data_a0c08) */
+/*
+ * OEM data_a0c08 is ae_comp_param + 8 (ae_comp_param sits at 0xa0c00), the
+ * "AT scale" word ae0_tune2 multiplies the AE target list with.  A separate
+ * static here made SetAeComp a no-op for the AE target.
+ */
+#define data_a0c08 (ae_comp_param.data[2])
 static uint8_t  ae_comp_x = 0x80;  /* AE compensation input (OEM: ae_comp_x) */
 static uint32_t ae_hist_scale_enable = 1; /* Debug gate for AE wmean-driven
                                            * table scaling. Keep this separate
@@ -16785,9 +16790,6 @@ static uint32_t *data_d04b8 = &data_b0cfc;
 static uint32_t data_d04bc[6] = {0x0d0b00, 0x040d0b00, 0x080d0b00, 0x0c0d0b00, 0x100d0b00, 0x140d0b00};
 static uint32_t *data_d04c4 = &data_afcd4;
 
-/* Missing data_b0c18 variable */
-static uint32_t data_b0c18 = 0x80;  /* AE compensation default */
-
 /* AE exposure threshold parameters */
 static uint32_t data_b2ea8 = 0x8000;  /* AE exp threshold */
 static uint32_t data_b2e9c = 0x1000;  /* Min exposure */
@@ -17294,8 +17296,8 @@ int tiziano_ae_init(uint32_t height, uint32_t width,
     /* Binary Ninja EXACT: private_spin_lock_init(0) */
     private_spin_lock_init(0);
 
-    /* Binary Ninja EXACT: ae_comp_default = data_b0c18 */
-    ae_comp_default = data_b0c18;
+    /* OEM (0x54540): ae_comp_default = data_a0c08, the tuning bin's AT scale */
+    ae_comp_default = data_a0c08;
 
     /* Binary Ninja EXACT: return 0 */
     pr_info("tiziano_ae_init: AE initialization complete - Binary Ninja EXACT implementation\n");
@@ -34948,7 +34950,7 @@ int tiziano_ae_dn_params_refresh(void)
     tiziano_ae_set_hardware_param(1, _ae_parameter.data, 1);
 
     /* OEM: Reset compensation default and reapply current compensation */
-    ae_comp_default = data_b0c18;
+    ae_comp_default = data_a0c08;
     tisp_ae_s_comp(ae_comp_x);
 
     return 0;
