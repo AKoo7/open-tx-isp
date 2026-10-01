@@ -4011,6 +4011,11 @@ struct t21_sensor_ctrl_view {
 	int32_t (*get_lines_per_second)(void);
 };
 
+/* tisp_ae_ctrls, the 64-byte live AE record.  Gains are linear Q10
+ * (1024 = 1x).  Offsets 0x24..0x2c follow the stock tisp_ae_process_impl
+ * and tisp_g_ev_attr (libt21-firmware 1.0.33): 0x24 is the exposure value
+ * that event 6 carries (integration lines x total gain, Q10), 0x28 the
+ * log2 of the total gain and 0x2c the log2 of the analogue gain, both Q16. */
 struct t21_ae_ctrls_view {
 	u32 manual_mode;
 	u32 sensor_again;
@@ -4021,41 +4026,51 @@ struct t21_ae_ctrls_view {
 	u32 max_sensor_dgain;
 	u32 max_integration_time;
 	u32 max_isp_dgain;
-	u32 total_gain;
-	u16 field_28;
-	u16 field_2a;
-	u8 reserved[0x40 - 0x2c];
+	u32 ev_q10;
+	u32 total_gain_log2;
+	u32 again_log2;
+	u8 reserved[0x40 - 0x30];
 };
 
 struct t21_ev_sensor_info_view {
 	u8 reserved_00[0x2c];
-	u32 fps;
+	u32 fps;			/* numerator << 16 | denominator */
 	u8 reserved_30[0x0e];
-	u16 lines_per_second;
+	u16 total_lines;		/* frame length (VTS) in lines */
 };
 
+/* The twelve-word record tisp_g_ev_attr fills.  Field order and sources are
+ * those of the stock body; the stock isp_info_show prints them as
+ * "SENSOR Integration Time" (0x00), "ISP EV value" (0x04), "ISP EV value us"
+ * (0x08), "ISP EV value log2" (0x0c), "SENSOR analog gain" (0x10),
+ * "ISP digital gain" (0x14), "ISP Tgain DB" (0x18), "MAX SENSOR analog gain"
+ * (0x20), "MAX ISP digital gain" (0x24), "SENSOR digital gain" (0x28) and
+ * "MAX SENSOR digital gain" (0x2c).  Gains are IMP log2 units (Q5, 32 per
+ * doubling); 0x1c is the linear total gain in [24.8] (256 = 1x) that
+ * TOTAL_GAIN (0x8000027) returns. */
 struct t21_ev_attr_view {
 	u32 integration_time;
-	u32 total_gain;
-	u32 exposure_us;
-	u32 total_gain_log2;
+	u32 ev;
+	u32 expr_us;
+	u32 ev_log2;
 	u32 sensor_again_log2;
-	u32 sensor_dgain_log2;
-	u32 field_18;
-	u32 sensor_gain;
-	u32 field_20_log2;
-	u32 field_24_log2;
 	u32 isp_dgain_log2;
-	u32 field_2c_log2;
+	u32 total_gain_db;
+	u32 total_gain_q8;
+	u32 max_sensor_again_log2;
+	u32 max_isp_dgain_log2;
+	u32 sensor_dgain_log2;
+	u32 max_sensor_dgain_log2;
 };
 
+/* IMPISPEVAttr of the T21 SDK: words 1..6 of the record above. */
 struct t21_ev_user_view {
-	u32 total_gain;
-	u32 exposure_us;
-	u32 total_gain_log2;
-	u32 sensor_again_log2;
-	u32 sensor_dgain_log2;
-	u32 field_18;
+	u32 ev;
+	u32 expr_us;
+	u32 ev_log2;
+	u32 again;
+	u32 dgain;
+	u32 gain_log2;
 };
 
 /* The tuning core keeps white balance as seven 32-bit words, while the
@@ -7725,6 +7740,7 @@ int32_t tisp_g_aezone_weight(uint32_t a0);
 int32_t tisp_s_af_weight(uint32_t a0);
 int32_t tisp_g_af_weight(uint32_t a0);
 int32_t tisp_g_ev_attr(uintptr_t a0);
+static int t21_g_expr(void __user *dst);
 int32_t tisp_g_wb_attr(void *a0);
 int32_t tisp_s_wb_attr(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5, int32_t arg6);
 int32_t tisp_g_ae_hist(uint32_t a0);
@@ -13747,50 +13763,17 @@ int32_t apical_isp_max_again_g_ctrl_isra_60(uintptr_t a0) __asm__("apical_isp_ma
 #endif
 int32_t apical_isp_max_again_g_ctrl_isra_60(uintptr_t a0)
 {
-    uint32_t local_10 = 0;
-    uint32_t local_30 = 0;
-    uint32_t local_54 = 0;
-    uint32_t local_58 = 0;
-    uint32_t local_5c = 0;
-    uint32_t a1 = 0;
-    uint32_t a2 = 0;
-    uint32_t a3 = 0;
-    uint32_t ra = 0;
-    uint32_t s0 = 0;
-    uintptr_t s1 = 0;
-    uintptr_t *v0 = 0;
+	/* The fragment rebuild passed tisp_g_ev_attr a single stack word for
+	 * its twelve-word record, smashing the frame on every query. */
+	struct t21_ev_attr_view ev;
+	int32_t ret = tisp_g_ev_attr((uintptr_t)&ev);
 
-    /* fragment 0: Prologue */
-    /* function prologue: stack frame and callee-saved register setup */
-
-    /* fragment 1: CallSetup */
-    s1 = a0;
-    v0 = (uintptr_t *)((uintptr_t (*)(int32_t *))(uintptr_t)tisp_g_ev_attr)(&local_10); /* jalr target resolved by relocation */
-
-    /* fragment 2: Branch */
-    s0 = v0;
-    if (v0 == 0) { goto apical_isp_max_again_g_ctrl_isra_600x58; }
-
-    /* fragment 3: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))(int32_t *)isp_printf)(1, &LC16, &__param_str_isp_clk, 2094); /* jalr target resolved by relocation */
-
-    /* fragment 4: Branch */
-    goto apical_isp_max_again_g_ctrl_isra_600x64;
-
-apical_isp_max_again_g_ctrl_isra_600x58:
-    /* fragment 5: StackAccess */
-    v0 = local_30;
-    *(uint32_t *)((char *)s1 + 4) = v0;
-    ra = local_5c;
-
-apical_isp_max_again_g_ctrl_isra_600x64:
-    /* fragment 6: Arithmetic */
-    v0 = s0;
-
-    /* fragment 7: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    return 0;
+	if (ret) {
+		isp_printf(1, "%s:%d get control failed!!!\n", "apical_isp_max_again_g_ctrl", 2094);
+		return ret;
+	}
+	*(uint32_t *)((char *)a0 + 4) = ev.max_sensor_again_log2;
+	return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000050b4 origin=fragment_seed original=apical_isp_max_dgain_g_ctrl.isra.61 */
@@ -13799,50 +13782,17 @@ int32_t apical_isp_max_dgain_g_ctrl_isra_61(uintptr_t a0) __asm__("apical_isp_ma
 #endif
 int32_t apical_isp_max_dgain_g_ctrl_isra_61(uintptr_t a0)
 {
-    uint32_t local_10 = 0;
-    uint32_t local_34 = 0;
-    uint32_t local_54 = 0;
-    uint32_t local_58 = 0;
-    uint32_t local_5c = 0;
-    uint32_t a1 = 0;
-    uint32_t a2 = 0;
-    uint32_t a3 = 0;
-    uint32_t ra = 0;
-    uint32_t s0 = 0;
-    uintptr_t s1 = 0;
-    uintptr_t *v0 = 0;
+	/* The fragment rebuild passed tisp_g_ev_attr a single stack word for
+	 * its twelve-word record, smashing the frame on every query. */
+	struct t21_ev_attr_view ev;
+	int32_t ret = tisp_g_ev_attr((uintptr_t)&ev);
 
-    /* fragment 0: Prologue */
-    /* function prologue: stack frame and callee-saved register setup */
-
-    /* fragment 1: CallSetup */
-    s1 = a0;
-    v0 = (uintptr_t *)((uintptr_t (*)(int32_t *))(uintptr_t)tisp_g_ev_attr)(&local_10); /* jalr target resolved by relocation */
-
-    /* fragment 2: Branch */
-    s0 = v0;
-    if (v0 == 0) { goto apical_isp_max_dgain_g_ctrl_isra_610x58; }
-
-    /* fragment 3: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))(int32_t *)isp_printf)(1, &LC16, &__param_str_isp_clk, 2120); /* jalr target resolved by relocation */
-
-    /* fragment 4: Branch */
-    goto apical_isp_max_dgain_g_ctrl_isra_610x64;
-
-apical_isp_max_dgain_g_ctrl_isra_610x58:
-    /* fragment 5: StackAccess */
-    v0 = local_34;
-    *(uint32_t *)((char *)s1 + 4) = v0;
-    ra = local_5c;
-
-apical_isp_max_dgain_g_ctrl_isra_610x64:
-    /* fragment 6: Arithmetic */
-    v0 = s0;
-
-    /* fragment 7: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    return 0;
+	if (ret) {
+		isp_printf(1, "%s:%d get control failed!!!\n", "apical_isp_max_dgain_g_ctrl", 2120);
+		return ret;
+	}
+	*(uint32_t *)((char *)a0 + 4) = ev.max_isp_dgain_log2;
+	return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000512c origin=fragment_seed original=apical_isp_ev_g_attr.isra.62 */
@@ -13871,13 +13821,14 @@ int32_t apical_isp_ev_g_attr_isra_62(uintptr_t a0)
 		return ret;
 	}
 
-	/* OEM userspace ABI publishes internal words 1 through 6. */
-	user.total_gain = ev.total_gain;
-	user.exposure_us = ev.exposure_us;
-	user.total_gain_log2 = ev.total_gain_log2;
-	user.sensor_again_log2 = ev.sensor_again_log2;
-	user.sensor_dgain_log2 = ev.sensor_dgain_log2;
-	user.field_18 = ev.field_18;
+	/* OEM userspace ABI publishes internal words 1 through 6:
+	 * IMPISPEVAttr {ev, expr_us, ev_log2, again, dgain, gain_log2}. */
+	user.ev = ev.ev;
+	user.expr_us = ev.expr_us;
+	user.ev_log2 = ev.ev_log2;
+	user.again = ev.sensor_again_log2;
+	user.dgain = ev.isp_dgain_log2;
+	user.gain_log2 = ev.total_gain_db;
 
 	return private_copy_to_user((void __user *)(uintptr_t)ctrl[1], &user,
 				    sizeof(user)) ? -EFAULT : 0;
@@ -14199,6 +14150,32 @@ int32_t apical_isp_core_ops_g_ctrl(int32_t *arg1, int32_t *arg2, int32_t arg3)
 		return apical_isp_gamma_g_attr(arg2);
 	}
 
+	/* The stock tree splits at cmd >= 0x800002c; this rebuild nests the
+	 * 0x800002c..0x8000045 handlers under cmd >= 0x8000084 below, where
+	 * they cannot be reached, so every control in that range fell through
+	 * to the high-light-depress getter (GetAeLuma returned the HLD
+	 * strength).  Several handlers in that block still carry decompiler
+	 * damage (AE histogram, zone/AF weight byte packing, AF attribute
+	 * reads), so route only the AE readbacks here, as the stock does. */
+	if (cmd == base + 0x2f) {		/* AE min: integration, again */
+		u32 ae_min[2];
+
+		tisp_g_ae_min((uintptr_t)ae_min);
+		return private_copy_to_user((void __user *)(uintptr_t)arg2[1],
+					    ae_min, sizeof(ae_min)) ?
+			-EFAULT : 0;
+	}
+	if (cmd == base + 0x30)			/* AE zones: not published */
+		return 0;
+	/* 0x8000031 is the T21 SDK's AE luma.  0x8000033 (the T23/T31 id,
+	 * rejected by the stock T21 dispatcher) is answered too, for OpenIMP
+	 * builds that still send it on T21. */
+	if (cmd == base + 0x31 || cmd == base + 0x33) {
+		tisp_g_ae_luma(&luma);
+		arg2[1] = luma;
+		return 0;
+	}
+
 	if (cmd >= base + 0x84) {
 		if (cmd == base + 0x84) {
 			tisp_g_ncuinfo(buf);
@@ -14436,25 +14413,21 @@ int32_t apical_isp_core_ops_g_ctrl(int32_t *arg1, int32_t *arg2, int32_t arg3)
 				}
 			}
 			if (cmd == base + 0x27) {
-				const struct t21_ae_ctrls_view *ae =
-					(const void *)tisp_ae_ctrls;
+				struct t21_ev_attr_view ev;
 
-				/* TOTAL_GAIN is a scalar control.  The collapsed body
-				 * rebuilt the complete EV attribute record and then
-				 * accidentally returned its first word (integration time).
-				 * Besides being the wrong ABI value, that needlessly entered
-				 * the recovered fixed-point/log2 helpers once per second.
-				 * Read the canonical AE state directly, as the OEM update
-				 * worker does internally. */
-				BUILD_BUG_ON(offsetof(struct t21_ae_ctrls_view,
-						      total_gain) != 0x24);
-				arg2[1] = ae->total_gain >> 10;
+				/* Stock: tisp_g_ev_attr word 0x1c, the linear total
+				 * gain in [24.8] (256 = 1x), stored inline in the
+				 * control value.  The first rebuild returned the AE
+				 * EV word >> 10 instead. */
+				ret = tisp_g_ev_attr((uintptr_t)&ev);
+				if (ret)
+					return ret;
+				arg2[1] = ev.total_gain_q8;
 				return 0;
 			}
 			if (cmd < base + 0x28) {
-				if (cmd == base + 0x25) {
-					return 0;
-				}
+				if (cmd == base + 0x25)
+					return t21_g_expr((void __user *)(uintptr_t)arg2[1]);
 				if (cmd != base + 0x26) {
 					return -1;
 				}
@@ -47138,22 +47111,31 @@ int32_t tisp_ae_process(void)
 	ae_ctrl->sensor_dgain = t21_ae_current_sensor_dgain_q10;
 	ae_ctrl->integration_time = t21_ae_current_it;
 	ae_ctrl->isp_dgain = t21_ae_current_isp_dgain_q10;
-	ae_ctrl->total_gain = div_u64((u64)t21_ae_current_gain_q10 *
-				      t21_ae_current_sensor_dgain_q10 *
-				      t21_ae_current_isp_dgain_q10,
-				      1024 * 1024);
+	total_gain_q10 = (u32)min_t(u64, div_u64((u64)t21_ae_current_gain_q10 *
+					 t21_ae_current_sensor_dgain_q10 *
+					 t21_ae_current_isp_dgain_q10,
+					 1024 * 1024), 0x3ffffff);
 
 	/* OEM event 6 carries the effective exposure to every tuning block which
 	 * selects curves by EV (AWB, CCM, ADR and defog).  The first-pass AE body
 	 * retained gain-change events 4/5 but dropped this unconditional event,
-	 * pinning those generic, tuning-driven consumers at EV zero. */
+	 * pinning those generic, tuning-driven consumers at EV zero.
+	 *
+	 * The payload is the EV in Q10 (lines x linear gain x 1024), exactly the
+	 * word stock tisp_ae_process_impl also stores at tisp_ae_ctrls+0x24:
+	 * tisp_ccm_ev_update and the ADR/defog updates shift it right by 10,
+	 * and the AWB compares it with its _awb_mode lux thresholds << 10.
+	 * Pushing the integer EV made every consumer see a scene 1024 times
+	 * brighter than it was, so AWB always ran its outdoor high-lux CT
+	 * window and CCM/ADR/defog stayed on their brightest-scene curves. */
 	current_exposure = (u64)t21_ae_current_it *
 			   t21_ae_current_gain_q10;
 	current_exposure = div_u64(current_exposure *
 				   t21_ae_current_sensor_dgain_q10, 1024);
 	current_exposure = div_u64(current_exposure *
 				   t21_ae_current_isp_dgain_q10, 1024);
-	current_ev = div_u64(current_exposure, 1024);
+	current_ev = (u32)min_t(u64, current_exposure, 0xffffffffULL);
+	ae_ctrl->ev_q10 = current_ev;
 	event[2] = 6;
 	event[4] = current_ev;
 	tisp_event_push(event);
@@ -47161,11 +47143,14 @@ int32_t tisp_ae_process(void)
 
 	/* The dynamic ISP blocks consume gain in Q16 log2 form.  Keep that
 	 * policy generic: the sensor callback supplies the quantized Q10 gain,
-	 * while every interpolation curve comes from the active tuning bank. */
-	total_gain = tisp_log2_fixed_to_fixed(ae_ctrl->total_gain << 6,
-					       16, 16);
+	 * while every interpolation curve comes from the active tuning bank.
+	 * Stock keeps both logs in tisp_ae_ctrls+0x28/+0x2c; isp-m0's
+	 * "ISP Tgain DB" is the integer part of the first. */
+	total_gain = tisp_log2_fixed_to_fixed(total_gain_q10 << 6, 16, 16);
 	again = tisp_log2_fixed_to_fixed(t21_ae_current_gain_q10 << 6,
 					 16, 16);
+	ae_ctrl->total_gain_log2 = total_gain;
+	ae_ctrl->again_log2 = again;
 	if (total_gain != last_total_gain) {
 		event[2] = 4;
 		event[4] = total_gain;
@@ -47182,14 +47167,14 @@ int32_t tisp_ae_process(void)
 
 	pr_debug_ratelimited("tx-isp-t21: ae luma=%u target=%u ev=%u it=%u again=%u sdgain=%u ispgain=%u limits=%u/%u/%u\n",
 			    t21_ae_measured_luma, target,
-			    current_ev,
+			    current_ev >> 10,
 			    t21_ae_current_it, t21_ae_current_gain_q10,
 			    t21_ae_current_sensor_dgain_q10,
 			    t21_ae_current_isp_dgain_q10,
 			    max_it, max_again, max_isp_dgain);
 	if (!(t21_ae_frame_count % 750))
 		pr_debug("tx-isp-t21: ae sample luma=%u target=%u ev=%u it=%u again=%u sdgain=%u ispgain=%u limits=%u/%u/%u\n",
-			t21_ae_measured_luma, target, current_ev,
+			t21_ae_measured_luma, target, current_ev >> 10,
 			t21_ae_current_it, t21_ae_current_gain_q10,
 			t21_ae_current_sensor_dgain_q10,
 			t21_ae_current_isp_dgain_q10,
@@ -47245,7 +47230,11 @@ int tiziano_ae_dn_params_refresh(void)
     ftune = 1;
     ae_dn_refresh_flag = 1;
     tiziano_ae_params_refresh();
-    *(uint32_t *)&tisp_ae_ctrls[0] =
+    /* Stock stores the reloaded maximum ISP digital gain to
+     * tisp_ae_ctrls+0x20.  The recovery wrote it over word 0 (the manual-mode
+     * flag), so a day/night switch put AE in "manual" for every reader of
+     * that flag and the new bank's ISP-gain limit was never applied. */
+    *(uint32_t *)&tisp_ae_ctrls[0x20] =
 	*(uint32_t *)((char *)&_exp_parameter + 0x10);
     tiziano_ae_set_hardware_param();
     return 0;
@@ -47377,12 +47366,12 @@ int32_t tiziano_ae_init(uint32_t arg1, uint32_t arg2, uint32_t arg3)
 	sensor_gain = result->analog_gain;
 	sensor_reg = result->sensor_reg;
 	val = fix_point_mult3_32(ae_point_pos, sensor_it << (ae_point_pos & 0x1f), sensor_gain, sensor_reg);
-	ae_ctrl->total_gain = val;
+	ae_ctrl->ev_q10 = val;
 	pr_debug("tx-isp-t21: ae initial exposure=%u point=%u\n", val,
 		ae_point_pos);
 
 	sensor_ctrl_val = ctrl->max_integration_time;
-	ctrl_val = ae_ctrl->total_gain;
+	ctrl_val = ae_ctrl->ev_q10;
 	if (sensor_ctrl_val == 0) {
 		*(uint32_t *)((char *)((char *)&_exp_parameter + 0x8)) = ctrl_val;
 	} else if (ctrl_val < sensor_ctrl_val) {
@@ -49573,7 +49562,18 @@ tisp_g_af_weight0x5c:
     return 0;
 }
 
-/* Rebuilt from the stock T21 body at 0x30fc4. */
+/* Linear Q10 gain to IMP log2 units (Q5, 32 per doubling).  Stock feeds the
+ * raw word to the log2 helper; a gain below 1x (only the zeroed record
+ * before the first AE pass) would come out negative, so report it as 1x. */
+static u32 t21_gain_log2(u32 gain_q10)
+{
+	return tisp_log2_fixed_to_fixed(max_t(u32, gain_q10, 1024), 10, 5);
+}
+
+/* Rebuilt from the stock T21 body (0x30fc4 in the reference module,
+ * 0x306e4 in the libt21-firmware 1.0.33 link).  The first rebuild swapped
+ * the ISP and sensor digital gains at words 0x14/0x28 and built the
+ * TOTAL_GAIN word from the sensor digital gain instead of the ISP one. */
 int32_t tisp_g_ev_attr(uintptr_t a0)
 {
 	const struct t21_ae_ctrls_view *ctrl =
@@ -49581,49 +49581,124 @@ int32_t tisp_g_ev_attr(uintptr_t a0)
 	const struct t21_ev_sensor_info_view *sensor =
 		(const struct t21_ev_sensor_info_view *)sensor_info;
 	struct t21_ev_attr_view *out = (struct t21_ev_attr_view *)a0;
-	u32 fps_num = sensor->fps & 0xffff;
-	u32 fps_den = sensor->fps >> 16;
+	u32 fps_num = sensor->fps >> 16;
+	u32 fps_den = sensor->fps & 0xffff;
+	u64 gain;
 	u32 scaled;
 
 	BUILD_BUG_ON(sizeof(struct t21_ae_ctrls_view) != sizeof(tisp_ae_ctrls));
 	BUILD_BUG_ON(offsetof(struct t21_ae_ctrls_view, integration_time) != 0x0c);
-	BUILD_BUG_ON(offsetof(struct t21_ae_ctrls_view, total_gain) != 0x24);
+	BUILD_BUG_ON(offsetof(struct t21_ae_ctrls_view, isp_dgain) != 0x10);
+	BUILD_BUG_ON(offsetof(struct t21_ae_ctrls_view, max_isp_dgain) != 0x20);
+	BUILD_BUG_ON(offsetof(struct t21_ae_ctrls_view, ev_q10) != 0x24);
+	BUILD_BUG_ON(offsetof(struct t21_ae_ctrls_view, total_gain_log2) != 0x28);
 	BUILD_BUG_ON(offsetof(struct t21_ev_sensor_info_view, fps) != 0x2c);
-	BUILD_BUG_ON(offsetof(struct t21_ev_sensor_info_view, lines_per_second) != 0x3e);
+	BUILD_BUG_ON(offsetof(struct t21_ev_sensor_info_view, total_lines) != 0x3e);
 	BUILD_BUG_ON(sizeof(struct t21_ev_attr_view) != 0x30);
+	BUILD_BUG_ON(offsetof(struct t21_ev_attr_view, total_gain_q8) != 0x1c);
+	BUILD_BUG_ON(offsetof(struct t21_ev_attr_view, sensor_dgain_log2) != 0x28);
 
-	if (!out || !fps_num || !fps_den || !sensor->lines_per_second)
+	if (!out)
 		return -EINVAL;
 
 	out->integration_time = ctrl->integration_time;
-	out->total_gain = ctrl->total_gain >> 10;
-	out->total_gain_log2 =
-		tisp_log2_fixed_to_fixed(ctrl->total_gain, 10, 16);
+	out->ev = ctrl->ev_q10 >> 10;
+	out->ev_log2 = ctrl->ev_q10 ?
+		tisp_log2_fixed_to_fixed(ctrl->ev_q10, 10, 16) : 0;
 
-	/* Preserve the OEM's 32-bit arithmetic and division order. */
-	scaled = out->integration_time * 1000000U;
-	scaled *= fps_num;
-	scaled /= fps_den;
-	out->exposure_us = scaled / sensor->lines_per_second;
+	/* Stock: lines * 1e6 * den / num / VTS, in 32-bit arithmetic.  It has
+	 * no zero guard; report 0 us until the sensor timing is known. */
+	out->expr_us = 0;
+	if (fps_num && fps_den && sensor->total_lines) {
+		scaled = out->integration_time * 1000000U;
+		scaled *= fps_den;
+		scaled /= fps_num;
+		out->expr_us = scaled / sensor->total_lines;
+	}
 
 	out->sensor_again_log2 =
-		tisp_log2_fixed_to_fixed(ctrl->sensor_again, 10, 5);
-	out->sensor_dgain_log2 =
-		tisp_log2_fixed_to_fixed(ctrl->sensor_dgain, 10, 5);
-	out->field_18 = ctrl->field_2a;
-	out->sensor_gain =
-		(u32)fix_point_mult2_32(10, ctrl->sensor_again,
-					 ctrl->sensor_dgain, 0) >> 2;
-	out->field_20_log2 =
-		tisp_log2_fixed_to_fixed(ctrl->max_sensor_again + 4, 10, 5);
-	out->field_24_log2 =
-		tisp_log2_fixed_to_fixed(ctrl->max_isp_dgain + 4, 10, 5);
+		t21_gain_log2(ctrl->sensor_again);
 	out->isp_dgain_log2 =
-		tisp_log2_fixed_to_fixed(ctrl->isp_dgain, 10, 5);
-	out->field_2c_log2 =
-		tisp_log2_fixed_to_fixed(ctrl->max_sensor_dgain, 10, 5);
+		t21_gain_log2(ctrl->isp_dgain);
+	out->total_gain_db = ctrl->total_gain_log2 >> 16;
+
+	/* Stock forms again x ISP dgain (Q10) >> 2.  The sensor digital gain
+	 * is folded in as well so the [24.8] value is the whole gain the AE
+	 * applied; it is 1x whenever the sensor has no digital gain stage. */
+	gain = (u64)max_t(u32, ctrl->sensor_again, 1) *
+	       max_t(u32, ctrl->sensor_dgain, 1024);
+	gain = div_u64(gain * max_t(u32, ctrl->isp_dgain, 1024), 1024 * 1024);
+	out->total_gain_q8 = (u32)min_t(u64, gain >> 2, 0xffffffffULL);
+
+	out->max_sensor_again_log2 =
+		t21_gain_log2(ctrl->max_sensor_again + 4);
+	out->max_isp_dgain_log2 =
+		t21_gain_log2(ctrl->max_isp_dgain + 4);
+	out->sensor_dgain_log2 =
+		t21_gain_log2(ctrl->sensor_dgain);
+	out->max_sensor_dgain_log2 =
+		t21_gain_log2(ctrl->max_sensor_dgain);
 
 	return 0;
+}
+
+/* Integration-time window the AE actually uses (tisp_ae_process): the
+ * sensor's limits, narrowed by the AE's own maximum when that is valid. */
+static void t21_ae_it_limits(u32 *min_it, u32 *max_it)
+{
+	const struct t21_sensor_ctrl_view *sctrl =
+		(const struct t21_sensor_ctrl_view *)sensor_ctrl;
+	const struct t21_ae_ctrls_view *ae =
+		(const struct t21_ae_ctrls_view *)tisp_ae_ctrls;
+	u32 lo = max_t(u32, sctrl->min_integration_time, 1);
+	u32 hi = max_t(u32, sctrl->max_integration_time, lo);
+
+	if (ae->max_integration_time >= lo && ae->max_integration_time < hi)
+		hi = ae->max_integration_time;
+	*min_it = lo;
+	*max_it = hi;
+}
+
+/* IMPISPExpr.g_attr of the T21 SDK (12 bytes). */
+struct t21_expr_user_view {
+	u32 mode;
+	u16 integration_time;
+	u16 integration_time_min;
+	u16 integration_time_max;
+	u16 one_line_expr_in_us;
+};
+
+/* GET 0x8000025.  The stock dispatcher acknowledges this control without
+ * writing the caller's record, so IMP_ISP_Tuning_GetExpr always returned
+ * whatever the caller had in it (zeros).  Answer it from the live AE state. */
+static int t21_g_expr(void __user *dst)
+{
+	const struct t21_ae_ctrls_view *ae =
+		(const struct t21_ae_ctrls_view *)tisp_ae_ctrls;
+	const struct t21_ev_sensor_info_view *sensor =
+		(const struct t21_ev_sensor_info_view *)sensor_info;
+	struct t21_expr_user_view expr = { 0 };
+	u32 fps_num = sensor->fps >> 16;
+	u32 fps_den = sensor->fps & 0xffff;
+	u32 min_it;
+	u32 max_it;
+
+	BUILD_BUG_ON(sizeof(struct t21_expr_user_view) != 12);
+	if (!dst)
+		return -EINVAL;
+
+	t21_ae_it_limits(&min_it, &max_it);
+	expr.mode = ae->manual_mode ? 1 : 0;
+	expr.integration_time = min_t(u32, ae->integration_time, 0xffff);
+	expr.integration_time_min = min_t(u32, min_it, 0xffff);
+	expr.integration_time_max = min_t(u32, max_it, 0xffff);
+	if (fps_num && fps_den && sensor->total_lines)
+		expr.one_line_expr_in_us =
+			min_t(u32, div_u64((u64)1000000 * fps_den,
+					   (u64)fps_num * sensor->total_lines),
+			      0xffff);
+
+	return private_copy_to_user(dst, &expr, sizeof(expr)) ? -EFAULT : 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003111c origin=fragment_seed original=tisp_g_wb_attr */
@@ -49920,34 +49995,14 @@ int32_t tisp_g_ae_attr(void)
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000316cc origin=fragment_seed original=tisp_g_ae_min */
 int32_t tisp_g_ae_min(uintptr_t a0)
 {
-    uint32_t local_10 = 0;
-    uint32_t local_14 = 0;
-    uint32_t local_18 = 0;
-    uint32_t local_1c = 0;
-    uint32_t ra = 0;
-    uintptr_t s0 = 0;
-    uintptr_t *v0 = 0;
+	/* tisp_ae_g_min writes two words; the fragment rebuild handed it a
+	 * single stack word and copied a neighbouring local as the second. */
+	u32 ae_min[2];
 
-    /* fragment 0: Prologue */
-    /* function prologue: stack frame and callee-saved register setup */
-
-    /* fragment 1: CallSetup */
-    s0 = a0;
-    v0 = (uintptr_t *)((uintptr_t (*)(int32_t *))(uintptr_t)tisp_ae_g_min)(&local_10); /* jalr target resolved by relocation */
-
-    /* fragment 2: StackAccess */
-    v0 = local_10;
-    ra = local_1c;
-    *(uint32_t *)((char *)s0 + 0) = v0;
-    v0 = local_14;
-    *(uint32_t *)((char *)s0 + 4) = v0;
-    s0 = local_18;
-    v0 = 0;
-
-    /* fragment 3: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    return 0;
+	tisp_ae_g_min(ae_min);
+	((u32 *)a0)[0] = ae_min[0];
+	((u32 *)a0)[1] = ae_min[1];
+	return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000031710 origin=model_output original=tisp_s_ae_min */
@@ -50456,764 +50511,10 @@ int dump_isp_info_open(struct inode *inode, struct file *file)
 	return private_single_open_size(file, isp_info_show, PDE_DATA(inode), 8192);
 }
 
-/* WHOLE_DRIVER_CANDIDATE fn_0000000000031f78 origin=model_output original=isp_info_show */
-int32_t isp_info_show(struct seq_file *m)
+/* Stock raw-pattern names for isp-m0 (the decision tree is the stock one). */
+static const char *t21_isp_info_pattern(int32_t raw_pattern)
 {
-	int32_t ret;
-	struct t21_isp_device_info_view *ispdev;
-	struct t21_isp_core_info_view *isp_ctrl;
-	uint8_t *isp_data;
-	int32_t ev_attr[8];
-	int32_t ae_min[2];
-	int32_t wb_attr[8];
-	int32_t raw_pattern;
 	const char *pattern_str;
-	int32_t fps_val;
-	int32_t day_night_val;
-	const char *mode_str;
-	int32_t wb_rg;
-	int32_t wb_bg;
-	int32_t dbg_a;
-	int32_t dbg_b;
-	int32_t dbg_c;
-	int32_t dbg_d;
-	int32_t dbg_e;
-	int32_t dbg_f;
-	int32_t dbg_g;
-	int32_t dbg_h;
-	int32_t dbg_i;
-	int32_t dbg_j;
-	int32_t dbg_k;
-	int32_t dbg_l;
-	int32_t dbg_m;
-	int32_t dbg_n;
-	int32_t dbg_o;
-	int32_t dbg_p;
-	int32_t dbg_q;
-	int32_t dbg_r;
-	int32_t dbg_s;
-	int32_t dbg_t;
-	int32_t dbg_u;
-	int32_t dbg_v;
-	int32_t dbg_w;
-	int32_t dbg_x;
-	int32_t dbg_y;
-	int32_t dbg_z;
-	int32_t dbg_aa;
-	int32_t dbg_ab;
-	int32_t dbg_ac;
-	int32_t dbg_ad;
-	int32_t dbg_ae;
-	int32_t dbg_af;
-	int32_t dbg_ag;
-	int32_t dbg_ah;
-	int32_t dbg_ai;
-	int32_t dbg_aj;
-	int32_t dbg_ak;
-	int32_t dbg_al;
-	int32_t dbg_am;
-	int32_t dbg_an;
-	int32_t dbg_ao;
-	int32_t dbg_ap;
-	int32_t dbg_aq;
-	int32_t dbg_ar;
-	int32_t dbg_as;
-	int32_t dbg_at;
-	int32_t dbg_au;
-	int32_t dbg_av;
-	int32_t dbg_aw;
-	int32_t dbg_ax;
-	int32_t dbg_ay;
-	int32_t dbg_az;
-	int32_t dbg_ba;
-	int32_t dbg_bb;
-	int32_t dbg_bc;
-	int32_t dbg_bd;
-	int32_t dbg_be;
-	int32_t dbg_bf;
-	int32_t dbg_bg;
-	int32_t dbg_bh;
-	int32_t dbg_bi;
-	int32_t dbg_bj;
-	int32_t dbg_bk;
-	int32_t dbg_bl;
-	int32_t dbg_bm;
-	int32_t dbg_bn;
-	int32_t dbg_bo;
-	int32_t dbg_bp;
-	int32_t dbg_bq;
-	int32_t dbg_br;
-	int32_t dbg_bs;
-	int32_t dbg_bt;
-	int32_t dbg_bu;
-	int32_t dbg_bv;
-	int32_t dbg_bw;
-	int32_t dbg_bx;
-	int32_t dbg_by;
-	int32_t dbg_bz;
-	int32_t dbg_ca;
-	int32_t dbg_cb;
-	int32_t dbg_cc;
-	int32_t dbg_cd;
-	int32_t dbg_ce;
-	int32_t dbg_cf;
-	int32_t dbg_cg;
-	int32_t dbg_ch;
-	int32_t dbg_ci;
-	int32_t dbg_cj;
-	int32_t dbg_ck;
-	int32_t dbg_cl;
-	int32_t dbg_cm;
-	int32_t dbg_cn;
-	int32_t dbg_co;
-	int32_t dbg_cp;
-	int32_t dbg_cq;
-	int32_t dbg_cr;
-	int32_t dbg_cs;
-	int32_t dbg_ct;
-	int32_t dbg_cu;
-	int32_t dbg_cv;
-	int32_t dbg_cw;
-	int32_t dbg_cx;
-	int32_t dbg_cy;
-	int32_t dbg_cz;
-	int32_t dbg_da;
-	int32_t dbg_db;
-	int32_t dbg_dc;
-	int32_t dbg_dd;
-	int32_t dbg_de;
-	int32_t dbg_df;
-	int32_t dbg_dg;
-	int32_t dbg_dh;
-	int32_t dbg_di;
-	int32_t dbg_dj;
-	int32_t dbg_dk;
-	int32_t dbg_dl;
-	int32_t dbg_dm;
-	int32_t dbg_dn;
-	int32_t dbg_do;
-	int32_t dbg_dp;
-	int32_t dbg_dq;
-	int32_t dbg_dr;
-	int32_t dbg_ds;
-	int32_t dbg_dt;
-	int32_t dbg_du;
-	int32_t dbg_dv;
-	int32_t dbg_dw;
-	int32_t dbg_dx;
-	int32_t dbg_dy;
-	int32_t dbg_dz;
-	int32_t dbg_ea;
-	int32_t dbg_eb;
-	int32_t dbg_ec;
-	int32_t dbg_ed;
-	int32_t dbg_ee;
-	int32_t dbg_ef;
-	int32_t dbg_eg;
-	int32_t dbg_eh;
-	int32_t dbg_ei;
-	int32_t dbg_ej;
-	int32_t dbg_ek;
-	int32_t dbg_el;
-	int32_t dbg_em;
-	int32_t dbg_en;
-	int32_t dbg_eo;
-	int32_t dbg_ep;
-	int32_t dbg_eq;
-	int32_t dbg_er;
-	int32_t dbg_es;
-	int32_t dbg_et;
-	int32_t dbg_eu;
-	int32_t dbg_ev;
-	int32_t dbg_ew;
-	int32_t dbg_ex;
-	int32_t dbg_ey;
-	int32_t dbg_ez;
-	int32_t dbg_fa;
-	int32_t dbg_fb;
-	int32_t dbg_fc;
-	int32_t dbg_fd;
-	int32_t dbg_fe;
-	int32_t dbg_ff;
-	int32_t dbg_fg;
-	int32_t dbg_fh;
-	int32_t dbg_fi;
-	int32_t dbg_fj;
-	int32_t dbg_fk;
-	int32_t dbg_fl;
-	int32_t dbg_fm;
-	int32_t dbg_fn;
-	int32_t dbg_fo;
-	int32_t dbg_fp;
-	int32_t dbg_fq;
-	int32_t dbg_fr;
-	int32_t dbg_fs;
-	int32_t dbg_ft;
-	int32_t dbg_fu;
-	int32_t dbg_fv;
-	int32_t dbg_fw;
-	int32_t dbg_fx;
-	int32_t dbg_fy;
-	int32_t dbg_fz;
-	int32_t dbg_ga;
-	int32_t dbg_gb;
-	int32_t dbg_gc;
-	int32_t dbg_gd;
-	int32_t dbg_ge;
-	int32_t dbg_gf;
-	int32_t dbg_gg;
-	int32_t dbg_gh;
-	int32_t dbg_gi;
-	int32_t dbg_gj;
-	int32_t dbg_gk;
-	int32_t dbg_gl;
-	int32_t dbg_gm;
-	int32_t dbg_gn;
-	int32_t dbg_go;
-	int32_t dbg_gp;
-	int32_t dbg_gq;
-	int32_t dbg_gr;
-	int32_t dbg_gs;
-	int32_t dbg_gt;
-	int32_t dbg_gu;
-	int32_t dbg_gv;
-	int32_t dbg_gw;
-	int32_t dbg_gx;
-	int32_t dbg_gy;
-	int32_t dbg_gz;
-	int32_t dbg_ha;
-	int32_t dbg_hb;
-	int32_t dbg_hc;
-	int32_t dbg_hd;
-	int32_t dbg_he;
-	int32_t dbg_hf;
-	int32_t dbg_hg;
-	int32_t dbg_hh;
-	int32_t dbg_hi;
-	int32_t dbg_hj;
-	int32_t dbg_hk;
-	int32_t dbg_hl;
-	int32_t dbg_hm;
-	int32_t dbg_hn;
-	int32_t dbg_ho;
-	int32_t dbg_hp;
-	int32_t dbg_hq;
-	int32_t dbg_hr;
-	int32_t dbg_hs;
-	int32_t dbg_ht;
-	int32_t dbg_hu;
-	int32_t dbg_hv;
-	int32_t dbg_hw;
-	int32_t dbg_hx;
-	int32_t dbg_hy;
-	int32_t dbg_hz;
-	int32_t dbg_ia;
-	int32_t dbg_ib;
-	int32_t dbg_ic;
-	int32_t dbg_id;
-	int32_t dbg_ie;
-	int32_t dbg_if;
-	int32_t dbg_ig;
-	int32_t dbg_ih;
-	int32_t dbg_ii;
-	int32_t dbg_ij;
-	int32_t dbg_ik;
-	int32_t dbg_il;
-	int32_t dbg_im;
-	int32_t dbg_in;
-	int32_t dbg_io;
-	int32_t dbg_ip;
-	int32_t dbg_iq;
-	int32_t dbg_ir;
-	int32_t dbg_is;
-	int32_t dbg_it;
-	int32_t dbg_iu;
-	int32_t dbg_iv;
-	int32_t dbg_iw;
-	int32_t dbg_ix;
-	int32_t dbg_iy;
-	int32_t dbg_iz;
-	int32_t dbg_ja;
-	int32_t dbg_jb;
-	int32_t dbg_jc;
-	int32_t dbg_jd;
-	int32_t dbg_je;
-	int32_t dbg_jf;
-	int32_t dbg_jg;
-	int32_t dbg_jh;
-	int32_t dbg_ji;
-	int32_t dbg_jj;
-	int32_t dbg_jk;
-	int32_t dbg_jl;
-	int32_t dbg_jm;
-	int32_t dbg_jn;
-	int32_t dbg_jo;
-	int32_t dbg_jp;
-	int32_t dbg_jq;
-	int32_t dbg_jr;
-	int32_t dbg_js;
-	int32_t dbg_jt;
-	int32_t dbg_ju;
-	int32_t dbg_jv;
-	int32_t dbg_jw;
-	int32_t dbg_jx;
-	int32_t dbg_jy;
-	int32_t dbg_jz;
-	int32_t dbg_ka;
-	int32_t dbg_kb;
-	int32_t dbg_kc;
-	int32_t dbg_kd;
-	int32_t dbg_ke;
-	int32_t dbg_kf;
-	int32_t dbg_kg;
-	int32_t dbg_kh;
-	int32_t dbg_ki;
-	int32_t dbg_kj;
-	int32_t dbg_kk;
-	int32_t dbg_kl;
-	int32_t dbg_km;
-	int32_t dbg_kn;
-	int32_t dbg_ko;
-	int32_t dbg_kp;
-	int32_t dbg_kq;
-	int32_t dbg_kr;
-	int32_t dbg_ks;
-	int32_t dbg_kt;
-	int32_t dbg_ku;
-	int32_t dbg_kv;
-	int32_t dbg_kw;
-	int32_t dbg_kx;
-	int32_t dbg_ky;
-	int32_t dbg_kz;
-	int32_t dbg_la;
-	int32_t dbg_lb;
-	int32_t dbg_lc;
-	int32_t dbg_ld;
-	int32_t dbg_le;
-	int32_t dbg_lf;
-	int32_t dbg_lg;
-	int32_t dbg_lh;
-	int32_t dbg_li;
-	int32_t dbg_lj;
-	int32_t dbg_lk;
-	int32_t dbg_ll;
-	int32_t dbg_lm;
-	int32_t dbg_ln;
-	int32_t dbg_lo;
-	int32_t dbg_lp;
-	int32_t dbg_lq;
-	int32_t dbg_lr;
-	int32_t dbg_ls;
-	int32_t dbg_lt;
-	int32_t dbg_lu;
-	int32_t dbg_lv;
-	int32_t dbg_lw;
-	int32_t dbg_lx;
-	int32_t dbg_ly;
-	int32_t dbg_lz;
-	int32_t dbg_ma;
-	int32_t dbg_mb;
-	int32_t dbg_mc;
-	int32_t dbg_md;
-	int32_t dbg_me;
-	int32_t dbg_mf;
-	int32_t dbg_mg;
-	int32_t dbg_mh;
-	int32_t dbg_mi;
-	int32_t dbg_mj;
-	int32_t dbg_mk;
-	int32_t dbg_ml;
-	int32_t dbg_mm;
-	int32_t dbg_mn;
-	int32_t dbg_mo;
-	int32_t dbg_mp;
-	int32_t dbg_mq;
-	int32_t dbg_mr;
-	int32_t dbg_ms;
-	int32_t dbg_mt;
-	int32_t dbg_mu;
-	int32_t dbg_mv;
-	int32_t dbg_mw;
-	int32_t dbg_mx;
-	int32_t dbg_my;
-	int32_t dbg_mz;
-	int32_t dbg_na;
-	int32_t dbg_nb;
-	int32_t dbg_nc;
-	int32_t dbg_nd;
-	int32_t dbg_ne;
-	int32_t dbg_nf;
-	int32_t dbg_ng;
-	int32_t dbg_nh;
-	int32_t dbg_ni;
-	int32_t dbg_nj;
-	int32_t dbg_nk;
-	int32_t dbg_nl;
-	int32_t dbg_nm;
-	int32_t dbg_nn;
-	int32_t dbg_no;
-	int32_t dbg_np;
-	int32_t dbg_nq;
-	int32_t dbg_nr;
-	int32_t dbg_ns;
-	int32_t dbg_nt;
-	int32_t dbg_nu;
-	int32_t dbg_nv;
-	int32_t dbg_nw;
-	int32_t dbg_nx;
-	int32_t dbg_ny;
-	int32_t dbg_nz;
-	int32_t dbg_oa;
-	int32_t dbg_ob;
-	int32_t dbg_oc;
-	int32_t dbg_od;
-	int32_t dbg_oe;
-	int32_t dbg_of;
-	int32_t dbg_og;
-	int32_t dbg_oh;
-	int32_t dbg_oi;
-	int32_t dbg_oj;
-	int32_t dbg_ok;
-	int32_t dbg_ol;
-	int32_t dbg_om;
-	int32_t dbg_on;
-	int32_t dbg_oo;
-	int32_t dbg_op;
-	int32_t dbg_oq;
-	int32_t dbg_or;
-	int32_t dbg_os;
-	int32_t dbg_ot;
-	int32_t dbg_ou;
-	int32_t dbg_ov;
-	int32_t dbg_ow;
-	int32_t dbg_ox;
-	int32_t dbg_oy;
-	int32_t dbg_oz;
-	int32_t dbg_pa;
-	int32_t dbg_pb;
-	int32_t dbg_pc;
-	int32_t dbg_pd;
-	int32_t dbg_pe;
-	int32_t dbg_pf;
-	int32_t dbg_pg;
-	int32_t dbg_ph;
-	int32_t dbg_pi;
-	int32_t dbg_pj;
-	int32_t dbg_pk;
-	int32_t dbg_pl;
-	int32_t dbg_pm;
-	int32_t dbg_pn;
-	int32_t dbg_po;
-	int32_t dbg_pp;
-	int32_t dbg_pq;
-	int32_t dbg_pr;
-	int32_t dbg_ps;
-	int32_t dbg_pt;
-	int32_t dbg_pu;
-	int32_t dbg_pv;
-	int32_t dbg_pw;
-	int32_t dbg_px;
-	int32_t dbg_py;
-	int32_t dbg_pz;
-	int32_t dbg_qa;
-	int32_t dbg_qb;
-	int32_t dbg_qc;
-	int32_t dbg_qd;
-	int32_t dbg_qe;
-	int32_t dbg_qf;
-	int32_t dbg_qg;
-	int32_t dbg_qh;
-	int32_t dbg_qi;
-	int32_t dbg_qj;
-	int32_t dbg_qk;
-	int32_t dbg_ql;
-	int32_t dbg_qm;
-	int32_t dbg_qn;
-	int32_t dbg_qo;
-	int32_t dbg_qp;
-	int32_t dbg_qq;
-	int32_t dbg_qr;
-	int32_t dbg_qs;
-	int32_t dbg_qt;
-	int32_t dbg_qu;
-	int32_t dbg_qv;
-	int32_t dbg_qw;
-	int32_t dbg_qx;
-	int32_t dbg_qy;
-	int32_t dbg_qz;
-	int32_t dbg_ra;
-	int32_t dbg_rb;
-	int32_t dbg_rc;
-	int32_t dbg_rd;
-	int32_t dbg_re;
-	int32_t dbg_rf;
-	int32_t dbg_rg;
-	int32_t dbg_rh;
-	int32_t dbg_ri;
-	int32_t dbg_rj;
-	int32_t dbg_rk;
-	int32_t dbg_rl;
-	int32_t dbg_rm;
-	int32_t dbg_rn;
-	int32_t dbg_ro;
-	int32_t dbg_rp;
-	int32_t dbg_rq;
-	int32_t dbg_rr;
-	int32_t dbg_rs;
-	int32_t dbg_rt;
-	int32_t dbg_ru;
-	int32_t dbg_rv;
-	int32_t dbg_rw;
-	int32_t dbg_rx;
-	int32_t dbg_ry;
-	int32_t dbg_rz;
-	int32_t dbg_sa;
-	int32_t dbg_sb;
-	int32_t dbg_sc;
-	int32_t dbg_sd;
-	int32_t dbg_se;
-	int32_t dbg_sf;
-	int32_t dbg_sg;
-	int32_t dbg_sh;
-	int32_t dbg_si;
-	int32_t dbg_sj;
-	int32_t dbg_sk;
-	int32_t dbg_sl;
-	int32_t dbg_sm;
-	int32_t dbg_sn;
-	int32_t dbg_so;
-	int32_t dbg_sp;
-	int32_t dbg_sq;
-	int32_t dbg_sr;
-	int32_t dbg_ss;
-	int32_t dbg_st;
-	int32_t dbg_su;
-	int32_t dbg_sv;
-	int32_t dbg_sw;
-	int32_t dbg_sx;
-	int32_t dbg_sy;
-	int32_t dbg_sz;
-	int32_t dbg_ta;
-	int32_t dbg_tb;
-	int32_t dbg_tc;
-	int32_t dbg_td;
-	int32_t dbg_te;
-	int32_t dbg_tf;
-	int32_t dbg_tg;
-	int32_t dbg_th;
-	int32_t dbg_ti;
-	int32_t dbg_tj;
-	int32_t dbg_tk;
-	int32_t dbg_tl;
-	int32_t dbg_tm;
-	int32_t dbg_tn;
-	int32_t dbg_to;
-	int32_t dbg_tp;
-	int32_t dbg_tq;
-	int32_t dbg_tr;
-	int32_t dbg_ts;
-	int32_t dbg_tt;
-	int32_t dbg_tu;
-	int32_t dbg_tv;
-	int32_t dbg_tw;
-	int32_t dbg_tx;
-	int32_t dbg_ty;
-	int32_t dbg_tz;
-	int32_t dbg_ua;
-	int32_t dbg_ub;
-	int32_t dbg_uc;
-	int32_t dbg_ud;
-	int32_t dbg_ue;
-	int32_t dbg_uf;
-	int32_t dbg_ug;
-	int32_t dbg_uh;
-	int32_t dbg_ui;
-	int32_t dbg_uj;
-	int32_t dbg_uk;
-	int32_t dbg_ul;
-	int32_t dbg_um;
-	int32_t dbg_un;
-	int32_t dbg_uo;
-	int32_t dbg_up;
-	int32_t dbg_uq;
-	int32_t dbg_ur;
-	int32_t dbg_us;
-	int32_t dbg_ut;
-	int32_t dbg_uu;
-	int32_t dbg_uv;
-	int32_t dbg_uw;
-	int32_t dbg_ux;
-	int32_t dbg_uy;
-	int32_t dbg_uz;
-	int32_t dbg_va;
-	int32_t dbg_vb;
-	int32_t dbg_vc;
-	int32_t dbg_vd;
-	int32_t dbg_ve;
-	int32_t dbg_vf;
-	int32_t dbg_vg;
-	int32_t dbg_vh;
-	int32_t dbg_vi;
-	int32_t dbg_vj;
-	int32_t dbg_vk;
-	int32_t dbg_vl;
-	int32_t dbg_vm;
-	int32_t dbg_vn;
-	int32_t dbg_vo;
-	int32_t dbg_vp;
-	int32_t dbg_vq;
-	int32_t dbg_vr;
-	int32_t dbg_vs;
-	int32_t dbg_vt;
-	int32_t dbg_vu;
-	int32_t dbg_vv;
-	int32_t dbg_vw;
-	int32_t dbg_vx;
-	int32_t dbg_vy;
-	int32_t dbg_vz;
-	int32_t dbg_wa;
-	int32_t dbg_wb;
-	int32_t dbg_wc;
-	int32_t dbg_wd;
-	int32_t dbg_we;
-	int32_t dbg_wf;
-	int32_t dbg_wg;
-	int32_t dbg_wh;
-	int32_t dbg_wi;
-	int32_t dbg_wj;
-	int32_t dbg_wk;
-	int32_t dbg_wl;
-	int32_t dbg_wm;
-	int32_t dbg_wn;
-	int32_t dbg_wo;
-	int32_t dbg_wp;
-	int32_t dbg_wq;
-	int32_t dbg_wr;
-	int32_t dbg_ws;
-	int32_t dbg_wt;
-	int32_t dbg_wu;
-	int32_t dbg_wv;
-	int32_t dbg_ww;
-	int32_t dbg_wx;
-	int32_t dbg_wy;
-	int32_t dbg_wz;
-	int32_t dbg_xa;
-	int32_t dbg_xb;
-	int32_t dbg_xc;
-	int32_t dbg_xd;
-	int32_t dbg_xe;
-	int32_t dbg_xf;
-	int32_t dbg_xg;
-	int32_t dbg_xh;
-	int32_t dbg_xi;
-	int32_t dbg_xj;
-	int32_t dbg_xk;
-	int32_t dbg_xl;
-	int32_t dbg_xm;
-	int32_t dbg_xn;
-	int32_t dbg_xo;
-	int32_t dbg_xp;
-	int32_t dbg_xq;
-	int32_t dbg_xr;
-	int32_t dbg_xs;
-	int32_t dbg_xt;
-	int32_t dbg_xu;
-	int32_t dbg_xv;
-	int32_t dbg_xw;
-	int32_t dbg_xx;
-	int32_t dbg_xy;
-	int32_t dbg_xz;
-	int32_t dbg_ya;
-	int32_t dbg_yb;
-	int32_t dbg_yc;
-	int32_t dbg_yd;
-	int32_t dbg_ye;
-	int32_t dbg_yf;
-	int32_t dbg_yg;
-	int32_t dbg_yh;
-	int32_t dbg_yi;
-	int32_t dbg_yj;
-	int32_t dbg_yk;
-	int32_t dbg_yl;
-	int32_t dbg_ym;
-	int32_t dbg_yn;
-	int32_t dbg_yo;
-	int32_t dbg_yp;
-	int32_t dbg_yq;
-	int32_t dbg_yr;
-	int32_t dbg_ys;
-	int32_t dbg_yt;
-	int32_t dbg_yu;
-	int32_t dbg_yv;
-	int32_t dbg_yw;
-	int32_t dbg_yx;
-	int32_t dbg_yy;
-	int32_t dbg_yz;
-	int32_t dbg_za;
-	int32_t dbg_zb;
-	int32_t dbg_zc;
-	int32_t dbg_zd;
-	int32_t dbg_ze;
-	int32_t dbg_zf;
-	int32_t dbg_zg;
-	int32_t dbg_zh;
-	int32_t dbg_zi;
-	int32_t dbg_zj;
-	int32_t dbg_zk;
-	int32_t dbg_zl;
-	int32_t dbg_zm;
-	int32_t dbg_zn;
-	int32_t dbg_zo;
-	int32_t dbg_zp;
-	int32_t dbg_zq;
-	int32_t dbg_zr;
-	int32_t dbg_zs;
-	int32_t dbg_zt;
-	int32_t dbg_zu;
-	int32_t dbg_zv;
-	int32_t dbg_zw;
-	int32_t dbg_zx;
-	int32_t dbg_zy;
-	int32_t dbg_zz;
-
-	BUILD_BUG_ON(offsetof(struct t21_isp_device_info_view, core) != 0xd4);
-	BUILD_BUG_ON(offsetof(struct t21_isp_core_info_view, state) != 0xe8);
-	BUILD_BUG_ON(offsetof(struct t21_isp_core_info_view, width) != 0xec);
-	BUILD_BUG_ON(offsetof(struct t21_isp_core_info_view, height) != 0xf0);
-	BUILD_BUG_ON(offsetof(struct t21_isp_core_info_view, raw_pattern) != 0xf4);
-	BUILD_BUG_ON(offsetof(struct t21_isp_core_info_view, sensor_attr) != 0x120);
-	BUILD_BUG_ON(offsetof(struct t21_isp_core_info_view, fps) != 0x12c);
-	BUILD_BUG_ON(offsetof(struct t21_isp_core_info_view, tuning) != 0x19c);
-
-	ispdev = m->private;
-	isp_ctrl = ispdev ? ispdev->core : NULL;
-	ret = private_seq_printf(m,
-		"****************** ISP INFO **********************\n");
-	if (!isp_ctrl)
-		return ret + private_seq_printf(m, "sensor doesn't work, please enable sensor\n");
-	isp_data = isp_ctrl->tuning;
-	ret += private_seq_printf(m, "SENSOR NAME : %s\n",
-				  t21_isp_valid_ptr(isp_ctrl->sensor_attr) &&
-				  t21_isp_valid_ptr(*isp_ctrl->sensor_attr)
-					? *isp_ctrl->sensor_attr : "unknown");
-	ret += private_seq_printf(m, "SENSOR OUTPUT WIDTH : %d\n",
-				  isp_ctrl->width);
-	ret += private_seq_printf(m, "SENSOR OUTPUT HEIGHT : %d\n",
-				  isp_ctrl->height);
-	ret += private_seq_printf(m, "ISP OUTPUT FPS : %d / %d\n",
-				  isp_ctrl->fps >> 16,
-				  isp_ctrl->fps & 0xffff);
-	return ret;
-
-	if (isp_ctrl->state < 4) {
-		ret = seq_printf(m, "sensor doesn't work, please enable sensor\n", 0);
-		return ret;
-	}
-
-	tisp_g_ev_attr(ev_attr);
-	tisp_g_ae_min(ae_min);
-	tisp_g_wb_attr(wb_attr);
-	raw_pattern = isp_ctrl->raw_pattern;
 
 	if (raw_pattern == 0x3201) {
 		pattern_str = "RGGB";
@@ -51365,37 +50666,90 @@ int32_t isp_info_show(struct seq_file *m)
 		}
 	}
 
+	return pattern_str;
+}
+
+/* WHOLE_DRIVER_CANDIDATE fn_0000000000031f78 origin=model_output original=isp_info_show */
+/* /proc/jz/isp/isp-m0.  Labels, order, sources and units follow the stock
+ * T21 isp_info_show (libt21-firmware 1.0.33): integration time in sensor
+ * lines, gains in IMP log2 units (32 per doubling), EV log2 in Q16.  The one
+ * addition is "SENSOR Max Integration Time", the T31 label, carrying the
+ * AE's effective integration-time limit; consumers that compute
+ * IT / maxIT (timps day/night) need it and the stock T21 omits it.
+ * The first rebuild returned after the FPS line, so none of the exposure,
+ * gain or white-balance lines were ever printed. */
+int32_t isp_info_show(struct seq_file *m)
+{
+	struct t21_isp_device_info_view *ispdev = m->private;
+	struct t21_isp_core_info_view *isp_ctrl;
+	struct t21_ev_attr_view ev = { 0 };
+	struct t21_wb_internal_view wb = { 0 };
+	u32 ae_min[2] = { 0 };
+	uint8_t *isp_data;
+	u32 min_it;
+	u32 max_it;
+	int32_t ret;
+
+	BUILD_BUG_ON(offsetof(struct t21_isp_device_info_view, core) != 0xd4);
+	BUILD_BUG_ON(offsetof(struct t21_isp_core_info_view, state) != 0xe8);
+	BUILD_BUG_ON(offsetof(struct t21_isp_core_info_view, width) != 0xec);
+	BUILD_BUG_ON(offsetof(struct t21_isp_core_info_view, height) != 0xf0);
+	BUILD_BUG_ON(offsetof(struct t21_isp_core_info_view, raw_pattern) != 0xf4);
+	BUILD_BUG_ON(offsetof(struct t21_isp_core_info_view, sensor_attr) != 0x120);
+	BUILD_BUG_ON(offsetof(struct t21_isp_core_info_view, fps) != 0x12c);
+	BUILD_BUG_ON(offsetof(struct t21_isp_core_info_view, tuning) != 0x19c);
+	BUILD_BUG_ON(offsetof(struct t21_wb_internal_view, global_rgain) != 0x14);
+
+	isp_ctrl = t21_isp_valid_ptr(ispdev) ? ispdev->core : NULL;
+	ret = private_seq_printf(m,
+		"****************** ISP INFO **********************\n");
+	if (!t21_isp_valid_ptr(isp_ctrl) || isp_ctrl->state < 4)
+		return ret + private_seq_printf(m, "sensor doesn't work, please enable sensor\n");
+	isp_data = t21_isp_valid_ptr(isp_ctrl->tuning) ? isp_ctrl->tuning : NULL;
+
+	tisp_g_ev_attr((uintptr_t)&ev);
+	tisp_g_ae_min((uintptr_t)ae_min);
+	tisp_g_wb_attr(&wb);
+	t21_ae_it_limits(&min_it, &max_it);
+
 	ret += private_seq_printf(m, "Software Version : %s\n", "H20200509a");
 	ret += private_seq_printf(m, "Firmware Version : %s\n", "H01-380");
-	ret += private_seq_printf(m, "SENSOR NAME : %s\n", *isp_ctrl->sensor_attr);
+	ret += private_seq_printf(m, "SENSOR NAME : %s\n",
+				  t21_isp_valid_ptr(isp_ctrl->sensor_attr) &&
+				  t21_isp_valid_ptr(*isp_ctrl->sensor_attr)
+					? *isp_ctrl->sensor_attr : "unknown");
 	ret += private_seq_printf(m, "SENSOR OUTPUT WIDTH : %d\n", isp_ctrl->width);
 	ret += private_seq_printf(m, "SENSOR OUTPUT HEIGHT : %d\n", isp_ctrl->height);
-	fps_val = isp_ctrl->fps;
-	ret += ((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))private_seq_printf)((uintptr_t)(m), (uintptr_t)("ISP OUTPUT FPS : %d / %d\n"), (uintptr_t)(fps_val >> 16), (uintptr_t)(fps_val & 0xffff));
-	ret += private_seq_printf(m, "SENSOR OUTPUT RAW PATTERN : %s\n", (uintptr_t)pattern_str);
+	ret += private_seq_printf(m, "ISP OUTPUT FPS : %d / %d\n",
+				  isp_ctrl->fps >> 16, isp_ctrl->fps & 0xffff);
+	ret += private_seq_printf(m, "SENSOR OUTPUT RAW PATTERN : %s\n",
+				  t21_isp_info_pattern(isp_ctrl->raw_pattern));
 	ret += private_seq_printf(m, "ISP Top Value : 0x%x\n", tisp_top_read());
-
-	day_night_val = tisp_day_or_night_g_ctrl();
-	mode_str = (day_night_val != 1) ? "Day" : "Night";
-
-	ret += private_seq_printf(m, "ISP Runing Mode : %s\n", (uintptr_t)mode_str);
-	ret += private_seq_printf(m, "SENSOR Integration Time : %d lines\n", ev_attr[0]);
-	ret += private_seq_printf(m, "SENSOR analog gain : %d\n", ev_attr[1]);
-	ret += private_seq_printf(m, "MAX SENSOR analog gain : %d\n", ev_attr[2]);
-	ret += private_seq_printf(m, "SENSOR digital gain : %d\n", ev_attr[3]);
-	ret += private_seq_printf(m, "MAX SENSOR digital gain : %d\n", ev_attr[4]);
-	ret += private_seq_printf(m, "ISP digital gain : %d\n", ev_attr[5]);
-	ret += private_seq_printf(m, "MAX ISP digital gain : %d\n", ev_attr[6]);
-	ret += private_seq_printf(m, "ISP Tgain DB : %d\n", ev_attr[7]);
-	ret += private_seq_printf(m, "ISP EV value: %d\n", ae_min[0]);
-	ret += private_seq_printf(m, "ISP EV value log2: %d\n", ae_min[1]);
-	ret += private_seq_printf(m, "ISP EV value us: %d\n", ev_attr[0]);
+	ret += private_seq_printf(m, "ISP Runing Mode : %s\n",
+				  tisp_day_or_night_g_ctrl() == 1 ? "Night" : "Day");
+	ret += private_seq_printf(m, "SENSOR Integration Time : %d lines\n",
+				  ev.integration_time);
+	ret += private_seq_printf(m, "SENSOR Max Integration Time : %d lines\n",
+				  max_it);
+	ret += private_seq_printf(m, "SENSOR analog gain : %d\n", ev.sensor_again_log2);
+	ret += private_seq_printf(m, "MAX SENSOR analog gain : %d\n",
+				  ev.max_sensor_again_log2);
+	ret += private_seq_printf(m, "SENSOR digital gain : %d\n", ev.sensor_dgain_log2);
+	ret += private_seq_printf(m, "MAX SENSOR digital gain : %d\n",
+				  ev.max_sensor_dgain_log2);
+	ret += private_seq_printf(m, "ISP digital gain : %d\n", ev.isp_dgain_log2);
+	ret += private_seq_printf(m, "MAX ISP digital gain : %d\n",
+				  ev.max_isp_dgain_log2);
+	ret += private_seq_printf(m, "ISP Tgain DB : %d\n", ev.total_gain_db);
+	ret += private_seq_printf(m, "ISP EV value: %d\n", ev.ev);
+	ret += private_seq_printf(m, "ISP EV value log2: %d\n", ev.ev_log2);
+	ret += private_seq_printf(m, "ISP EV value us: %d\n", ev.expr_us);
 	ret += private_seq_printf(m, "ISP EV min int: %d\n", ae_min[0]);
 	ret += private_seq_printf(m, "ISP EV min again: %d\n", ae_min[1]);
-	wb_rg = wb_attr[0] ? 0x10000 / wb_attr[0] : 0;
-	ret += private_seq_printf(m, "ISP WB weighted rgain: %d\n", wb_rg);
-	wb_bg = wb_attr[1] ? 0x10000 / wb_attr[1] : 0;
-	ret += private_seq_printf(m, "ISP WB weighted bgain: %d\n", wb_bg);
+	ret += private_seq_printf(m, "ISP WB weighted rgain: %d\n",
+				  wb.global_rgain ? 0x10000 / wb.global_rgain : 0);
+	ret += private_seq_printf(m, "ISP WB weighted bgain: %d\n",
+				  wb.global_bgain ? 0x10000 / wb.global_bgain : 0);
 	if (isp_data)
 		ret += private_seq_printf(m, "Saturation : %d\n",
 					  *(int32_t *)(isp_data + 0x4090));
