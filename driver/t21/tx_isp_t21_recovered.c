@@ -8690,6 +8690,8 @@ module_param_named(ktext_watch, t21_ktext_watch, bool, 0644);
  */
 static uint t21_stop_trace;
 module_param_named(stop_trace, t21_stop_trace, uint, 0644);
+/* Set while the ISP core clocks are gated by ispcore_slake_module. */
+static int t21_isp_clocks_off;
 #define T21_STOP_TRACE(fmt, ...)						\
 	do {								\
 		if (t21_stop_trace) {					\
@@ -15849,6 +15851,13 @@ int32_t isp_irq_handle(uint32_t a0, uintptr_t a1)
     (void)a0;
 	if (!t21_isp_valid_ptr((void *)a1))
 		return IRQ_NONE;
+	if (ACCESS_ONCE(t21_isp_clocks_off)) {
+		static int reported;
+
+		if (!reported++)
+			printk(KERN_ERR "tx-isp-t21: ISP IRQ with core clocks gated - not touching registers\n");
+		return IRQ_HANDLED;
+	}
 	root = (void *)(a1 - 0x80);
 	graph = (void *)root;
     core = root && root->ops ? root->ops->core : NULL;
@@ -51400,6 +51409,7 @@ int32_t ispcore_activate_module(uintptr_t a0)
 		}
 		private_clk_enable(clk);
 	}
+	ACCESS_ONCE(t21_isp_clocks_off) = 0;
 
 	for (i = 0; i < *(u32 *)(core + 0x150); i++) {
 		u8 *channel = *(u8 **)(core + 0x14c) + i * 0xa0;
@@ -53252,8 +53262,11 @@ int32_t ispcore_slake_module(void *arg1)
 		*(u32 *)(channels + i * 0xa0 + 0x50) = 1;
 
 	tuning = *(void **)(core + 0x19c);
+	T21_STOP_TRACE("core slake: tuning %p event fn=%p", tuning,
+		       *(void **)((u8 *)tuning + 0x40cc));
 	((void (*)(void *, u32, u32))
 	 *(void **)((u8 *)tuning + 0x40cc))(tuning, 0x4000001, 0);
+	T21_STOP_TRACE("core slake: tuning event done");
 	*(u32 *)(core + 0xe8) = 1;
 
 	for (i = 0; i < 16; i++) {
@@ -53269,7 +53282,9 @@ int32_t ispcore_slake_module(void *arg1)
 		slake = *(int (**)(void *))((u8 *)ops[4] + 4);
 		if (!slake)
 			continue;
+		T21_STOP_TRACE("core slake: child[%u]=%p fn=%p", i, child, slake);
 		ret = slake(child);
+		T21_STOP_TRACE("core slake: child[%u] ret=%d", i, ret);
 		if (ret && ret != -ENOIOCTLCMD) {
 			isp_printf(2, "Failed to slake %s\n",
 				   *(char **)(child + 8));
@@ -53279,8 +53294,11 @@ int32_t ispcore_slake_module(void *arg1)
 
 	isp_printf(0, "%s,%d: \n", "ispcore_slake_module", 1353);
 	clks = *(void ***)(subdev + 0xbc);
+	T21_STOP_TRACE("core slake: gating %u clocks", *(u32 *)(subdev + 0xc0));
+	ACCESS_ONCE(t21_isp_clocks_off) = 1;
 	for (i = *(u32 *)(subdev + 0xc0); i > 0; i--)
 		private_clk_disable(clks[i - 1]);
+	T21_STOP_TRACE("core slake: clocks gated");
 	return 0;
 }
 
