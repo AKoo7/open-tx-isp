@@ -23126,6 +23126,14 @@ fail:
 /* Run T21's generic, tuning-driven AWB path.  No sensor identity or sensor
  * register knowledge belongs here: calibration and scene classification are
  * entirely described by the active tuning binary. */
+/*
+ * AWB-local EV word, OEM tiziano_awb.c "_ev" at .data+0x41d3c (initial
+ * 0x64000), written by tisp_awb_ev_update and read by JZ_Isp_Awb.  The
+ * recovery aliased it to tparams+0x12ec (HI16 0x40000 dropped), which
+ * overwrote a tuning word and was reset by every day/night table copy.
+ */
+static uint32_t awb_ev = 0x64000;
+
 static int32_t t21_awb_process(void)
 {
 	/* Retain the original controller's two initialized state words.  Besides
@@ -23146,7 +23154,6 @@ static int32_t t21_awb_process(void)
 	uint32_t rounding = q ? 1U << (q - 1) : 0;
 	uint32_t cols = awb_parameter[3];
 	uint32_t rows = awb_parameter[1];
-	uint32_t awb_ev = get_unaligned_le32(tparams + 0x12ec);
 	uint32_t count;
 	uint32_t red_calibration_q;
 	uint32_t blue_calibration_q;
@@ -24489,13 +24496,44 @@ Tiziano_awb_fpga0x998:
     return (void*)v0;
 }
 
+/*
+ * OEM JZ_Isp_Awb @0x1010c-0x101a0, after Tiziano_awb_fpga: when the AWB EV
+ * crosses _awb_mode[2] << 10 into low light, program the statistics R/G
+ * threshold 0x828 from _awb_lowlight_rg_th; when it drops back, restore the
+ * normal _awb_parameter[0x88/0x8c] value.  Edge-triggered via a .bss flag
+ * (ModeFlag), skipped while AWB is frozen.
+ */
+static void t21_awb_lowlight_update(void)
+{
+	const uint32_t *mode = (const uint32_t *)_awb_mode;
+	const uint32_t *ll = (const uint32_t *)_awb_lowlight_rg_th;
+	const uint32_t *par = (const uint32_t *)_awb_parameter;
+
+	if ((mode[2] << 10) < awb_ev) {
+		if (ModeFlag_18824)
+			return;
+		ModeFlag_18824 = 1;
+		if (!awb_frz)
+			system_reg_write(0x828, (ll[1] << 16) | ll[0]);
+	} else {
+		if (ModeFlag_18824 != 1)
+			return;
+		ModeFlag_18824 = 0;
+		if (!awb_frz)
+			system_reg_write(0x828, (par[0x8c / 4] << 16) |
+					 par[0x88 / 4]);
+	}
+}
+
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000010790 origin=fragment_seed original=JZ_Isp_Awb */
 int32_t JZ_Isp_Awb(void)
 {
     /* The model-recovered body below collapsed the T21 AWB controller's
      * alias-heavy stack objects and silently mixed pointer-sized and scalar
      * fields.  Run the audited, tuning-driven reconstruction instead. */
-    return t21_awb_process();
+    t21_awb_process();
+    t21_awb_lowlight_update();
+    return 0;
 
 #if 0
     uint32_t local_10 = 0;
@@ -24831,10 +24869,8 @@ JZ_Isp_Awb0x2f8:
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000010ac8 origin=fragment_seed original=tisp_awb_ev_update */
 int32_t tisp_awb_ev_update(uint32_t a0)
 {
-	/* Stock writes the AWB-local EV word at .data+0x41d4c.  In the
-	 * reconstructed layout that object is the slot at tparams+0x12ec; the
-	 * source-level `_ev` name resolves to a different OEM-local duplicate. */
-	put_unaligned_le32(a0, tparams + 0x12ec);
+	/* OEM @0x101e8: sw a0, .data+0x41d3c (tiziano_awb.c _ev). */
+	awb_ev = a0;
 	return 0;
 }
 
