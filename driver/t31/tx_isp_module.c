@@ -3371,6 +3371,38 @@ static DEFINE_RATELIMIT_STATE(vic_irq_err_rs, 5 * HZ, 20);
 			pr_err(fmt, ##__VA_ARGS__);			\
 	} while (0)
 
+/* OEM vic_err[13] (0xa2960), read back by isp-w02: one counter per VIC
+ * error status bit, every channel other than 0 shares the last one. */
+static void vic_count_errors(struct tx_isp_vic_device *vic_dev, u32 st,
+			     u32 st2)
+{
+	static const struct { u32 bit; u8 idx; } map[] = {
+		{ 0x00000400, 0 },  /* hor err ch0 */
+		{ 0x00004000, 1 },  /* ver err ch0 */
+		{ 0x00040000, 2 },  /* hvf err */
+		{ 0x00080000, 3 },  /* dvp hcomp err */
+		{ 0x00100000, 4 },  /* dma syfifo ovf */
+		{ 0x00200000, 5 },  /* control limit err */
+		{ 0x00400000, 6 },  /* image syfifo ovf */
+		{ 0x00800000, 7 },  /* mipi fid asfifo ovf */
+		{ 0x01000000, 8 },  /* mipi ch0 hcomp err */
+		{ 0x10000000, 9 },  /* mipi ch0 vcomp err */
+		{ 0x00000200, 11 }, /* frame asfifo ovf */
+	};
+	/* hor/ver ch1-3, mipi hcomp/vcomp ch1-3 */
+	const u32 other = 0x00003800 | 0x00038000 | 0x0e000000 | 0xe0000000;
+	unsigned int i;
+
+	if (!vic_dev)
+		return;
+	for (i = 0; i < ARRAY_SIZE(map); i++)
+		if (st & map[i].bit)
+			vic_dev->vic_errors[map[i].idx]++;
+	if (st2 & 8)                /* dma chid ovf */
+		vic_dev->vic_errors[10]++;
+	vic_dev->vic_errors[12] += hweight32(st & other);
+}
+
 /* isp_vic_interrupt_service_routine - EXACT Binary Ninja implementation */
 static irqreturn_t isp_vic_interrupt_service_routine(int irq, void *dev_id)
 {
@@ -3438,6 +3470,8 @@ static irqreturn_t isp_vic_interrupt_service_routine(int irq, void *dev_id)
              */
             vic_framedone_irq_function(vic_dev);
         }
+
+        vic_count_errors(vic_dev, v1_7, v1_10);
 
         /* Binary Ninja: Error handling for frame asfifo overflow */
         if ((v1_7 & 0x200) != 0) {
