@@ -2504,6 +2504,22 @@ static void frame_channel_bootstrap_slot(struct frame_channel_device *fcd,
     fcd->miscdev.minor = minor;
 }
 
+/* Make every lock and wait object of a channel valid; module init, before
+ * any node exists. frame_channel_prepare() re-initialises the same objects
+ * at node creation and first open. */
+static void frame_channel_init_sync(struct frame_channel_device *fcd)
+{
+    mutex_init(&fcd->buffer_mutex);
+    spin_lock_init(&fcd->buffer_queue_lock);
+    spin_lock_init(&fcd->oem_buf_lock);
+    spin_lock_init(&fcd->state.queue_lock);
+    spin_lock_init(&fcd->state.buffer_lock);
+    INIT_LIST_HEAD(&fcd->state.queued_buffers);
+    INIT_LIST_HEAD(&fcd->state.completed_buffers);
+    init_waitqueue_head(&fcd->state.frame_wait);
+    init_completion(&fcd->state.frame_done);
+}
+
 void frame_channel_prepare(struct frame_channel_device *fcd,
                            int channel_num, int minor)
 {
@@ -5430,6 +5446,13 @@ static void tx_isp_last_close_teardown(struct tx_isp_dev *isp)
         struct frame_channel_device *fcd = &frame_channels[ch];
         struct tx_isp_channel_state *state = &fcd->state;
 
+        /* Self-check: every channel's wait objects are initialised in
+         * module init (frame_channel_init_sync). A NULL list head here
+         * would oops in __wake_up_common. */
+        if (WARN_ON_ONCE(!state->frame_done.wait.task_list.next ||
+                         !state->frame_wait.task_list.next))
+            continue;
+
         mutex_lock(&fcd->buffer_mutex);
         if (state->streaming || state->state == 4 ||
             (fcd->streaming_flags & 1)) {
@@ -5438,9 +5461,11 @@ static void tx_isp_last_close_teardown(struct tx_isp_dev *isp)
             frame_channel_drain_deliverability_queues(state);
             frame_channel_streamoff_locked(fcd, "last close");
             did = true;
-        } else if (waitqueue_active(&state->frame_done.wait)) {
+        } else if (fcd->open_count > 0 &&
+                   waitqueue_active(&state->frame_done.wait)) {
             /* A 0x400456bf caller waiting for a first STREAMON that will
-             * not come from this ISP setup any more. */
+             * not come from this ISP setup any more. Only an open channel
+             * can have one. */
             complete_all(&state->frame_done);
         }
         mutex_unlock(&fcd->buffer_mutex);
@@ -6278,12 +6303,20 @@ static int tx_isp_init(void)
     }
 
     /* The frame-channel mutex must be usable before any channel node is
-     * registered, whichever path registers it. */
+     * registered, whichever path registers it. So must the wait objects
+     * and locks that code outside open/ioctl reaches on every channel
+     * (the last-close teardown of /dev/tx-isp, the ISP frame-done paths):
+     * frame_channel_prepare() only runs at node creation in
+     * tx_isp_create_framechan_devices(), which stops at the first channel
+     * whose node another path already registered, and at the first open.
+     * Until then a zeroed wait queue has a NULL list head, which
+     * waitqueue_active() reports as non-empty and __wake_up_common()
+     * dereferences. */
     {
         int fc;
 
         for (fc = 0; fc < ARRAY_SIZE(frame_channels); fc++)
-            mutex_init(&frame_channels[fc].buffer_mutex);
+            frame_channel_init_sync(&frame_channels[fc]);
     }
 
     /* Allocate ISP device structure */
