@@ -8793,10 +8793,164 @@ static void t21_text_check_kernel(const char *where, unsigned int cmd)
 	}
 }
 
+/*
+ * free_watch=1: use-after-free detector for this module's large heap
+ * objects (ksize > 4 KiB: the kmalloc-8192 cache and page-backed
+ * allocations).  private_kfree fills them with 0x6b and parks them in a
+ * small quarantine instead of freeing them; every ioctl/proc hook, every
+ * frame-channel ioctl and every private_kmalloc verifies the pattern and
+ * reports the first changed word with KERN_ERR "tx-isp-t21: UAF ...".
+ * A stray write then lands in parked memory instead of a live slab
+ * freelist.  Objects leave the quarantine (and are really freed) after
+ * T21_FREE_WATCH_SLOTS later frees, or at module exit.
+ */
+#define T21_FREE_WATCH_SLOTS 24
+#define T21_FREE_WATCH_TRACK 128
+#define T21_FREE_WATCH_BYTE 0x6b
+static bool t21_free_watch;
+module_param_named(free_watch, t21_free_watch, bool, 0444);
+struct t21_free_watch_slot {
+	void *ptr;
+	size_t size;
+	void *alloc_by;
+	void *free_by;
+	unsigned long freed_at;
+};
+static struct t21_free_watch_slot t21_fw_quarantine[T21_FREE_WATCH_SLOTS];
+static unsigned int t21_fw_next;
+static struct {
+	void *ptr;
+	void *caller;
+} t21_fw_alloc[T21_FREE_WATCH_TRACK];
+static unsigned int t21_fw_reports;
+static DEFINE_SPINLOCK(t21_fw_lock);
+
+static void *t21_fw_alloc_site(void *ptr, bool forget)
+{
+	unsigned int i;
+	void *caller;
+
+	for (i = 0; i < T21_FREE_WATCH_TRACK; i++) {
+		if (t21_fw_alloc[i].ptr == ptr) {
+			caller = t21_fw_alloc[i].caller;
+			if (forget)
+				t21_fw_alloc[i].ptr = NULL;
+			return caller;
+		}
+	}
+	return NULL;
+}
+
+/* Called with t21_fw_lock held. */
+static void t21_fw_verify(struct t21_free_watch_slot *slot, const char *where)
+{
+	const u32 *word = slot->ptr;
+	size_t n = slot->size / sizeof(u32);
+	size_t i;
+
+	for (i = 0; i < n; i++) {
+		size_t j, last = i;
+
+		if (word[i] == 0x6b6b6b6bu)
+			continue;
+		for (j = i; j < n; j++)
+			if (word[j] != 0x6b6b6b6bu)
+				last = j;
+		if (t21_fw_reports++ < 64)
+			printk(KERN_ERR "tx-isp-t21: UAF obj=%p size=%zu first_off=0x%zx val=%08x last_off=0x%zx alloc_by=%p free_by=%p freed %lu ms ago, seen at %s pid=%d comm=%s\n",
+			       slot->ptr, slot->size, i * 4, word[i], last * 4,
+			       slot->alloc_by, slot->free_by,
+			       (unsigned long)jiffies_to_msecs(jiffies -
+							       slot->freed_at),
+			       where, current->pid, current->comm);
+		memset(slot->ptr, T21_FREE_WATCH_BYTE, slot->size);
+		return;
+	}
+}
+
+static void t21_free_watch_check(const char *where)
+{
+	unsigned long flags;
+	unsigned int i;
+
+	if (!t21_free_watch)
+		return;
+	spin_lock_irqsave(&t21_fw_lock, flags);
+	for (i = 0; i < T21_FREE_WATCH_SLOTS; i++)
+		if (t21_fw_quarantine[i].ptr)
+			t21_fw_verify(&t21_fw_quarantine[i], where);
+	spin_unlock_irqrestore(&t21_fw_lock, flags);
+}
+
+static void t21_free_watch_note_alloc(void *ptr, void *caller)
+{
+	unsigned long flags;
+	unsigned int i;
+
+	if (!t21_free_watch || !ptr || ksize(ptr) <= 4096)
+		return;
+	spin_lock_irqsave(&t21_fw_lock, flags);
+	for (i = 0; i < T21_FREE_WATCH_TRACK; i++) {
+		if (!t21_fw_alloc[i].ptr) {
+			t21_fw_alloc[i].ptr = ptr;
+			t21_fw_alloc[i].caller = caller;
+			break;
+		}
+	}
+	spin_unlock_irqrestore(&t21_fw_lock, flags);
+	printk(KERN_ERR "tx-isp-t21: fw alloc %p size=%zu by %p\n", ptr,
+	       ksize(ptr), caller);
+}
+
+/* Returns true when the object was parked (the caller must not free it). */
+static bool t21_free_watch_park(void *ptr, void *caller)
+{
+	struct t21_free_watch_slot *slot;
+	unsigned long flags;
+	void *evict = NULL;
+	size_t size;
+
+	if (!t21_free_watch || !ptr || ZERO_OR_NULL_PTR(ptr))
+		return false;
+	size = ksize(ptr);
+	if (size <= 4096)
+		return false;
+	spin_lock_irqsave(&t21_fw_lock, flags);
+	slot = &t21_fw_quarantine[t21_fw_next];
+	t21_fw_next = (t21_fw_next + 1) % T21_FREE_WATCH_SLOTS;
+	if (slot->ptr) {
+		t21_fw_verify(slot, "quarantine-evict");
+		evict = slot->ptr;
+	}
+	slot->ptr = ptr;
+	slot->size = size;
+	slot->alloc_by = t21_fw_alloc_site(ptr, true);
+	slot->free_by = caller;
+	slot->freed_at = jiffies;
+	memset(ptr, T21_FREE_WATCH_BYTE, size);
+	spin_unlock_irqrestore(&t21_fw_lock, flags);
+	printk(KERN_ERR "tx-isp-t21: fw park %p size=%zu by %p\n", ptr, size,
+	       caller);
+	kfree(evict);
+	return true;
+}
+
+static void t21_free_watch_flush(void)
+{
+	unsigned int i;
+
+	t21_free_watch_check("module-exit");
+	for (i = 0; i < T21_FREE_WATCH_SLOTS; i++) {
+		kfree(t21_fw_quarantine[i].ptr);
+		t21_fw_quarantine[i].ptr = NULL;
+	}
+}
+
 static void t21_text_check(const char *where, unsigned int cmd)
 {
 	t21_text_check_module(where, cmd);
 	t21_text_check_kernel(where, cmd);
+	t21_free_watch_check(where);
 }
 
 static void t21_text_watch_free(void)
@@ -9043,12 +9197,19 @@ int private_kthread_stop(struct task_struct *k)
 
 void *private_kmalloc(size_t size, gfp_t flags)
 {
-    return kmalloc(size, flags);
+    void *p;
+
+    t21_free_watch_check("kmalloc");
+    p = kmalloc(size, flags);
+    t21_free_watch_note_alloc(p, __builtin_return_address(0));
+    return p;
 }
 
 
 void private_kfree(void *p)
 {
+    if (t21_free_watch_park(p, __builtin_return_address(0)))
+        return;
     kfree(p);
 }
 
@@ -16879,6 +17040,8 @@ static long frame_channel_unlocked_ioctl(struct file *file, unsigned int cmd,
 	/* text_watch: every call but the per-frame QBUF/DQBUF/frame wait */
 	if (cmd != 0xc044560f && cmd != 0xc0445611 && cmd != 0x400456bf)
 		t21_text_check("framechan_ioctl", cmd);
+	else
+		t21_free_watch_check("framechan_ioctl-frame");
 
 	switch (cmd) {
 	case 0xc0145608: {
@@ -53558,6 +53721,7 @@ void cleanup_module(void)
 	tx_isp_sinfo_exit();
 	tx_isp_exit();
 	t21_text_watch_free();
+	t21_free_watch_flush();
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000345bc origin=model_output original=tx_isp_vic_remove */
