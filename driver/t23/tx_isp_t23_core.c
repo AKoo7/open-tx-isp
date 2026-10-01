@@ -15322,6 +15322,59 @@ static long regtrace_framechan_repair_dqbuf(int channel, unsigned long arg,
     return 0;
 }
 
+/*
+ * TX_ISP_FRAME_IOCTL_LEGACY_WAIT. The stock libimp frame_pooling_thread
+ * loops on it and, whenever it returns 0, dequeues a frame without checking
+ * the DQBUF result: VBMGetFrame() then uses the index of a v4l2_buffer the
+ * failed ioctl never filled in. The OEM wait is a
+ * wait_for_completion_interruptible() on the channel's frame-done
+ * completion, so it only succeeds when a frame is ready. Do the same, but
+ * do not block for ever: give up after a second (the pooling thread checks
+ * for cancellation between waits) and at once when the channel stops
+ * streaming, and fail in both cases, so that no DQBUF follows. A channel
+ * that is not streaming yet is waited on for the same second, so a pooling
+ * thread that outlives its STREAMOFF does not spin.
+ */
+static long regtrace_framechan_wait_frame(int channel, unsigned long arg)
+{
+    unsigned long deadline = jiffies + msecs_to_jiffies(1000);
+    uint32_t ready;
+    bool streaming;
+    long left;
+
+    if (channel < 0 || channel >= REGTRACE_FRAMECHAN_COUNT)
+        return -EINVAL;
+
+    if (regtrace_t23_source_frame_done) {
+        for (;;) {
+            streaming = regtrace_framechan_streaming[channel];
+            left = (long)(deadline - jiffies);
+            if (left <= 0)
+                return streaming ? -ETIMEDOUT : -EINVAL;
+            left = wait_event_interruptible_timeout(
+                regtrace_framechan_done_wait[channel],
+                regtrace_framechan_done_count[channel] ||
+                    regtrace_framechan_streaming[channel] != streaming,
+                left);
+            if (left < 0)
+                return left;
+            if (regtrace_framechan_done_count[channel])
+                break;
+            if (!left)
+                return streaming ? -ETIMEDOUT : -EINVAL;
+            if (!regtrace_framechan_streaming[channel])
+                return -EINVAL;
+        }
+    }
+
+    /* Frames ready to dequeue; libimp does not use the value. */
+    ready = regtrace_framechan_done_count[channel];
+    if (arg && copy_to_user((void __user *)(uintptr_t)arg, &ready,
+                            sizeof(ready)))
+        return -EFAULT;
+    return 0;
+}
+
 static void regtrace_framechan_stream_on(struct file *file, int channel)
 {
     mutex_lock(&regtrace_framechan_stream_lock);
@@ -15537,6 +15590,7 @@ static long regtrace_framechan_ioctl(struct file *file, unsigned int cmd, unsign
                    channel, arg);
         break;
     case REGTRACE_FRAMECHAN_WAIT:
+        ret = regtrace_framechan_wait_frame(channel, arg);
         break;
     default:
         printk(KERN_INFO "tx_isp_t23_recovered: framechan%d ioctl cmd=0x%x arg=0x%lx ret=0 pid=%d comm=%s\n",
