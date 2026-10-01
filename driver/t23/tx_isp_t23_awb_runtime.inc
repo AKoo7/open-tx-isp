@@ -34,6 +34,8 @@ static uint32_t regtrace_t23_awb_hlil_history_bg[15];
 static uint32_t regtrace_t23_awb_hlil_history_ct[15];
 static uint32_t regtrace_t23_awb_hlil_history_count;
 static bool regtrace_t23_awb_hlil_pending;
+/* Set while a parameter-bank switch reloads the blocks; blocks new work. */
+static bool regtrace_t23_awb_hlil_paused;
 static DEFINE_SPINLOCK(regtrace_t23_awb_hlil_lock);
 
 static void regtrace_t23_source_awb_hlil_work(struct work_struct *work);
@@ -626,7 +628,7 @@ static void regtrace_t23_source_awb_hlil_capture(const uint32_t *words,
         return;
 
     spin_lock_irqsave(&regtrace_t23_awb_hlil_lock, flags);
-    if (regtrace_t23_awb_hlil_pending) {
+    if (regtrace_t23_awb_hlil_pending || regtrace_t23_awb_hlil_paused) {
         regtrace_t23_source_awb_hlil_drops++;
         spin_unlock_irqrestore(&regtrace_t23_awb_hlil_lock, flags);
         return;

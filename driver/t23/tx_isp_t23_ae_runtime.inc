@@ -142,6 +142,8 @@ static uint32_t regtrace_t23_ae_hlil_pending_snapshot;
 static bool regtrace_t23_ae_hlil_pending;
 /* Set while the ladder is rebuilt for a new frame length; blocks new work. */
 static bool regtrace_t23_ae_hlil_retiming;
+/* Set while a parameter-bank switch reloads the blocks; blocks new work. */
+static bool regtrace_t23_ae_hlil_paused;
 static DEFINE_SPINLOCK(regtrace_t23_ae_hlil_lock);
 
 static void regtrace_t23_source_ae_hlil_work(struct work_struct *work);
@@ -282,7 +284,8 @@ static void regtrace_t23_source_ae_hlil_capture(uint32_t luma,
         return;
 
     spin_lock_irqsave(&regtrace_t23_ae_hlil_lock, flags);
-    if (regtrace_t23_ae_hlil_pending || regtrace_t23_ae_hlil_retiming) {
+    if (regtrace_t23_ae_hlil_pending || regtrace_t23_ae_hlil_retiming ||
+        regtrace_t23_ae_hlil_paused) {
         regtrace_t23_source_ae_hlil_drops++;
         spin_unlock_irqrestore(&regtrace_t23_ae_hlil_lock, flags);
         return;
@@ -303,7 +306,8 @@ static void regtrace_t23_source_ae_hlil_trigger(void)
         return;
 
     spin_lock_irqsave(&regtrace_t23_ae_hlil_lock, flags);
-    if (regtrace_t23_ae_hlil_pending || regtrace_t23_ae_hlil_retiming) {
+    if (regtrace_t23_ae_hlil_pending || regtrace_t23_ae_hlil_retiming ||
+        regtrace_t23_ae_hlil_paused) {
         regtrace_t23_source_ae_hlil_drops++;
         spin_unlock_irqrestore(&regtrace_t23_ae_hlil_lock, flags);
         return;

@@ -13490,6 +13490,72 @@ restore:
     return ret;
 }
 
+/*
+ * Register 0xc block bypass bits this driver decides itself instead of
+ * taking them from the IQ bank flags.  Startup applies them after reading
+ * the bank mask; a day/night, custom-mode or bin switch rebuilds 0xc from
+ * the new bank (as the OEM does) and must apply them again, or blocks the
+ * driver parks (ADR, defog, an unloaded MDNS/SDNS) follow the raw bank
+ * flags and run with parameters that were never loaded.
+ *
+ * forced_on:  blocks that stay bypassed whatever the bank says.
+ * forced_off: blocks this driver initialises and runs whatever the bank
+ *             says (the startup overrides of the recovered tisp_init).
+ */
+static uint32_t regtrace_t23_source_bypass_forced_on(void)
+{
+    uint32_t mask = 0;
+
+    if (regtrace_t23_source_park_uninitialized_mdns ||
+        !regtrace_t23_source_mdns_tuning_init)
+        mask |= BIT(16);
+    if (!regtrace_t23_source_sdns_tuning_init ||
+        !regtrace_t23_source_sdns_internal_enable)
+        mask |= BIT(15);
+    if (!regtrace_t23_source_adr_tuning_init ||
+        !regtrace_t23_source_adr_internal_enable)
+        mask |= BIT(7);
+    if (!regtrace_t23_source_defog_tuning_init ||
+        !regtrace_t23_source_defog_internal_enable)
+        mask |= BIT(11);
+    return mask;
+}
+
+static uint32_t regtrace_t23_source_bypass_forced_off(void)
+{
+    uint32_t mask = 0;
+
+    if (!regtrace_t23_source_park_uninitialized_mdns &&
+        regtrace_t23_source_mdns_tuning_init)
+        mask |= BIT(16);
+    if (regtrace_t23_source_sdns_tuning_init &&
+        regtrace_t23_source_sdns_internal_enable)
+        mask |= BIT(15);
+    if (regtrace_t23_source_adr_tuning_init &&
+        regtrace_t23_source_adr_internal_enable)
+        mask |= BIT(7);
+    if (regtrace_t23_source_awb_stats_init)
+        mask |= BIT(25);
+    if (regtrace_t23_source_dpc_tuning_init)
+        mask |= BIT(2);
+    if (regtrace_t23_source_sharpen_tuning_init)
+        mask |= BIT(14);
+    if (regtrace_t23_source_ydns_tuning_init)
+        mask |= BIT(17);
+    if (regtrace_t23_source_defog_tuning_init &&
+        regtrace_t23_source_defog_internal_enable)
+        mask |= BIT(11);
+    if (regtrace_t23_source_ccm_tuning_init)
+        mask |= BIT(9);
+    return mask;
+}
+
+static uint32_t regtrace_t23_source_bypass_overrides(uint32_t bypass)
+{
+    return (bypass & ~regtrace_t23_source_bypass_forced_off()) |
+           regtrace_t23_source_bypass_forced_on();
+}
+
 static void regtrace_t23_source_mode_flags_apply(const uint32_t *flags)
 {
     uint32_t bypass = 0;
@@ -13498,7 +13564,9 @@ static void regtrace_t23_source_mode_flags_apply(const uint32_t *flags)
     for (i = 0; i < 32U; ++i)
         if (flags[i])
             bypass |= 1U << i;
-    system_reg_write(12U, (bypass & 0xb577fffdU) | 0x34000009U);
+    /* OEM tisp_day_or_night_s_ctrl mask, then this driver's overrides. */
+    bypass = (bypass & 0xb577fffdU) | 0x34000009U;
+    system_reg_write(12U, regtrace_t23_source_bypass_overrides(bypass));
 }
 
 static int regtrace_t23_source_dmsc_write_tuning_startup(void)
@@ -14094,36 +14162,7 @@ static int regtrace_t23_source_core_set_stream(int enable,
             return ret;
         }
     }
-    if (regtrace_t23_source_park_uninitialized_mdns ||
-        !regtrace_t23_source_mdns_tuning_init)
-        bypass |= 1U << 16;
-    else
-        bypass &= ~BIT(16);
-    if (!regtrace_t23_source_sdns_tuning_init ||
-        !regtrace_t23_source_sdns_internal_enable)
-        bypass |= BIT(15);
-    else
-        bypass &= ~BIT(15);
-    if (!regtrace_t23_source_adr_tuning_init ||
-        !regtrace_t23_source_adr_internal_enable)
-        bypass |= BIT(7);
-    else
-        bypass &= ~BIT(7);
-    if (regtrace_t23_source_awb_stats_init)
-        bypass &= ~BIT(25);
-    if (regtrace_t23_source_dpc_tuning_init)
-        bypass &= ~BIT(2);
-    if (regtrace_t23_source_sharpen_tuning_init)
-        bypass &= ~BIT(14);
-    if (regtrace_t23_source_ydns_tuning_init)
-        bypass &= ~BIT(17);
-    if (regtrace_t23_source_defog_tuning_init &&
-        regtrace_t23_source_defog_internal_enable)
-        bypass &= ~BIT(11);
-    else
-        bypass |= BIT(11);
-    if (regtrace_t23_source_ccm_tuning_init)
-        bypass &= ~BIT(9);
+    bypass = regtrace_t23_source_bypass_overrides(bypass);
     /* Recovered T23 tisp_init order and parameter-derived top bypass. */
     system_reg_write(0x800U, 0);
     system_reg_write(0x4U,
@@ -91552,6 +91591,174 @@ uint32_t tisp_get_tuning(void)
     return (uint32_t)v0;
 }
 
+/*
+ * Sensor flip as last requested through the sensor-flip controls (bit 0
+ * mirror, bit 1 flip), or -1 while the sensor still runs as it was loaded,
+ * in which case source_lsc_initial_flip/mirror describe it.  The LSC mesh
+ * has to follow the sensor orientation.
+ */
+static int regtrace_t23_sensor_flip_mode = -1;
+
+static int regtrace_t23_lsc_follow_sensor_flip(void)
+{
+    uint32_t flip;
+    uint32_t mirror;
+
+    if (regtrace_t23_sensor_flip_mode < 0) {
+        flip = regtrace_t23_source_lsc_initial_flip ? 1U : 0U;
+        mirror = regtrace_t23_source_lsc_initial_mirror ? 1U : 0U;
+    } else {
+        flip = ((uint32_t)regtrace_t23_sensor_flip_mode >> 1) & 1U;
+        mirror = (uint32_t)regtrace_t23_sensor_flip_mode & 1U;
+    }
+    if (!regtrace_t23_source_lsc_tuning_init ||
+        !regtrace_t23_source_lsc_tables_initialized)
+        return 0;
+    if ((uint32_t)last_status_flip_en == flip &&
+        (uint32_t)last_status_mirror_en == mirror)
+        return 0;
+    return tisp_lsc_mirror_flip(0, regtrace_t23_source_sensor_width,
+                                regtrace_t23_source_sensor_height,
+                                flip, mirror);
+}
+
+/*
+ * Keep the AE and AWB work off the shared tuning arrays while a bank
+ * switch reloads them.  New captures are refused while paused; queued work
+ * is dropped and running work is waited for.
+ */
+static void regtrace_t23_source_algo_pause(void)
+{
+    unsigned long flags;
+
+    spin_lock_irqsave(&regtrace_t23_ae_hlil_lock, flags);
+    regtrace_t23_ae_hlil_paused = true;
+    spin_unlock_irqrestore(&regtrace_t23_ae_hlil_lock, flags);
+    cancel_work_sync(&regtrace_t23_source_ae_hlil_work_item);
+
+    spin_lock_irqsave(&regtrace_t23_awb_hlil_lock, flags);
+    regtrace_t23_awb_hlil_paused = true;
+    spin_unlock_irqrestore(&regtrace_t23_awb_hlil_lock, flags);
+    cancel_work_sync(&regtrace_t23_source_awb_hlil_work_item);
+}
+
+static void regtrace_t23_source_algo_resume(void)
+{
+    unsigned long flags;
+
+    spin_lock_irqsave(&regtrace_t23_awb_hlil_lock, flags);
+    regtrace_t23_awb_hlil_pending = false;
+    regtrace_t23_awb_hlil_paused = false;
+    spin_unlock_irqrestore(&regtrace_t23_awb_hlil_lock, flags);
+
+    spin_lock_irqsave(&regtrace_t23_ae_hlil_lock, flags);
+    regtrace_t23_ae_hlil_pending = false;
+    regtrace_t23_ae_hlil_paused = false;
+    spin_unlock_irqrestore(&regtrace_t23_ae_hlil_lock, flags);
+}
+
+/*
+ * Per-block parameter reload after the active bank changed, the source-path
+ * equivalent of the OEM *_dn_params_refresh plan in tisp_day_or_night_s_ctrl
+ * (defog, AE, AWB, DMSC, sharpen, MDNS, SDNS, GIB, LSC, CCM, CLM, gamma,
+ * ADR, DPC, AF, BCSH, YDNS).  Every block this driver initialised from the
+ * IQ bank is read again from the new active bank and rewritten; user
+ * settings (BCSH values, sinter/temper/DPC/DRC/defog strengths, the sensor
+ * flip of the LSC mesh) are applied on top again.  CCM and the AWB colour
+ * bias are reloaded by regtrace_t23_source_ccm_select_bank().  AE and AWB
+ * keep their HLIL state; sharpen and AF are not initialised by this
+ * driver.  The gain-driven blocks are then rewritten at the gain in use.
+ *
+ * Only while the core runs: a stream start loads every block from the
+ * active bank anyway.
+ */
+static void regtrace_t23_source_dn_params_refresh(const char *reason)
+{
+    uint32_t gain = regtrace_t23_dmsc_gain_q16 ?
+        regtrace_t23_dmsc_gain_q16 : 0x10000U;
+    uint32_t failed = 0;
+    int ret;
+
+    if (!regtrace_t23_source_core_start || !regtrace_t23_core_started)
+        return;
+
+    if (regtrace_t23_source_gib_tuning_init &&
+        regtrace_t23_source_gib_write_tuning_startup())
+        failed |= BIT(0);
+    if (regtrace_t23_source_gamma_tuning_init &&
+        tiziano_gamma_dn_params_refresh())
+        failed |= BIT(1);
+    if (regtrace_t23_source_lsc_tuning_init) {
+        if (tiziano_lsc_dn_params_refresh()) {
+            failed |= BIT(2);
+        } else {
+            (void)regtrace_t23_lsc_follow_sensor_flip();
+            regtrace_t23_source_lsc_update_pending = true;
+            (void)tisp_lsc_write_lut_datas();
+        }
+    }
+    if (regtrace_t23_source_dpc_tuning_init &&
+        tiziano_dpc_params_refresh())
+        failed |= BIT(3);
+    if (regtrace_t23_source_ydns_tuning_init &&
+        tiziano_ydns_params_refresh())
+        failed |= BIT(4);
+    if (regtrace_t23_source_dmsc_tuning_init &&
+        tiziano_dmsc_params_refresh())
+        failed |= BIT(5);
+    if (regtrace_t23_source_bcsh_tuning_init) {
+        tiziano_bcsh_params_refresh();
+        if (!regtrace_t23_source_bcsh_tuning_status) {
+            tiziano_bcsh_Tccm_Comp2Orig();
+            BCSH_real = 1;
+            tiziano_bcsh_update();
+        } else {
+            failed |= BIT(6);
+        }
+    }
+    if (regtrace_t23_source_clm_tuning_init) {
+        if (!regtrace_t23_source_clm_load_tuning()) {
+            clm_ct_value_old = 0xffffU;
+            clm_ct_part_old = 0xffU;
+            if (tisp_clm_interp_by_ct(0, regtrace_t23_source_clm_runtime_ct,
+                                      1U) > 0)
+                tiziano_set_parameter_clm();
+        } else {
+            failed |= BIT(7);
+        }
+    }
+    if (regtrace_t23_source_mdns_initialized &&
+        regtrace_t23_source_mdns_load_tuning())
+        failed |= BIT(8);
+    if (regtrace_t23_source_sdns_initialized &&
+        regtrace_t23_source_sdns_load_tuning())
+        failed |= BIT(9);
+    if (regtrace_t23_source_adr_initialized) {
+        if (!regtrace_t23_source_adr_load_tuning())
+            tiziano_adr_params_init();
+        else
+            failed |= BIT(10);
+    }
+    if (regtrace_t23_source_defog_initialized &&
+        regtrace_t23_source_defog_load_tuning())
+        failed |= BIT(11);
+
+    /* Rewrite the gain-interpolated blocks once at the gain in use. */
+    regtrace_t23_dpc_gain_old = 0xffffffffU;
+    ydns_gain_old = 0xffffffffU;
+    regtrace_t23_dmsc_gain_old = 0xffffffffU;
+    if (regtrace_t23_source_mdns_initialized)
+        regtrace_t23_source_mdns_gain_old = 0xffffffffU;
+    if (regtrace_t23_source_sdns_initialized)
+        regtrace_t23_source_sdns_gain_old = 0xffffffffU;
+    ret = regtrace_t23_source_apply_total_gain_value(gain, 0, true, true);
+
+    printk(KERN_WARNING
+           "tx_isp_t23_recovered: bank switch block refresh reason=%s gain=0x%x failed=0x%x ret=%d r0c=0x%08x\n",
+           reason ? reason : "?", gain, failed, ret,
+           system_reg_read(0x0cU));
+}
+
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000064c48 origin=fragment_seed original=tisp_day_or_night_s_ctrl */
 int64_t tisp_day_or_night_s_ctrl(uintptr_t a0, uint32_t a1)
 {
@@ -91570,18 +91777,24 @@ int64_t tisp_day_or_night_s_ctrl(uintptr_t a0, uint32_t a1)
     if (!selected)
         return -ENODEV;
 
+    regtrace_t23_source_algo_pause();
     ret = regtrace_t23_source_ccm_select_bank(selected);
-    if (ret)
+    if (ret) {
+        regtrace_t23_source_algo_resume();
         return ret;
+    }
 
     memcpy(active, selected, T23_TPARAMS_BANK_SIZE);
     *(uint32_t *)(void *)(tisp_par_info + a0 * 156U + 124U) = a1;
     *(uint32_t *)(void *)(day_night + a0 * sizeof(uint32_t)) = 0;
 
-    if (regtrace_t23_source_core_start)
+    if (regtrace_t23_source_core_start) {
         regtrace_t23_source_mode_flags_apply(active);
-    else
+        regtrace_t23_source_dn_params_refresh(a1 ? "night" : "day");
+    } else {
         tx_isp_t23_mode_profile_apply(active);
+    }
+    regtrace_t23_source_algo_resume();
 
     cust_mode = 0;
     *(uint8_t *)(void *)&tispPollValue = 1;
@@ -91620,16 +91833,23 @@ int32_t tisp_cust_mode_s_ctrl(uint32_t arg1, uint32_t arg2)
     if (!selected)
         return 0;
 
+    regtrace_t23_source_algo_pause();
     ret = regtrace_t23_source_ccm_select_bank(selected);
-    if (ret)
+    if (ret) {
+        regtrace_t23_source_algo_resume();
         return ret;
+    }
     memcpy(active, selected, T23_TPARAMS_BANK_SIZE);
     cust_mode = arg2 == 1;
 
-    if (regtrace_t23_source_core_start)
+    if (regtrace_t23_source_core_start) {
         regtrace_t23_source_mode_flags_apply(active);
-    else
+        regtrace_t23_source_dn_params_refresh(arg2 == 1 ? "custom" :
+                                              "custom-off");
+    } else {
         tx_isp_t23_mode_profile_apply(active);
+    }
+    regtrace_t23_source_algo_resume();
     return 0;
 }
 
@@ -91661,18 +91881,24 @@ uint32_t tisp_switch_bin(uint32_t a0)
         selected = (const void *)tparams_day;
     else if (mode == 1)
         selected = (const void *)tparams_night;
+    regtrace_t23_source_algo_pause();
     if (selected) {
         result = regtrace_t23_source_ccm_select_bank(selected);
-        if (result)
+        if (result) {
+            regtrace_t23_source_algo_resume();
             return (uint32_t)result;
+        }
         memcpy(active, selected, T23_TPARAMS_BANK_SIZE);
         *(uint32_t *)(void *)(tisp_par_info + 124U) = mode;
     }
 
-    if (regtrace_t23_source_core_start)
+    if (regtrace_t23_source_core_start) {
         regtrace_t23_source_mode_flags_apply(active);
-    else
+        regtrace_t23_source_dn_params_refresh("switch-bin");
+    } else {
         tx_isp_t23_mode_profile_apply(active);
+    }
+    regtrace_t23_source_algo_resume();
 
     *(uint8_t *)(void *)&tispPollValue = 1;
     *((uint8_t *)(void *)&tispPollValue + 3) = 1;
