@@ -1021,6 +1021,8 @@ cleanup_irq:
 EXPORT_SYMBOL(tx_isp_subdev_init);
 
 /* Subdevice deinitialization */
+void tx_isp_sensor_subdev_deinit(struct tx_isp_subdev *sd);
+
 void tx_isp_subdev_deinit(struct tx_isp_subdev *sd)
 {
     struct tx_isp_subdev_pad *inpads;
@@ -1028,6 +1030,9 @@ void tx_isp_subdev_deinit(struct tx_isp_subdev *sd)
 
     if (!sd)
         return;
+
+    /* A sensor going away must not stay attached to the ISP. */
+    tx_isp_sensor_subdev_deinit(sd);
 
     /* tx_isp_subdev_init_pads() stores the kzalloc()ed pad arrays only in
      * the OEM raw slots +0xcc (in) / +0xd0 (out).  The named members are the

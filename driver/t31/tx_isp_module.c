@@ -8056,10 +8056,50 @@ int tx_isp_unregister_sensor_subdev(struct tx_isp_subdev *sd)
             ourISPdev->vin_dev->active = NULL;
         ourISPdev->sensor = NULL;
     }
+    if (ourISPdev && ourISPdev->sensor_sd == sd)
+        ourISPdev->sensor_sd = NULL;
 
     return 0;
 }
 EXPORT_SYMBOL(tx_isp_unregister_sensor_subdev);
+
+/*
+ * Called from tx_isp_subdev_deinit(). A sensor driver's remove() calls that
+ * and then kfree()s the tx_isp_sensor the subdev is embedded in; the module
+ * text and the sensor's ops table go away with the rmmod. The sensor is
+ * normally detached by TX_ISP_EVENT_SENSOR_RELEASE (IMP_ISP_DelSensor), but
+ * a streamer that is killed never sends it. ourISPdev->sensor, the sensor
+ * list and stored_sensor_ops then still pointed at the freed sensor, and
+ * tx_isp_exit() called its reset through sensor_subdev_ops, which read the
+ * unloaded sensor module's ops (rmmod oops in sensor_subdev_core_reset).
+ * Detach it here if it is still attached, and hand the sensor its own ops
+ * back. Only pointer compares before the unregister: a probe that fails
+ * under sensor_list_mutex may also end up here.
+ */
+void tx_isp_sensor_subdev_deinit(struct tx_isp_subdev *sd)
+{
+    bool attached;
+
+    if (!sd)
+        return;
+
+    attached = stored_sensor_ops.sensor_sd == sd ||
+               registered_sensor_subdev == sd ||
+               (ourISPdev && (ourISPdev->sensor_sd == sd ||
+                              (ourISPdev->sensor && &ourISPdev->sensor->sd == sd)));
+    if (!attached)
+        return;
+
+    pr_info("*** SENSOR DEINIT: detaching sensor subdev %p still attached to the ISP ***\n", sd);
+    tx_isp_unregister_sensor_subdev(sd);
+
+    if (stored_sensor_ops.sensor_sd == sd) {
+        if (sd->ops == &sensor_subdev_ops)
+            sd->ops = stored_sensor_ops.original_ops;
+        stored_sensor_ops.original_ops = NULL;
+        stored_sensor_ops.sensor_sd = NULL;
+    }
+}
 
 /* Compatibility wrapper for old function name to resolve linking errors */
 int tx_isp_create_graph_and_nodes(struct tx_isp_dev *isp)
