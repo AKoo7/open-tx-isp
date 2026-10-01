@@ -730,7 +730,7 @@ static const char LC18[] = "RGGI";
 static const char LC19[] = "BGGI";
 static const char LC20[] = "GRIG";
 static uintptr_t test_addr;
-static unsigned char data_a8f96[16384];
+static unsigned char data_a8f96[256]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static uintptr_t vaddr;
 static uintptr_t (*st_vic_save_par)();
 static uint32_t slock_af_hist;
@@ -2747,9 +2747,9 @@ typedef struct {
     int32_t field_10f0;
     int32_t field_10f4;
 } tparams_day_struct_t;
-static unsigned char data_a0000[16384];
-static unsigned char data_c2cdc[16384];
-static unsigned char data_c2d00[16384];
+static unsigned char data_a0000[8]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
+static unsigned char data_c2cdc[64]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
+static unsigned char data_c2d00[64]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char __attribute__((aligned(4))) data_c2d24[16384];
 static unsigned char __attribute__((aligned(4))) data_c4d20[16384];
 static unsigned char __attribute__((aligned(4))) data_c6d1c[16384];
@@ -2821,7 +2821,7 @@ static unsigned char __attribute__((aligned(4))) cm_ev_list_now[4] = {
 static unsigned char __attribute__((aligned(4))) cm_sat_list_now[4] = {
     0x00, 0x00, 0x00, 0x00, 
 };
-static unsigned char data_b9024[16384];
+static unsigned char data_b9024[4]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char ccm_ct_list[16];
 static unsigned char cm_ev_list[36];
 static unsigned char cm_ev_list_wdr[36];
@@ -5795,10 +5795,10 @@ static unsigned char __attribute__((aligned(4))) dg1_cache[36] = {
     0x00, 0x04, 0x00, 0x00, 
 };
 static unsigned char data_a028[16384];
-static unsigned char data_c8044[16384];
+static unsigned char data_c8044[8]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char data_c8048[16384];
-static unsigned char data_c804c[16384];
-static unsigned char data_c8050[16384];
+static unsigned char data_c804c[8]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
+static unsigned char data_c8050[8]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char data_c807c[16384];
 static unsigned char data_c8080[16384];
 static unsigned char data_c8084[16384];
@@ -5818,14 +5818,14 @@ static unsigned char frame_cunt[8];
 static uintptr_t total_gain_new;
 static uintptr_t total_gain_old;
 static uintptr_t ae_show_info;
-static unsigned char data_c805c[16384];
+static unsigned char data_c805c[8]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char data_a81c8[16384];
 static unsigned char data_a81d0[16384];
 static unsigned char data_a81d4[16384];
 static unsigned char data_c80c4[16384];
 static unsigned char data_a81d8[16384];
 static unsigned char data_c80b8[16384];
-static unsigned char data_a81e0[16384];
+static unsigned char data_a81e0[8]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char data_c8054[16384];
 static unsigned char data_c8060[16384];
 static unsigned char data_c80c0[16384];
@@ -5837,9 +5837,9 @@ static unsigned char af_array_iird0[900];
 static unsigned char af_array_iird1[900];
 static unsigned char af_array_y_sum[900];
 static int32_t frame_num;
-static unsigned char data_98300[16384];
-static unsigned char data_986c0[16384];
-static unsigned char data_98848[16384];
+static unsigned char data_98300[1024]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
+static unsigned char data_986c0[32]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
+static unsigned char data_98848[256]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char IspAfStaticParam[56];
 static unsigned char data_c9e90[16384];
 static unsigned char data_c9e94[16384];
@@ -5854,7 +5854,7 @@ static unsigned char data_c9eb4[16384];
 static unsigned char data_c9eb8[16384];
 static uintptr_t (*data_9884c)();
 static uintptr_t (*data_98854)();
-static unsigned char data_986dc[16384];
+static unsigned char data_986dc[32]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char data_986e0[16384];
 static unsigned char data_986e4[16384];
 static unsigned char data_986e8[16384];
@@ -5868,11 +5868,11 @@ static unsigned char data_98724[16384];
 static unsigned char data_98728[16384];
 static unsigned char data_9872c[16384];
 static unsigned char data_98730[16384];
-static unsigned char data_98734[16384];
+static unsigned char data_98734[32]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char data_98738[16384];
 static unsigned char data_9873c[16384];
 static unsigned char data_98740[16384];
-static unsigned char data_98744[16384];
+static unsigned char data_98744[64]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char data_98748[16384];
 static unsigned char data_9874c[16384];
 static unsigned char data_98750[16384];
@@ -5880,17 +5880,17 @@ static unsigned char data_98754[16384];
 static unsigned char data_98758[16384];
 static unsigned char data_9875c[16384];
 static unsigned char data_98760[16384];
-static unsigned char data_98764[16384];
+static unsigned char data_98764[64]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char data_9876c[16384];
 static unsigned char data_98770[16384];
 static unsigned char data_98774[16384];
 static unsigned char data_98784[16384];
 static unsigned char data_98788[16384];
-static unsigned char data_9878c[16384];
+static unsigned char data_9878c[32]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char data_98790[16384];
 static unsigned char data_98794[16384];
 static unsigned char data_98798[16384];
-static unsigned char data_9879c[16384];
+static unsigned char data_9879c[64]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char data_987a0[16384];
 static unsigned char data_987a4[16384];
 static unsigned char data_987a8[16384];
@@ -5898,16 +5898,16 @@ static unsigned char data_987ac[16384];
 static unsigned char data_987b0[16384];
 static unsigned char data_987b4[16384];
 static unsigned char data_987b8[16384];
-static unsigned char data_987bc[16384];
+static unsigned char data_987bc[32]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char data_987c0[16384];
 static unsigned char data_987c4[16384];
 static unsigned char data_987c8[16384];
 static unsigned char data_987cc[16384];
-static unsigned char data_987d0[16384];
+static unsigned char data_987d0[32]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char data_987d4[16384];
 static unsigned char data_987d8[16384];
 static unsigned char data_987dc[16384];
-static unsigned char data_98800[16384];
+static unsigned char data_98800[32]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char data_98804[16384];
 static unsigned char data_98808[16384];
 static unsigned char data_9880c[16384];
@@ -5946,15 +5946,15 @@ static unsigned char data_988cc[16384];
 static unsigned char data_c9ebc[16384];
 static uintptr_t (*data_c9ec0)();
 static uintptr_t af_first;
-static unsigned char data_98814[16384];
-static unsigned char data_987e0[16384];
-static unsigned char data_9870c[16384];
-static unsigned char data_986ec[16384];
+static unsigned char data_98814[64]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
+static unsigned char data_987e0[64]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
+static unsigned char data_9870c[64]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
+static unsigned char data_986ec[64]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char AFParam_Fv[12];
-static unsigned char data_98684[16384];
-static unsigned char data_986d4[16384];
+static unsigned char data_98684[64]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
+static unsigned char data_986d4[16]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char csccr_para_test[16];
-static unsigned char data_ca658[16384];
+static unsigned char data_ca658[16]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char dmsc_awb_gain_array[12];
 static unsigned char dmsc_deir_b_array[32];
 static unsigned char dmsc_deir_con_par_array[12];
@@ -8437,7 +8437,7 @@ static unsigned char data_c800c[16384];
 static unsigned char data_c7fc4[16384];
 static unsigned char data_a719c[16384];
 static unsigned char data_a71a0[16384];
-static unsigned char data_c8068[16384];
+static unsigned char data_c8068[8]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char data_c806c[16384];
 static unsigned char data_a71ac[16384];
 static unsigned char data_a71a4[16384];
@@ -8469,7 +8469,7 @@ static uint32_t regtrace_t23_ta_custom_ev;
 static uint32_t regtrace_t23_ta_custom_tgain;
 static uint32_t regtrace_t23_ta_custom_again;
 static uint32_t regtrace_t23_ae_wdr_en;
-static unsigned char data_982bc[16384];
+static unsigned char data_982bc[64]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char Cluster_rgbg_weight[900];
 static unsigned char __attribute__((aligned(4))) AFParam_Tilt[20] = {
     0x13, 0x00, 0x00, 0x00, 0x3a, 0x00, 0x00, 0x00, 0x2a, 0x00, 0x00, 0x00, 0x16, 0x00, 0x00, 0x00, 
