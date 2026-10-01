@@ -13866,11 +13866,17 @@ static uint32_t awb_zero_zone_count;
 static uint32_t awb_irq_diag_armed;
 
 /* AWB params_refresh globals */
-static uint8_t  tisp_wb_attr[0x1c];
-static uint32_t wb_mode_gain_gr;       /* OEM data_a5a28 */
-static uint32_t wb_mode_gain_gb;       /* OEM data_a5a2c */
-static uint32_t wb_live_gain_gr_inv;   /* OEM data_a5a38 */
-static uint32_t wb_live_gain_gb_inv;   /* OEM data_a5a3c */
+/*
+ * OEM tisp_wb_attr is a 0x1c-byte block at 0xa5a24 whose words 1/2 are the
+ * mode gains (data_a5a28/data_a5a2c) and words 5/6 the live inverse gains
+ * (data_a5a38/data_a5a3c).  tisp_g_wb_mode copies the whole block, so GetWB
+ * returns the manual gains only when they live inside it: keep that layout.
+ */
+static u32 tisp_wb_attr[7];
+#define wb_mode_gain_gr     (tisp_wb_attr[1])   /* OEM data_a5a28 */
+#define wb_mode_gain_gb     (tisp_wb_attr[2])   /* OEM data_a5a2c */
+#define wb_live_gain_gr_inv (tisp_wb_attr[5])   /* OEM data_a5a38 */
+#define wb_live_gain_gb_inv (tisp_wb_attr[6])   /* OEM data_a5a3c */
 static int      awb_dn_refresh_flag;
 
 /* Tiziano_Awb_Ct_Detect BSS arrays — OEM uses these as globals in .bss */
@@ -15990,8 +15996,9 @@ static int tisp_g_wb_mode(void *out_buf)
 
 	memcpy(out, tisp_wb_attr, sizeof(tisp_wb_attr));
 	if (out[0] == 0) {
-		out[1] = 0x10000u / wb_live_gain_gr_inv;
-		out[2] = 0x10000u / wb_live_gain_gb_inv;
+		/* OEM divides unguarded; AWB has not run yet when inv == 0. */
+		out[1] = wb_live_gain_gr_inv ? 0x10000u / wb_live_gain_gr_inv : 0x100;
+		out[2] = wb_live_gain_gb_inv ? 0x10000u / wb_live_gain_gb_inv : 0x100;
 	}
 
 	return 0;
@@ -16016,6 +16023,19 @@ static int tisp_s_wb_mode(uint32_t mode, uint32_t gain_gr, uint32_t gain_gb)
 		wb_attr[0] = 0;
 		break;
 	case 1:
+		/*
+		 * OEM stores 0 as-is and writes it to the gain bank, which blanks
+		 * that channel; timps defaults wb_rgain/wb_bgain to 0.  Treat a 0
+		 * (unset) manual gain as "hold the current AWB gain" instead (1x
+		 * when AWB has not produced one yet).  Mode 9 is relative
+		 * ((g + 0x40) * awb >> 6), where 0 is a valid value.
+		 */
+		if (!gain_gr)
+			gain_gr = wb_live_gain_gr_inv ?
+				  0x10000u / wb_live_gain_gr_inv : 0x100;
+		if (!gain_gb)
+			gain_gb = wb_live_gain_gb_inv ?
+				  0x10000u / wb_live_gain_gb_inv : 0x100;
 		wb_attr[0] = 1;
 		wb_mode_gain_gr = gain_gr;
 		wb_mode_gain_gb = gain_gb;
