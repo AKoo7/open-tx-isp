@@ -5066,11 +5066,24 @@ static long frame_channel_ioctl_locked(struct file *file, unsigned int cmd,
          * STREAMON this simply waits; after STREAMOFF the completion is
          * complete_all()ed and it returns at once. */
 
-        /* OEM: private_wait_for_completion_interruptible($s0 + 0x2d4).
-         * Not under buffer_mutex: STREAMOFF must be able to complete_all(). */
-        mutex_unlock(&fcd->buffer_mutex);
-        ret = wait_for_completion_interruptible(&state->frame_done);
-        mutex_lock(&fcd->buffer_mutex);
+        /* O_NONBLOCK (stock ignores it): take a pending completion or fail
+         * with -EAGAIN, never sleep. The completion count is the same one
+         * the blocking wait consumes, so both see the same frames; after
+         * STREAMOFF, the owner's release or the last-close teardown of
+         * /dev/tx-isp it is complete_all()ed and this succeeds at once,
+         * exactly like the blocking wait. */
+        if (file->f_flags & O_NONBLOCK) {
+            if (!try_wait_for_completion(&state->frame_done))
+                return -EAGAIN;
+            ret = 0;
+        } else {
+            /* OEM: private_wait_for_completion_interruptible($s0 + 0x2d4).
+             * Not under buffer_mutex: STREAMOFF, release and the last-close
+             * teardown must be able to complete_all(). */
+            mutex_unlock(&fcd->buffer_mutex);
+            ret = wait_for_completion_interruptible(&state->frame_done);
+            mutex_lock(&fcd->buffer_mutex);
+        }
 
         if (ret >= 0) {
             /* OEM: var_78 = *($s0 + 0x2d4) + 1 — return frame count.
