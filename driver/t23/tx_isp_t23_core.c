@@ -91790,6 +91790,15 @@ static int regtrace_t23_sensor_fps_stream_on(const char *reason)
     if (want && regtrace_t23_sensor_fps_valid(want) &&
         want != regtrace_t23_sensor_held_fps())
         ret = regtrace_t23_sensor_fps_apply(want, reason);
+    /*
+     * A held request was only checked generically; one the sensor refuses
+     * must not stop the stream.  Keep the sensor's own rate and let GET
+     * report it.
+     */
+    if (ret && want == regtrace_t23_sensor_fps_request) {
+        regtrace_t23_sensor_fps_request = 0;
+        ret = 0;
+    }
     mutex_unlock(&regtrace_t23_sensor_fps_lock);
     return ret;
 }

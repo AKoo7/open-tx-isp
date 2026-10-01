@@ -24,6 +24,15 @@ recovered. The current direct input path accepts the T23 MIPI RAW8, RAW10,
 RAW12, and YUV422 format identifiers; unsupported formats and buses are
 rejected rather than guessed.
 
+Sensor FPS (`IMP_ISP_Tuning_SetSensorFPS`, tuning CID `0x80000e0`) is sent to
+the sensor as `TX_ISP_EVENT_SENSOR_FPS`; the sensor rewrites VTS and its
+integration limits and syncs them back through `module.notify`, which this
+driver installs on the bound sensor (`tx_isp_notify`). A request made before
+the first sensor stream-on is held and programmed after the sensor init table
+runs. Each accepted rate rebuilds the AE ladder for the new maximum
+integration time. GET and `/proc/jz/isp/isp-m0` (`ISP OUTPUT FPS`) report the
+rate the sensor driver holds.
+
 The 2026-09-01 MIS20C1 smoke test proved the generic contract on hardware:
 procfs reported the bound sensor's `0x20c1` chip ID, 1920x1080 mode, 30 fps,
 and registered `0x30` address; the selected `mis20c1-t23.bin` loaded; AE
