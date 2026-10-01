@@ -36,6 +36,9 @@
 #include <linux/i2c.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
+#include <linux/console.h>
+#include <asm/addrspace.h>
+#include <asm/cacheflush.h>
 #include <linux/firmware.h>
 #include <linux/io.h>
 #include <linux/interrupt.h>
@@ -46,6 +49,8 @@
 #include <linux/kthread.h>
 #include <linux/math64.h>
 #include <soc/gpio.h>
+#include <linux/vmalloc.h>
+#include <linux/crc32.h>
 #include <net/addrconf.h>
 #include <net/cfg80211.h>
 #ifdef __has_include
@@ -1070,7 +1075,11 @@ struct t21_ispcore_irq_view {
 	struct t21_ispcore_irq_view *runtime;
 	u8 pad_channels[0x74];
 	u8 *channels;
-	u8 pad_running_mode_pending[0x174 - 0x150];
+	u8 pad_flip[0x164 - 0x150];
+	u32 vflip;		/* 0x164 */
+	u32 vflip_pending;	/* 0x168 */
+	u32 hflip;		/* 0x16c */
+	u32 hflip_pending;	/* 0x170 */
 	u32 running_mode_pending;
 	u8 pad_tuning[0x19c - 0x178];
 	struct t21_tuning_state_view *tuning;
@@ -1105,8 +1114,12 @@ struct t21_isp_core_runtime_view {
 	struct t21_isp_core_runtime_view *self;
 	uint8_t pad_sensor_mode[0x12c - 0xd8];
 	uint32_t sensor_mode;
-	uint8_t pad_running_mode_pending[0x174 - 0x130];
-	uint32_t running_mode_pending;
+	uint8_t pad_flip[0x164 - 0x130];
+	uint32_t vflip;			/* 0x164 */
+	uint32_t vflip_pending;		/* 0x168 */
+	uint32_t hflip;			/* 0x16c */
+	uint32_t hflip_pending;		/* 0x170 */
+	uint32_t running_mode_pending;	/* 0x174 */
 };
 
 struct t21_isp_core_info_view {
@@ -1116,7 +1129,9 @@ struct t21_isp_core_info_view {
     uint32_t height;
     uint32_t raw_pattern;
     uint8_t pad_sensor_name[0x28];
-    const char *sensor_name;
+    /* Sensor attribute record; its first word is the name pointer (as
+     * ispcore_core_ops_init reads it), not the name itself. */
+    const char *const *sensor_attr;
     uint8_t pad_fps[0x08];
     uint32_t fps;
     uint8_t pad_tuning[0x6c];
@@ -3058,7 +3073,20 @@ static unsigned char dmsc_sp_ud_dark_thres_array[36];
 static unsigned char dmsc_sp_ud_w_stren_array[36];
 static unsigned char dmsc_uu_stren_array[36];
 static unsigned char dmsc_uu_thres_array[36];
-static uint32_t gain_old;
+/*
+ * OEM tx-isp-t21 keeps a separate static gain_old per tuning module
+ * (.data+0x41fe0 sharpen, +0x41ff0 sdns, +0x42008 mdns, +0x42010 dpc,
+ * dmsc in its own "gain_old" symbol).  The recovery shared one variable
+ * between dmsc, sdns and mdns: dmsc refreshes first in tisp_tgain_update,
+ * so sdns/mdns always saw a gain delta of 0 and stayed at init strength.
+ * The recovery addressed the sharpen and dpc ones as text offsets of
+ * get_isp_clk() and as tparams+0x1590/0x15c0 (HI16 0x40000 dropped).
+ */
+static uint32_t sharpen_gain_old = 0xffffffffU;
+static uint32_t dpc_gain_old = 0xffffffffU;
+static uint32_t dmsc_gain_old = 0xffffffffU;
+static uint32_t sdns_gain_old = 0xffffffffU;
+static uint32_t mdns_gain_old = 0xffffffffU;
 static volatile unsigned char __attribute__((aligned(4))) gain_thres[4] = {
     0x00, 0x01, 0x00, 0x00,
 };
@@ -3102,13 +3130,13 @@ static uintptr_t sharpen_birg_thres_intp;
 static uintptr_t sharpen_dark_thres_intp;
 static uintptr_t sharpen_pixel_thres_intp;
 static uintptr_t sharpen_w_stren_intp;
-static unsigned char sdns_top_func_array[12];
-static unsigned char sdns_y_bil_npv_array[60];
+static unsigned char __attribute__((aligned(4))) sdns_top_func_array[12];
+static unsigned char __attribute__((aligned(4))) sdns_y_bil_npv_array[60];
 static uintptr_t sdns_y_bil_stren_intp;
-static unsigned char sdns_y_bsp_npv_array[64];
+static unsigned char __attribute__((aligned(4))) sdns_y_bsp_npv_array[64];
 static uintptr_t sdns_y_bsp_segop_intp;
 static uintptr_t sdns_y_bsp_stren_intp;
-static unsigned char sdns_y_dsp_npv_array[64];
+static unsigned char __attribute__((aligned(4))) sdns_y_dsp_npv_array[64];
 static uintptr_t sdns_y_dsp_segop_intp;
 static uintptr_t sdns_y_dsp_stren_intp;
 static uintptr_t sdns_y_dtl_npv_0_intp;
@@ -3119,43 +3147,42 @@ static uintptr_t sdns_y_dtl_npv_4_intp;
 static uintptr_t sdns_y_dtl_segop_intp;
 static uintptr_t sdns_y_dtl_stren_intp;
 static uintptr_t sdns_y_dtl_thres_intp;
-static unsigned char sdns_y_fus_npv_array[64];
+static unsigned char __attribute__((aligned(4))) sdns_y_fus_npv_array[64];
 static uintptr_t sdns_y_fus_segop_intp;
 static uintptr_t sdns_y_fus_slope_intp;
 static uintptr_t sdns_y_fus_stren_intp;
 static uintptr_t sdns_y_lum_divop_intp;
-static unsigned char sdns_y_lum_npv_array[64];
+static unsigned char __attribute__((aligned(4))) sdns_y_lum_npv_array[64];
 static uintptr_t sdns_y_lum_segop_intp;
 static uintptr_t sdns_y_lum_stren_intp;
 static uintptr_t sdns_c_bas_wei_intp;
 static uintptr_t sdns_c_flu_cal_intp;
-static unsigned char sdns_c_flu_npv_array[64];
+static unsigned char __attribute__((aligned(4))) sdns_c_flu_npv_array[64];
 static uintptr_t sdns_c_flu_stren_intp;
 static uintptr_t sdns_c_fus_mod_intp;
-static unsigned char sdns_c_bas_wei_array[36];
-static unsigned char sdns_c_flu_cal_array[36];
-static unsigned char sdns_c_flu_stren_array[36];
-static unsigned char sdns_c_fus_mod_array[36];
-static unsigned char sdns_y_bil_stren_array[36];
-static unsigned char sdns_y_bsp_segop_array[36];
-static unsigned char sdns_y_bsp_stren_array[36];
-static unsigned char sdns_y_dsp_segop_array[36];
-static unsigned char sdns_y_dsp_stren_array[36];
-static unsigned char sdns_y_dtl_npv_0_array[36];
-static unsigned char sdns_y_dtl_npv_1_array[36];
-static unsigned char sdns_y_dtl_npv_2_array[36];
-static unsigned char sdns_y_dtl_npv_3_array[36];
-static unsigned char sdns_y_dtl_npv_4_array[36];
-static unsigned char sdns_y_dtl_segop_array[36];
-static unsigned char sdns_y_dtl_stren_array[36];
-static unsigned char sdns_y_dtl_thres_array[36];
-static unsigned char sdns_y_fus_segop_array[36];
-static unsigned char sdns_y_fus_slope_array[36];
-static unsigned char sdns_y_fus_stren_array[36];
-static unsigned char sdns_y_lum_divop_array[36];
-static unsigned char sdns_y_lum_segop_array[36];
-static unsigned char sdns_y_lum_stren_array[36];
-static uint32_t tiziano_sdns_gain_old;
+static unsigned char __attribute__((aligned(4))) sdns_c_bas_wei_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_c_flu_cal_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_c_flu_stren_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_c_fus_mod_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_bil_stren_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_bsp_segop_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_bsp_stren_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_dsp_segop_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_dsp_stren_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_dtl_npv_0_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_dtl_npv_1_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_dtl_npv_2_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_dtl_npv_3_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_dtl_npv_4_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_dtl_segop_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_dtl_stren_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_dtl_thres_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_fus_segop_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_fus_slope_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_fus_stren_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_lum_divop_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_lum_segop_array[36];
+static unsigned char __attribute__((aligned(4))) sdns_y_lum_stren_array[36];
 static uintptr_t mdns_sta_size_intp;
 static uintptr_t mdns_pbt_size_intp;
 static uint32_t mdns_pbt_ponit_array[2];
@@ -3996,6 +4023,11 @@ struct t21_sensor_ctrl_view {
 	int32_t (*get_lines_per_second)(void);
 };
 
+/* tisp_ae_ctrls, the 64-byte live AE record.  Gains are linear Q10
+ * (1024 = 1x).  Offsets 0x24..0x2c follow the stock tisp_ae_process_impl
+ * and tisp_g_ev_attr (libt21-firmware 1.0.33): 0x24 is the exposure value
+ * that event 6 carries (integration lines x total gain, Q10), 0x28 the
+ * log2 of the total gain and 0x2c the log2 of the analogue gain, both Q16. */
 struct t21_ae_ctrls_view {
 	u32 manual_mode;
 	u32 sensor_again;
@@ -4006,41 +4038,51 @@ struct t21_ae_ctrls_view {
 	u32 max_sensor_dgain;
 	u32 max_integration_time;
 	u32 max_isp_dgain;
-	u32 total_gain;
-	u16 field_28;
-	u16 field_2a;
-	u8 reserved[0x40 - 0x2c];
+	u32 ev_q10;
+	u32 total_gain_log2;
+	u32 again_log2;
+	u8 reserved[0x40 - 0x30];
 };
 
 struct t21_ev_sensor_info_view {
 	u8 reserved_00[0x2c];
-	u32 fps;
+	u32 fps;			/* numerator << 16 | denominator */
 	u8 reserved_30[0x0e];
-	u16 lines_per_second;
+	u16 total_lines;		/* frame length (VTS) in lines */
 };
 
+/* The twelve-word record tisp_g_ev_attr fills.  Field order and sources are
+ * those of the stock body; the stock isp_info_show prints them as
+ * "SENSOR Integration Time" (0x00), "ISP EV value" (0x04), "ISP EV value us"
+ * (0x08), "ISP EV value log2" (0x0c), "SENSOR analog gain" (0x10),
+ * "ISP digital gain" (0x14), "ISP Tgain DB" (0x18), "MAX SENSOR analog gain"
+ * (0x20), "MAX ISP digital gain" (0x24), "SENSOR digital gain" (0x28) and
+ * "MAX SENSOR digital gain" (0x2c).  Gains are IMP log2 units (Q5, 32 per
+ * doubling); 0x1c is the linear total gain in [24.8] (256 = 1x) that
+ * TOTAL_GAIN (0x8000027) returns. */
 struct t21_ev_attr_view {
 	u32 integration_time;
-	u32 total_gain;
-	u32 exposure_us;
-	u32 total_gain_log2;
+	u32 ev;
+	u32 expr_us;
+	u32 ev_log2;
 	u32 sensor_again_log2;
-	u32 sensor_dgain_log2;
-	u32 field_18;
-	u32 sensor_gain;
-	u32 field_20_log2;
-	u32 field_24_log2;
 	u32 isp_dgain_log2;
-	u32 field_2c_log2;
+	u32 total_gain_db;
+	u32 total_gain_q8;
+	u32 max_sensor_again_log2;
+	u32 max_isp_dgain_log2;
+	u32 sensor_dgain_log2;
+	u32 max_sensor_dgain_log2;
 };
 
+/* IMPISPEVAttr of the T21 SDK: words 1..6 of the record above. */
 struct t21_ev_user_view {
-	u32 total_gain;
-	u32 exposure_us;
-	u32 total_gain_log2;
-	u32 sensor_again_log2;
-	u32 sensor_dgain_log2;
-	u32 field_18;
+	u32 ev;
+	u32 expr_us;
+	u32 ev_log2;
+	u32 again;
+	u32 dgain;
+	u32 gain_log2;
 };
 
 /* The tuning core keeps white balance as seven 32-bit words, while the
@@ -4445,6 +4487,57 @@ static uint32_t t21_ae_current_sensor_dgain_q10;
 static uint32_t t21_ae_current_isp_dgain_q10;
 static uint32_t t21_ae_measured_luma;
 static uint32_t t21_ae_frame_count;
+/*
+ * AE loop shaping for the reconstructed controller.  The luma it measures
+ * lags the exposure it writes (sensor IT/gain latch two frames late, the
+ * ISP digital gain at the next frame start, and the statistics DMA a frame
+ * behind that), so a full proportional step every third frame overshoots:
+ * once IT and analogue gain are pinned at night the ISP digital gain
+ * hunted 1.14x..1.72x with a ~0.6 s period, which the picture shows as
+ * flicker.  Each step now multiplies the exposure by the 2^ae_step_shift-th
+ * root of target/luma (a fraction of the error in the log domain, stable
+ * against one or two steps of lag in a host model), and the exposure is
+ * held while the measured luma is within ae_hold_pct percent of the
+ * target.
+ */
+static int ae_step_shift = 3;
+module_param(ae_step_shift, int, 0644);
+MODULE_PARM_DESC(ae_step_shift, "T21 AE: step by (target/luma)^(1/2^n) (0 = full step)");
+static int ae_hold_pct = 15;
+module_param(ae_hold_pct, int, 0644);
+MODULE_PARM_DESC(ae_hold_pct, "T21 AE: hold the exposure while luma is within this percent of the target");
+/* Read-only AE diagnostics (/sys/module/tx_isp_t21/parameters/ae_dbg_*):
+ * the AE statistics IRQ count, the last weighted mean luma, the target,
+ * the update_luma result and the centre zone raw sums d/m/s/dc/sc. */
+static uint ae_dbg_stat_irqs;
+module_param(ae_dbg_stat_irqs, uint, 0444);
+static uint ae_dbg_luma;
+module_param(ae_dbg_luma, uint, 0444);
+static uint ae_dbg_target;
+module_param(ae_dbg_target, uint, 0444);
+static int ae_dbg_ret;
+module_param(ae_dbg_ret, int, 0444);
+static uint ae_dbg_zone[5];
+static int ae_dbg_zone_n = 5;
+module_param_array(ae_dbg_zone, uint, &ae_dbg_zone_n, 0444);
+
+/*
+ * ISP TOP bypass bit 4 is the ADR (local tone mapping) block: the bit order
+ * follows the pipeline (2 LSC, 3 WB, 4 ADR, 5 DMSC, 6 CCM; night bypasses
+ * 2/3/6).  On the PC420, setting it alone takes the day picture from Y 231
+ * (blown out) to Y 97 with normal AE: the AE statistics are taken before
+ * ADR, and the reconstructed dynamic ADR (Tiziano_adr_fpga) is not the
+ * stock algorithm, so its curves add ~2.4x gain the AE never sees.  Until
+ * the stock ADR is ported, keep ADR bypassed by default.
+ */
+static int adr_bypass = 1;
+module_param(adr_bypass, int, 0644);
+MODULE_PARM_DESC(adr_bypass, "T21: force TOP bypass bit 4 (ADR) (default 1 until the stock ADR is ported)");
+
+static inline uint32_t t21_top_bypass_fix(uint32_t v)
+{
+	return adr_bypass ? (v | BIT(4)) : v;
+}
 static uint32_t t21_ae_scene_cfg[11];
 static uint32_t nodes_num;
 static unsigned char af_array_fird0[900];
@@ -6583,7 +6676,7 @@ static unsigned char __attribute__((aligned(4))) tparams_night[0x15380] = {
 static uintptr_t (*flicker_hz)();
 static unsigned char custom_eff[0x1e8];
 static unsigned char sensor_info[76];
-static unsigned char mdns_ratio[360];
+static unsigned char __attribute__((aligned(4))) mdns_ratio[360];
 struct sensor_ops_entry {
     int pad[14];
     void *ops;
@@ -7313,6 +7406,7 @@ int32_t __frame_channel_vb2_streamoff(void *arg1, int32_t arg2, int32_t arg3);
 int32_t frame_channel_release(uint32_t a0, uintptr_t a1, uint32_t a2);
 int32_t fs_slake_module(void *arg1);
 static long frame_channel_unlocked_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
+static unsigned int frame_channel_poll(struct file *file, poll_table *wait);
 static bool t21_isp_valid_ptr(const void *ptr);
 void sensor_hw_reset_enable(void);
 int32_t sensor_hw_reset_disable(void);
@@ -7709,6 +7803,7 @@ int32_t tisp_g_aezone_weight(uint32_t a0);
 int32_t tisp_s_af_weight(uint32_t a0);
 int32_t tisp_g_af_weight(uint32_t a0);
 int32_t tisp_g_ev_attr(uintptr_t a0);
+static int t21_g_expr(void __user *dst);
 int32_t tisp_g_wb_attr(void *a0);
 int32_t tisp_s_wb_attr(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5, int32_t arg6);
 int32_t tisp_g_ae_hist(uint32_t a0);
@@ -7851,6 +7946,8 @@ static void regtrace_patch_relocated_data(void)
     *(const void **)((char *)fs_internal_ops + 0x0) = (const void *)&fs_activate_module;
     *(const void **)((char *)fs_internal_ops + 0x4) = (const void *)&fs_slake_module;
     *(const void **)((char *)fs_subdev_ops + 0x10) = (const void *)&fs_internal_ops;
+    BUILD_BUG_ON(offsetof(struct file_operations, poll) != 0x1c);
+    *(const void **)((char *)fs_channel_ops + 0x1c) = (const void *)&frame_channel_poll;
     *(const void **)((char *)fs_channel_ops + 0x20) = (const void *)&frame_channel_unlocked_ioctl;
     *(const void **)((char *)fs_channel_ops + 0x2c) = (const void *)&frame_channel_open;
     *(const void **)((char *)fs_channel_ops + 0x34) = (const void *)&frame_channel_release;
@@ -8646,14 +8743,352 @@ static void regtrace_patch_relocated_data(void)
     *(const void **)((char *)ispcore_sensor_ops + 0x8) = (const void *)&ispcore_sensor_ops_ioctl;
 }
 
+
+/*
+ * Debug aids for stray stores (the T23 82acd1bf class), all off by default:
+ *
+ *   text_watch=1   keep a copy of this module's core text and compare it at
+ *                  the entry and exit of every /dev/tx-isp, /dev/isp-m0 and
+ *                  non-per-frame /dev/framechanN ioctl, on proc opens and
+ *                  after every ISP event callback (AE/AWB/ADR/defog);
+ *                  report changed words with the call they were seen in.
+ *   ktext_watch=1  keep a CRC32 per 4 KiB page of the kernel text
+ *                  [ktext_start, ktext_end) (defaults: _stext/_etext of the
+ *                  thingino PC420 3.10.14 build, override from System.map)
+ *                  and compare it at the same ioctl/proc points (not per
+ *                  event: ~3.5 MiB per check).
+ *
+ * A change is reported once (the snapshot is then updated) with
+ * KERN_ERR "tx-isp-t21: TEXT CHANGED ..." / "KTEXT CHANGED ...".
+ */
+static bool t21_text_watch;
+module_param_named(text_watch, t21_text_watch, bool, 0644);
+static bool t21_ktext_watch;
+module_param_named(ktext_watch, t21_ktext_watch, bool, 0644);
+
+/*
+ * stop_trace=<ms>: log every step of the stream-off / link / release paths
+ * at KERN_ERR and sleep <ms> after each, so the last step before a silent
+ * hang or watchdog reset still leaves the camera over the network
+ * (cat /proc/kmsg via ssh).  Only used in process context.  0 = off.
+ */
+static uint t21_stop_trace;
+module_param_named(stop_trace, t21_stop_trace, uint, 0644);
+/* Set while the ISP core clocks are gated by ispcore_slake_module. */
+static int t21_isp_clocks_off;
+#define T21_STOP_TRACE(fmt, ...)						\
+	do {								\
+		if (t21_stop_trace) {					\
+			printk(KERN_ERR "tx-isp-t21 stop: " fmt "\n",	\
+			       ##__VA_ARGS__);				\
+			msleep(t21_stop_trace);				\
+		}							\
+	} while (0)
+static ulong t21_ktext_start = 0x80010400UL;
+module_param_named(ktext_start, t21_ktext_start, ulong, 0444);
+static ulong t21_ktext_end = 0x803809d0UL;
+module_param_named(ktext_end, t21_ktext_end, ulong, 0444);
+static u32 *t21_text_snap;
+static size_t t21_text_words;
+static u32 *t21_ktext_crc;
+static size_t t21_ktext_pages;
+static DEFINE_SPINLOCK(t21_text_lock);
+
+static void t21_text_check_module(const char *where, unsigned int cmd)
+{
+	const u32 *text = THIS_MODULE->module_core;
+	unsigned long flags;
+	unsigned int shown = 0;
+	size_t words, i;
+	u32 *snap;
+
+	if (!t21_text_watch || !text)
+		return;
+	if (!t21_text_snap) {
+		words = THIS_MODULE->core_text_size / sizeof(u32);
+		snap = vmalloc(words * sizeof(u32));
+		if (!snap)
+			return;
+		memcpy(snap, text, words * sizeof(u32));
+		spin_lock_irqsave(&t21_text_lock, flags);
+		if (!t21_text_snap) {
+			t21_text_words = words;
+			t21_text_snap = snap;
+			snap = NULL;
+		}
+		spin_unlock_irqrestore(&t21_text_lock, flags);
+		if (snap)
+			vfree(snap);
+		else
+			printk(KERN_WARNING "tx-isp-t21: text watch armed text=%p size=0x%zx at %s\n",
+			       text, words * sizeof(u32), where);
+		return;
+	}
+	spin_lock_irqsave(&t21_text_lock, flags);
+	snap = t21_text_snap;
+	words = t21_text_words;
+	if (memcmp(snap, text, words * sizeof(u32))) {
+		for (i = 0; i < words; i++) {
+			if (snap[i] == text[i])
+				continue;
+			if (shown++ < 16)
+				printk(KERN_ERR "tx-isp-t21: TEXT CHANGED at %p (text+0x%zx) 0x%08x -> 0x%08x seen at %s cmd=0x%x pid=%d comm=%s\n",
+				       &text[i], i * sizeof(u32), snap[i], text[i],
+				       where, cmd, current->pid, current->comm);
+			snap[i] = text[i];
+		}
+		printk(KERN_ERR "tx-isp-t21: TEXT CHANGED %u words, seen at %s cmd=0x%x\n",
+		       shown, where, cmd);
+	}
+	spin_unlock_irqrestore(&t21_text_lock, flags);
+}
+
+static void t21_text_check_kernel(const char *where, unsigned int cmd)
+{
+	unsigned long start = t21_ktext_start & PAGE_MASK;
+	size_t pages, i;
+	u32 crc;
+
+	if (!t21_ktext_watch)
+		return;
+	/* KSEG0 only: always mapped, reading it cannot fault. */
+	if (start < 0x80000000UL || t21_ktext_end <= start ||
+	    t21_ktext_end > 0x9fffffffUL)
+		return;
+	pages = (t21_ktext_end - start + PAGE_SIZE - 1) >> PAGE_SHIFT;
+	if (!t21_ktext_crc) {
+		u32 *tab = vmalloc(pages * sizeof(u32));
+
+		if (!tab)
+			return;
+		for (i = 0; i < pages; i++)
+			tab[i] = crc32_le(~0, (const u8 *)(start + (i << PAGE_SHIFT)), PAGE_SIZE);
+		t21_ktext_pages = pages;
+		t21_ktext_crc = tab;
+		printk(KERN_WARNING "tx-isp-t21: kernel text watch armed %08lx-%08lx (%zu pages) at %s\n",
+		       start, t21_ktext_end, pages, where);
+		return;
+	}
+	for (i = 0; i < t21_ktext_pages; i++) {
+		crc = crc32_le(~0, (const u8 *)(start + (i << PAGE_SHIFT)), PAGE_SIZE);
+		if (crc == t21_ktext_crc[i])
+			continue;
+		printk(KERN_ERR "tx-isp-t21: KTEXT CHANGED page %08lx seen at %s cmd=0x%x pid=%d comm=%s\n",
+		       start + (i << PAGE_SHIFT), where, cmd, current->pid, current->comm);
+		t21_ktext_crc[i] = crc;
+	}
+}
+
+/*
+ * free_watch=1: use-after-free detector for this module's large heap
+ * objects (ksize > 4 KiB: the kmalloc-8192 cache and page-backed
+ * allocations).  private_kfree fills them with 0x6b and parks them in a
+ * small quarantine instead of freeing them; every ioctl/proc hook, every
+ * frame-channel ioctl and every private_kmalloc verifies the pattern and
+ * reports the first changed word with KERN_ERR "tx-isp-t21: UAF ...".
+ * A stray write then lands in parked memory instead of a live slab
+ * freelist.  Objects leave the quarantine (and are really freed) after
+ * T21_FREE_WATCH_SLOTS later frees, or at module exit.
+ */
+#define T21_FREE_WATCH_SLOTS 24
+#define T21_FREE_WATCH_TRACK 128
+#define T21_FREE_WATCH_BYTE 0x6b
+static bool t21_free_watch;
+module_param_named(free_watch, t21_free_watch, bool, 0444);
+struct t21_free_watch_slot {
+	void *ptr;
+	size_t size;
+	void *alloc_by;
+	void *free_by;
+	unsigned long freed_at;
+};
+static struct t21_free_watch_slot t21_fw_quarantine[T21_FREE_WATCH_SLOTS];
+static unsigned int t21_fw_next;
+static struct {
+	void *ptr;
+	void *caller;
+} t21_fw_alloc[T21_FREE_WATCH_TRACK];
+static unsigned int t21_fw_reports;
+static DEFINE_SPINLOCK(t21_fw_lock);
+
+static void *t21_fw_alloc_site(void *ptr, bool forget)
+{
+	unsigned int i;
+	void *caller;
+
+	for (i = 0; i < T21_FREE_WATCH_TRACK; i++) {
+		if (t21_fw_alloc[i].ptr == ptr) {
+			caller = t21_fw_alloc[i].caller;
+			if (forget)
+				t21_fw_alloc[i].ptr = NULL;
+			return caller;
+		}
+	}
+	return NULL;
+}
+
+/* Called with t21_fw_lock held. */
+static void t21_fw_verify(struct t21_free_watch_slot *slot, const char *where)
+{
+	const u32 *word = slot->ptr;
+	size_t n = slot->size / sizeof(u32);
+	size_t i;
+
+	for (i = 0; i < n; i++) {
+		size_t j, last = i;
+
+		if (word[i] == 0x6b6b6b6bu)
+			continue;
+		for (j = i; j < n; j++)
+			if (word[j] != 0x6b6b6b6bu)
+				last = j;
+		if (t21_fw_reports++ < 64)
+			printk(KERN_ERR "tx-isp-t21: UAF obj=%p size=%zu first_off=0x%zx val=%08x last_off=0x%zx alloc_by=%p free_by=%p freed %lu ms ago, seen at %s pid=%d comm=%s\n",
+			       slot->ptr, slot->size, i * 4, word[i], last * 4,
+			       slot->alloc_by, slot->free_by,
+			       (unsigned long)jiffies_to_msecs(jiffies -
+							       slot->freed_at),
+			       where, current->pid, current->comm);
+		memset(slot->ptr, T21_FREE_WATCH_BYTE, slot->size);
+		return;
+	}
+}
+
+static void t21_free_watch_check(const char *where)
+{
+	unsigned long flags;
+	unsigned int i;
+
+	if (!t21_free_watch)
+		return;
+	spin_lock_irqsave(&t21_fw_lock, flags);
+	for (i = 0; i < T21_FREE_WATCH_SLOTS; i++)
+		if (t21_fw_quarantine[i].ptr)
+			t21_fw_verify(&t21_fw_quarantine[i], where);
+	spin_unlock_irqrestore(&t21_fw_lock, flags);
+}
+
+static void t21_free_watch_note_alloc(void *ptr, void *caller)
+{
+	unsigned long flags;
+	unsigned int i;
+
+	if (!t21_free_watch || !ptr || ksize(ptr) <= 4096)
+		return;
+	spin_lock_irqsave(&t21_fw_lock, flags);
+	for (i = 0; i < T21_FREE_WATCH_TRACK; i++) {
+		if (!t21_fw_alloc[i].ptr) {
+			t21_fw_alloc[i].ptr = ptr;
+			t21_fw_alloc[i].caller = caller;
+			break;
+		}
+	}
+	spin_unlock_irqrestore(&t21_fw_lock, flags);
+	printk(KERN_ERR "tx-isp-t21: fw alloc %p size=%zu by %p\n", ptr,
+	       ksize(ptr), caller);
+}
+
+/* Returns true when the object was parked (the caller must not free it). */
+static bool t21_free_watch_park(void *ptr, void *caller)
+{
+	struct t21_free_watch_slot *slot;
+	unsigned long flags;
+	void *evict = NULL;
+	size_t size;
+
+	if (!t21_free_watch || !ptr || ZERO_OR_NULL_PTR(ptr))
+		return false;
+	size = ksize(ptr);
+	if (size <= 4096)
+		return false;
+	spin_lock_irqsave(&t21_fw_lock, flags);
+	slot = &t21_fw_quarantine[t21_fw_next];
+	t21_fw_next = (t21_fw_next + 1) % T21_FREE_WATCH_SLOTS;
+	if (slot->ptr) {
+		t21_fw_verify(slot, "quarantine-evict");
+		evict = slot->ptr;
+	}
+	slot->ptr = ptr;
+	slot->size = size;
+	slot->alloc_by = t21_fw_alloc_site(ptr, true);
+	slot->free_by = caller;
+	slot->freed_at = jiffies;
+	memset(ptr, T21_FREE_WATCH_BYTE, size);
+	spin_unlock_irqrestore(&t21_fw_lock, flags);
+	printk(KERN_ERR "tx-isp-t21: fw park %p size=%zu by %p\n", ptr, size,
+	       caller);
+	kfree(evict);
+	return true;
+}
+
+static void t21_free_watch_flush(void)
+{
+	unsigned int i;
+
+	t21_free_watch_check("module-exit");
+	for (i = 0; i < T21_FREE_WATCH_SLOTS; i++) {
+		kfree(t21_fw_quarantine[i].ptr);
+		t21_fw_quarantine[i].ptr = NULL;
+	}
+}
+
+static void t21_text_check(const char *where, unsigned int cmd)
+{
+	t21_text_check_module(where, cmd);
+	t21_text_check_kernel(where, cmd);
+	t21_free_watch_check(where);
+}
+
+static void t21_text_watch_free(void)
+{
+	vfree(t21_text_snap);
+	t21_text_snap = NULL;
+	vfree(t21_ktext_crc);
+	t21_ktext_crc = NULL;
+}
+
+static long t21_tx_isp_ioctl_watch(struct file *file, unsigned int cmd, unsigned long arg)
+{
+	long ret;
+
+	t21_text_check("tx_isp_ioctl-enter", cmd);
+	ret = tx_isp_unlocked_ioctl(file, cmd, arg);
+	t21_text_check("tx_isp_ioctl-exit", cmd);
+	return ret;
+}
+
+static long t21_isp_m0_ioctl_watch(struct file *file, unsigned int cmd, unsigned long arg)
+{
+	long ret;
+
+	t21_text_check("isp_m0_ioctl-enter", cmd);
+	ret = isp_core_tunning_unlocked_ioctl(file, cmd, arg);
+	t21_text_check("isp_m0_ioctl-exit", cmd);
+	return ret;
+}
+
+static int t21_isp_info_open_watch(struct inode *inode, struct file *file)
+{
+	t21_text_check("proc-isp-info-open", 0);
+	return dump_isp_info_open(inode, file);
+}
+
 static struct file_operations isp_core_tunning_fops = {
     .owner = THIS_MODULE,
-    .unlocked_ioctl = (long (*)(struct file *, unsigned int, unsigned long))isp_core_tunning_unlocked_ioctl,
+    .unlocked_ioctl = t21_isp_m0_ioctl_watch,
     .open = (int (*)(struct inode *, struct file *))isp_core_tunning_open,
     .release = (int (*)(struct inode *, struct file *))isp_core_tunning_release,
 };
+/*
+ * Stock isp_info_proc_fops (.data+0x45180): open = dump_isp_info_open,
+ * read = seq_read, llseek = seq_lseek, release = single_release.  The
+ * recovery dropped .open, so every read of /proc/jz/isp/isp-m0 ran
+ * seq_read()/single_release() on a NULL seq_file (first T21 hardware
+ * run: oopses in timpsd and cat, then a reboot).
+ */
 static struct file_operations isp_info_proc_fops = {
     .owner = THIS_MODULE,
+    .open = t21_isp_info_open_watch,
     .llseek = (loff_t (*)(struct file *, loff_t, int))seq_lseek,
     .read = (ssize_t (*)(struct file *, char __user *, size_t, loff_t *))seq_read,
     .release = (int (*)(struct inode *, struct file *))single_release,
@@ -8668,13 +9103,16 @@ static struct file_operations sinfo_fops = {
 };
 static struct file_operations tx_isp_fops = {
     .owner = THIS_MODULE,
-    .unlocked_ioctl = (long (*)(struct file *, unsigned int, unsigned long))tx_isp_unlocked_ioctl,
+    .unlocked_ioctl = t21_tx_isp_ioctl_watch,
     .open = (int (*)(struct inode *, struct file *))tx_isp_open,
     .release = (int (*)(struct inode *, struct file *))tx_isp_release,
 };
+/* Stock also has read/llseek/write; only open is wired here, so at least
+ * free the seq_file it allocates. */
 static struct file_operations video_input_cmd_fops = {
     .owner = THIS_MODULE,
     .open = (int (*)(struct inode *, struct file *))video_input_cmd_open,
+    .release = (int (*)(struct inode *, struct file *))single_release,
 };
 static struct miscdevice misc_registered = {
     .minor = MISC_DYNAMIC_MINOR,
@@ -8845,12 +9283,19 @@ int private_kthread_stop(struct task_struct *k)
 
 void *private_kmalloc(size_t size, gfp_t flags)
 {
-    return kmalloc(size, flags);
+    void *p;
+
+    t21_free_watch_check("kmalloc");
+    p = kmalloc(size, flags);
+    t21_free_watch_note_alloc(p, __builtin_return_address(0));
+    return p;
 }
 
 
 void private_kfree(void *p)
 {
+    if (t21_free_watch_park(p, __builtin_return_address(0)))
+        return;
     kfree(p);
 }
 
@@ -10149,43 +10594,14 @@ int32_t isp_vic_interrupt_service_routine(void *arg1)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000001904 origin=fragment_seed original=dump_isp_vic_frd_open */
 int32_t dump_isp_vic_frd_open(uint32_t a0, uint32_t a1)
 {
-    uint32_t local_10 = 0;
-    uint32_t local_14 = 0;
-    uint32_t a2 = 0;
-    uint32_t a3 = 0;
-    uint32_t ra = 0;
-    uint32_t s0 = 0;
-    uint32_t t9 = 0;
-    uint32_t *v0 = 0;
-
-    /* fragment 0: Prologue */
-    /* function prologue: stack frame and callee-saved register setup */
-
-    /* fragment 1: CallSetup */
-    s0 = a1;
-    v0 = (uintptr_t *)PDE_DATA((void *)(int32_t *)a0); /* jalr target resolved by relocation */
-
-    /* fragment 2: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    /* fragment 3: Arithmetic */
-    a0 = s0;
-    a1 = (uintptr_t)&slock;
-
-    /* fragment 4: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    /* fragment 5: Arithmetic */
-    t9 = (uintptr_t)&private_single_open_size;
-    a1 = a1 + 6476;
-    a2 = v0;
-    a3 = 1024;
-    t9 = t9;
-
-    /* fragment 6: IndirectTailCall */
-    return private_single_open_size(a0, a1, a2, a3);
-
-    return 0;
+	/*
+	 * Stock: single_open_size(file, isp_vic_frd_show, PDE_DATA(inode), size).
+	 * The recovery passed &slock + 6476 (a .text offset bound to a data
+	 * symbol) as the show callback, i.e. a data address to execute.
+	 */
+	return private_single_open_size((struct file *)(uintptr_t)a1,
+		(int (*)(struct seq_file *, void *))isp_vic_frd_show,
+		PDE_DATA((struct inode *)(uintptr_t)a0), 1024);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000194c origin=model_output original=isp_vic_frd_show */
@@ -11185,7 +11601,12 @@ int32_t vin_s_stream(void *arg1, int32_t arg2)
         video = sensor->ops ? sensor->ops->video : NULL;
         if (video == NULL || video->s_stream == NULL)
             return -515;
+        if (!arg2)
+            T21_STOP_TRACE("vin: sensor %p s_stream(0) fn=%pS", sensor,
+                           video->s_stream);
         state = video->s_stream(sensor, arg2);
+        if (!arg2)
+            T21_STOP_TRACE("vin: sensor s_stream(0) ret=%d", state);
         if (state != 0)
             return state;
     }
@@ -11652,43 +12073,14 @@ int tx_isp_vin_activate_subdev(void *arg1)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000002eac origin=fragment_seed original=video_input_cmd_open */
 int32_t video_input_cmd_open(uint32_t a0, uint32_t a1)
 {
-    uint32_t local_10 = 0;
-    uint32_t local_14 = 0;
-    uint32_t a2 = 0;
-    uint32_t a3 = 0;
-    uint32_t ra = 0;
-    uint32_t s0 = 0;
-    uint32_t t9 = 0;
-    uint32_t *v0 = 0;
-
-    /* fragment 0: Prologue */
-    /* function prologue: stack frame and callee-saved register setup */
-
-    /* fragment 1: CallSetup */
-    s0 = a1;
-    v0 = (uintptr_t *)PDE_DATA((void *)(int32_t *)a0); /* jalr target resolved by relocation */
-
-    /* fragment 2: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    /* fragment 3: Arithmetic */
-    a0 = s0;
-    a1 = (uintptr_t)&slock;
-
-    /* fragment 4: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    /* fragment 5: Arithmetic */
-    t9 = (uintptr_t)&private_single_open_size;
-    a1 = a1 + 14200;
-    a2 = v0;
-    a3 = 512;
-    t9 = t9;
-
-    /* fragment 6: IndirectTailCall */
-    return private_single_open_size(a0, a1, a2, a3);
-
-    return 0;
+	/*
+	 * Stock: single_open_size(file, video_input_cmd_show, PDE_DATA(inode), size).
+	 * The recovery passed &slock + 14200 (a .text offset bound to a data
+	 * symbol) as the show callback, i.e. a data address to execute.
+	 */
+	return private_single_open_size((struct file *)(uintptr_t)a1,
+		video_input_cmd_show,
+		PDE_DATA((struct inode *)(uintptr_t)a0), 512);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000002ef4 origin=model_output original=video_input_cmd_set */
@@ -13317,7 +13709,6 @@ int32_t apical_isp_core_ops_s_ctrl(int32_t *arg1, int32_t *arg2, int32_t arg3)
 	cmd = (uint32_t)arg2[0];
 	value = (uint32_t)arg2[1];
 	switch (cmd) {
-	case 0x00980915:
 	case 0x08000001:
 	case 0x08000002:
 	case 0x08000006:
@@ -13325,7 +13716,7 @@ int32_t apical_isp_core_ops_s_ctrl(int32_t *arg1, int32_t *arg2, int32_t arg3)
 	case 0x08000008:
 	case 0x08000022:
 	case 0x08000023:
-	case 0x0800002a:
+	case 0x0800002c: /* stock: no-op (OpenIMP sends Set/GetIntegrationTime here) */
 	case 0x0800002e:
 	case 0x08000060:
 	case 0x08000061:
@@ -13345,7 +13736,6 @@ int32_t apical_isp_core_ops_s_ctrl(int32_t *arg1, int32_t *arg2, int32_t arg3)
 	case 0x08000167:
 	case 0x08000168:
 	case 0x08000169:
-	case 0x00980914:
 	case 0x0098091f:
 	case 0x009a0914:
 	case 0x009a091a:
@@ -13364,7 +13754,7 @@ int32_t apical_isp_core_ops_s_ctrl(int32_t *arg1, int32_t *arg2, int32_t arg3)
 	}
 	case 0x0800002b:
 		return apical_isp_gamma_s_attr((uintptr_t)arg2);
-	case 0x0800002c:
+	case 0x0800002a: /* stock decision tree at 0x3e18: 0x2a = highlight depress */
 		return tisp_s_Hilightdepress(value);
 	case 0x0800002d:
 		return apical_isp_ae_zone_weight_s_attr(arg2);
@@ -13388,6 +13778,33 @@ int32_t apical_isp_core_ops_s_ctrl(int32_t *arg1, int32_t *arg2, int32_t arg3)
 		return tisp_s_3dns_ratio(value);
 	case 0x080000a2:
 		return tisp_s_drc_strength(value);
+	case 0x00980914:	/* V4L2_CID_HFLIP, OEM s_ctrl @0x3ff4 */
+	case 0x00980915: {	/* V4L2_CID_VFLIP, OEM s_ctrl @0x4020 */
+		struct t21_tuning_state_view *tuning = (void *)arg1;
+		struct t21_isp_core_runtime_view *core;
+
+		BUILD_BUG_ON(offsetof(struct t21_isp_core_runtime_view, vflip) != 0x164);
+		BUILD_BUG_ON(offsetof(struct t21_isp_core_runtime_view, hflip_pending) != 0x170);
+		if (!tuning || !tuning->core || !tuning->core->self)
+			return -EINVAL;
+		core = tuning->core->self;
+		/* Cached for G_CTRL at tuning+0xeb4 (H) / +0xeb0 (V); the ISR
+		 * applies the change through tisp_mirror/flip_enable. */
+		if (cmd == 0x00980914) {
+			*(uint32_t *)((char *)tuning + 0xeb4) = value;
+			if (core->hflip != value) {
+				core->hflip = value;
+				core->hflip_pending = 1;
+			}
+		} else {
+			*(uint32_t *)((char *)tuning + 0xeb0) = value;
+			if (core->vflip != value) {
+				core->vflip = value;
+				core->vflip_pending = 1;
+			}
+		}
+		return 0;
+	}
 	case 0x080000e1: {
 		struct t21_tuning_state_view *tuning = (void *)arg1;
 
@@ -13434,50 +13851,17 @@ int32_t apical_isp_max_again_g_ctrl_isra_60(uintptr_t a0) __asm__("apical_isp_ma
 #endif
 int32_t apical_isp_max_again_g_ctrl_isra_60(uintptr_t a0)
 {
-    uint32_t local_10 = 0;
-    uint32_t local_30 = 0;
-    uint32_t local_54 = 0;
-    uint32_t local_58 = 0;
-    uint32_t local_5c = 0;
-    uint32_t a1 = 0;
-    uint32_t a2 = 0;
-    uint32_t a3 = 0;
-    uint32_t ra = 0;
-    uint32_t s0 = 0;
-    uintptr_t s1 = 0;
-    uintptr_t *v0 = 0;
+	/* The fragment rebuild passed tisp_g_ev_attr a single stack word for
+	 * its twelve-word record, smashing the frame on every query. */
+	struct t21_ev_attr_view ev;
+	int32_t ret = tisp_g_ev_attr((uintptr_t)&ev);
 
-    /* fragment 0: Prologue */
-    /* function prologue: stack frame and callee-saved register setup */
-
-    /* fragment 1: CallSetup */
-    s1 = a0;
-    v0 = (uintptr_t *)((uintptr_t (*)(int32_t *))(uintptr_t)tisp_g_ev_attr)(&local_10); /* jalr target resolved by relocation */
-
-    /* fragment 2: Branch */
-    s0 = v0;
-    if (v0 == 0) { goto apical_isp_max_again_g_ctrl_isra_600x58; }
-
-    /* fragment 3: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))(int32_t *)isp_printf)(1, &LC16, &__param_str_isp_clk, 2094); /* jalr target resolved by relocation */
-
-    /* fragment 4: Branch */
-    goto apical_isp_max_again_g_ctrl_isra_600x64;
-
-apical_isp_max_again_g_ctrl_isra_600x58:
-    /* fragment 5: StackAccess */
-    v0 = local_30;
-    *(uint32_t *)((char *)s1 + 4) = v0;
-    ra = local_5c;
-
-apical_isp_max_again_g_ctrl_isra_600x64:
-    /* fragment 6: Arithmetic */
-    v0 = s0;
-
-    /* fragment 7: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    return 0;
+	if (ret) {
+		isp_printf(1, "%s:%d get control failed!!!\n", "apical_isp_max_again_g_ctrl", 2094);
+		return ret;
+	}
+	*(uint32_t *)((char *)a0 + 4) = ev.max_sensor_again_log2;
+	return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000050b4 origin=fragment_seed original=apical_isp_max_dgain_g_ctrl.isra.61 */
@@ -13486,50 +13870,17 @@ int32_t apical_isp_max_dgain_g_ctrl_isra_61(uintptr_t a0) __asm__("apical_isp_ma
 #endif
 int32_t apical_isp_max_dgain_g_ctrl_isra_61(uintptr_t a0)
 {
-    uint32_t local_10 = 0;
-    uint32_t local_34 = 0;
-    uint32_t local_54 = 0;
-    uint32_t local_58 = 0;
-    uint32_t local_5c = 0;
-    uint32_t a1 = 0;
-    uint32_t a2 = 0;
-    uint32_t a3 = 0;
-    uint32_t ra = 0;
-    uint32_t s0 = 0;
-    uintptr_t s1 = 0;
-    uintptr_t *v0 = 0;
+	/* The fragment rebuild passed tisp_g_ev_attr a single stack word for
+	 * its twelve-word record, smashing the frame on every query. */
+	struct t21_ev_attr_view ev;
+	int32_t ret = tisp_g_ev_attr((uintptr_t)&ev);
 
-    /* fragment 0: Prologue */
-    /* function prologue: stack frame and callee-saved register setup */
-
-    /* fragment 1: CallSetup */
-    s1 = a0;
-    v0 = (uintptr_t *)((uintptr_t (*)(int32_t *))(uintptr_t)tisp_g_ev_attr)(&local_10); /* jalr target resolved by relocation */
-
-    /* fragment 2: Branch */
-    s0 = v0;
-    if (v0 == 0) { goto apical_isp_max_dgain_g_ctrl_isra_610x58; }
-
-    /* fragment 3: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))(int32_t *)isp_printf)(1, &LC16, &__param_str_isp_clk, 2120); /* jalr target resolved by relocation */
-
-    /* fragment 4: Branch */
-    goto apical_isp_max_dgain_g_ctrl_isra_610x64;
-
-apical_isp_max_dgain_g_ctrl_isra_610x58:
-    /* fragment 5: StackAccess */
-    v0 = local_34;
-    *(uint32_t *)((char *)s1 + 4) = v0;
-    ra = local_5c;
-
-apical_isp_max_dgain_g_ctrl_isra_610x64:
-    /* fragment 6: Arithmetic */
-    v0 = s0;
-
-    /* fragment 7: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    return 0;
+	if (ret) {
+		isp_printf(1, "%s:%d get control failed!!!\n", "apical_isp_max_dgain_g_ctrl", 2120);
+		return ret;
+	}
+	*(uint32_t *)((char *)a0 + 4) = ev.max_isp_dgain_log2;
+	return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000512c origin=fragment_seed original=apical_isp_ev_g_attr.isra.62 */
@@ -13558,13 +13909,14 @@ int32_t apical_isp_ev_g_attr_isra_62(uintptr_t a0)
 		return ret;
 	}
 
-	/* OEM userspace ABI publishes internal words 1 through 6. */
-	user.total_gain = ev.total_gain;
-	user.exposure_us = ev.exposure_us;
-	user.total_gain_log2 = ev.total_gain_log2;
-	user.sensor_again_log2 = ev.sensor_again_log2;
-	user.sensor_dgain_log2 = ev.sensor_dgain_log2;
-	user.field_18 = ev.field_18;
+	/* OEM userspace ABI publishes internal words 1 through 6:
+	 * IMPISPEVAttr {ev, expr_us, ev_log2, again, dgain, gain_log2}. */
+	user.ev = ev.ev;
+	user.expr_us = ev.expr_us;
+	user.ev_log2 = ev.ev_log2;
+	user.again = ev.sensor_again_log2;
+	user.dgain = ev.isp_dgain_log2;
+	user.gain_log2 = ev.total_gain_db;
 
 	return private_copy_to_user((void __user *)(uintptr_t)ctrl[1], &user,
 				    sizeof(user)) ? -EFAULT : 0;
@@ -13576,79 +13928,24 @@ int32_t apical_isp_gamma_g_attr_isra_63(uintptr_t a0) __asm__("apical_isp_gamma_
 #endif
 int32_t apical_isp_gamma_g_attr_isra_63(uintptr_t a0)
 {
-    uint32_t local_10 = 0;
-    uint32_t local_214 = 0;
-    uint32_t local_318 = 0;
-    uint32_t local_31c = 0;
-    uint32_t local_320 = 0;
-    uint32_t local_324 = 0;
-    uint32_t a1 = 0;
-    uint32_t a2 = 0;
-    uint32_t a3 = 0;
-    uint32_t ra = 0;
-    uint32_t s0 = 0;
-    uint32_t s1 = 0;
-    uintptr_t s2 = 0;
-    uintptr_t *v0 = 0;
-    uint32_t v1 = 0;
+	/* OEM @0x4904: tisp_g_Gamma fills 129 words (516 bytes) into a stack
+	 * buffer, which are narrowed to u16 and copied out as 258 bytes.  The
+	 * fragment rebuild passed a single 4-byte local. */
+	uint32_t gamma[129];
+	uint16_t out[129];
+	int32_t ret;
+	int i;
 
-    /* fragment 0: Prologue */
-    /* function prologue: stack frame and callee-saved register setup */
-
-    /* fragment 1: CallSetup */
-    s1 = (uintptr_t)&local_10;
-    s2 = a0;
-    v0 = (uintptr_t *)((uintptr_t (*)(int32_t *))(uintptr_t)tisp_g_Gamma)(&local_10); /* jalr target resolved by relocation */
-
-    /* fragment 2: Arithmetic */
-    s0 = v0;
-
-    /* fragment 3: Branch */
-    v1 = 129;
-    if (v0 == 0) { goto apical_isp_gamma_g_attr_isra_630x64; }
-
-    /* fragment 4: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))(int32_t *)isp_printf)(1, &LC17, &__param_str_isp_clk, 1128); /* jalr target resolved by relocation */
-
-    /* fragment 5: Branch */
-    goto apical_isp_gamma_g_attr_isra_630xac;
-
-apical_isp_gamma_g_attr_isra_630x64:
-    /* fragment 6: Arithmetic */
-    a2 = -2;
-    a1 = -4;
-
-apical_isp_gamma_g_attr_isra_630x6c:
-    /* fragment 7: Arithmetic */
-    a3 = v1 * a2;
-    a0 = (uint32_t *)&local_214;
-    v0 = a3 + a0;
-    a3 = v1 * a1;
-    v1 = v1 - 1;
-    a0 = a3 + s1;
-
-    /* fragment 8: MemoryAccess */
-    a0 = *(uint32_t *)((char *)a0 + 516);
-
-    /* fragment 9: Branch */
-    *(uint16_t *)((char *)v0 + 258) = a0;
-    if (v1 != 0) { goto apical_isp_gamma_g_attr_isra_630x6c; }
-
-    /* fragment 10: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t))(uintptr_t)private_copy_to_user)(*(uint32_t *)((char *)(s2) + 4), &local_214, 258); /* jalr target resolved by relocation */
-
-    /* fragment 11: Epilogue */
-    /* function epilogue: restore registers and return */
-    return (int32_t)v0;
-
-apical_isp_gamma_g_attr_isra_630xac:
-    /* fragment 12: Arithmetic */
-    v0 = s0;
-
-    /* fragment 13: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    return 0;
+	ret = tisp_g_Gamma((uint32_t)(uintptr_t)gamma);
+	if (ret) {
+		isp_printf(1, "%s:%d get control failed!!!\n",
+			   "apical_isp_gamma_g_attr", 1128);
+		return ret;
+	}
+	for (i = 0; i < 129; i++)
+		out[i] = (uint16_t)gamma[i];
+	private_copy_to_user(*(void **)((char *)a0 + 4), out, sizeof(out));
+	return 0;	/* OEM returns the tisp_g_Gamma result */
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000052a8 origin=model_output original=apical_isp_ae_g_roi.isra.64 */
@@ -13683,7 +13980,7 @@ int32_t apical_isp_ae_g_roi_isra_64(void *arg1)
         src = (uint32_t *)((uintptr_t)buf + row * 0x3c);
         dst = &var_f8[row * 0xf];
         for (col = 0; col < 0xf; col++) {
-            ((void **)dst)[col] = (char)src[col];
+            dst[col] = (char)src[col];	/* OEM sb: one byte per weight */
         }
     }
 
@@ -13781,7 +14078,7 @@ int32_t apical_isp_ae_zone_weight_g_attr_isra_70(void *arg1)
         dst = &var_f8[row * 0xf];
         for (col = 0; col < 0xf; col++) {
             val = src[col];
-            ((void **)dst)[col] = (char)val;
+            dst[col] = (char)val;	/* OEM sb: one byte per weight */
         }
     }
 
@@ -13848,7 +14145,7 @@ int32_t apical_isp_af_weight_g_attr_isra_74(void *arg1)
         src = (uint8_t *)((uintptr_t)buf + row * 0x3c);
         dst = &var_f8[row * 15];
         for (col = 0; col < 15; col++) {
-            ((void **)(uintptr_t)dst)[col] = *(uint8_t *)&src[col * 4];
+            dst[col] = src[col * 4];	/* OEM sb: one byte per weight */
         }
     }
 
@@ -13884,6 +14181,32 @@ int32_t apical_isp_core_ops_g_ctrl(int32_t *arg1, int32_t *arg2, int32_t arg3)
 
 	if (cmd == base + 0x2b) {
 		return apical_isp_gamma_g_attr(arg2);
+	}
+
+	/* The stock tree splits at cmd >= 0x800002c; this rebuild nests the
+	 * 0x800002c..0x8000045 handlers under cmd >= 0x8000084 below, where
+	 * they cannot be reached, so every control in that range fell through
+	 * to the high-light-depress getter (GetAeLuma returned the HLD
+	 * strength).  Several handlers in that block still carry decompiler
+	 * damage (AE histogram, zone/AF weight byte packing, AF attribute
+	 * reads), so route only the AE readbacks here, as the stock does. */
+	if (cmd == base + 0x2f) {		/* AE min: integration, again */
+		u32 ae_min[2];
+
+		tisp_g_ae_min((uintptr_t)ae_min);
+		return private_copy_to_user((void __user *)(uintptr_t)arg2[1],
+					    ae_min, sizeof(ae_min)) ?
+			-EFAULT : 0;
+	}
+	if (cmd == base + 0x30)			/* AE zones: not published */
+		return 0;
+	/* 0x8000031 is the T21 SDK's AE luma.  0x8000033 (the T23/T31 id,
+	 * rejected by the stock T21 dispatcher) is answered too, for OpenIMP
+	 * builds that still send it on T21. */
+	if (cmd == base + 0x31 || cmd == base + 0x33) {
+		tisp_g_ae_luma(&luma);
+		arg2[1] = luma;
+		return 0;
 	}
 
 	if (cmd >= base + 0x84) {
@@ -14123,25 +14446,21 @@ int32_t apical_isp_core_ops_g_ctrl(int32_t *arg1, int32_t *arg2, int32_t arg3)
 				}
 			}
 			if (cmd == base + 0x27) {
-				const struct t21_ae_ctrls_view *ae =
-					(const void *)tisp_ae_ctrls;
+				struct t21_ev_attr_view ev;
 
-				/* TOTAL_GAIN is a scalar control.  The collapsed body
-				 * rebuilt the complete EV attribute record and then
-				 * accidentally returned its first word (integration time).
-				 * Besides being the wrong ABI value, that needlessly entered
-				 * the recovered fixed-point/log2 helpers once per second.
-				 * Read the canonical AE state directly, as the OEM update
-				 * worker does internally. */
-				BUILD_BUG_ON(offsetof(struct t21_ae_ctrls_view,
-						      total_gain) != 0x24);
-				arg2[1] = ae->total_gain >> 10;
+				/* Stock: tisp_g_ev_attr word 0x1c, the linear total
+				 * gain in [24.8] (256 = 1x), stored inline in the
+				 * control value.  The first rebuild returned the AE
+				 * EV word >> 10 instead. */
+				ret = tisp_g_ev_attr((uintptr_t)&ev);
+				if (ret)
+					return ret;
+				arg2[1] = ev.total_gain_q8;
 				return 0;
 			}
 			if (cmd < base + 0x28) {
-				if (cmd == base + 0x25) {
-					return 0;
-				}
+				if (cmd == base + 0x25)
+					return t21_g_expr((void __user *)(uintptr_t)arg2[1]);
 				if (cmd != base + 0x26) {
 					return -1;
 				}
@@ -15543,6 +15862,13 @@ int32_t isp_irq_handle(uint32_t a0, uintptr_t a1)
     (void)a0;
 	if (!t21_isp_valid_ptr((void *)a1))
 		return IRQ_NONE;
+	if (ACCESS_ONCE(t21_isp_clocks_off)) {
+		static int reported;
+
+		if (!reported++)
+			printk(KERN_ERR "tx-isp-t21: ISP IRQ with core clocks gated - not touching registers\n");
+		return IRQ_HANDLED;
+	}
 	root = (void *)(a1 - 0x80);
 	graph = (void *)root;
     core = root && root->ops ? root->ops->core : NULL;
@@ -15796,43 +16122,14 @@ int32_t fs_activate_module(void *arg1)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000007704 origin=fragment_seed original=dump_isp_framesource_open */
 int32_t dump_isp_framesource_open(uint32_t a0, uint32_t a1)
 {
-    uint32_t local_10 = 0;
-    uint32_t local_14 = 0;
-    uint32_t a2 = 0;
-    uint32_t a3 = 0;
-    uint32_t ra = 0;
-    uint32_t s0 = 0;
-    uint32_t t9 = 0;
-    uint32_t *v0 = 0;
-
-    /* fragment 0: Prologue */
-    /* function prologue: stack frame and callee-saved register setup */
-
-    /* fragment 1: CallSetup */
-    s0 = a1;
-    v0 = (uintptr_t *)PDE_DATA((void *)(int32_t *)a0); /* jalr target resolved by relocation */
-
-    /* fragment 2: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    /* fragment 3: Arithmetic */
-    a0 = s0;
-    a1 = (uintptr_t)&slock;
-
-    /* fragment 4: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    /* fragment 5: Arithmetic */
-    t9 = (uintptr_t)&private_single_open_size;
-    a1 = a1 + 30540;
-    a2 = v0;
-    a3 = 2048;
-    t9 = t9;
-
-    /* fragment 6: IndirectTailCall */
-    return private_single_open_size(a0, a1, a2, a3);
-
-    return 0;
+	/*
+	 * Stock: single_open_size(file, isp_framesource_show, PDE_DATA(inode), size).
+	 * The recovery passed &slock + 30540 (a .text offset bound to a data
+	 * symbol) as the show callback, i.e. a data address to execute.
+	 */
+	return private_single_open_size((struct file *)(uintptr_t)a1,
+		(int (*)(struct seq_file *, void *))isp_framesource_show,
+		PDE_DATA((struct inode *)(uintptr_t)a0), 2048);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000774c origin=fragment_seed original=isp_framesource_show */
@@ -16673,9 +16970,13 @@ int32_t frame_channel_release(uint32_t a0, uintptr_t a1, uint32_t a2)
         ret = -22;
     } else {
         ret = 0;
+        T21_STOP_TRACE("framechan release chan=%p state=%d", (void *)s0,
+                       *(int32_t *)((char *)s0 + 0x2a4));
         if (*(int32_t *)((char *)s0 + 0x2a4) == 4) {
             __frame_channel_vb2_streamoff((void *)s0, *(int32_t *)((char *)s0 + 0x24), a2);
+            T21_STOP_TRACE("framechan release streamoff done");
             __vb2_queue_free((uintptr_t)((char *)s0 + 0x24), *(uint32_t *)((char *)s0 + 0x20c));
+            T21_STOP_TRACE("framechan release queue freed");
             *(int32_t *)((char *)s0 + 0x2a4) = 2;
         }
     }
@@ -16713,6 +17014,25 @@ int32_t fs_slake_module(void *arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000008858 origin=model_output original=frame_channel_unlocked_ioctl */
+/*
+ * The stock fs_channel_ops has no .poll, so poll()/select() on
+ * /dev/framechanN always reported readable.  OpenIMP's frame worker
+ * select()s before its non-blocking DQBUF; wait on the channel's done queue.
+ */
+static unsigned int frame_channel_poll(struct file *file, poll_table *wait)
+{
+	struct t21_frame_channel_abi *ch = file->private_data;
+
+	if (!t21_isp_valid_ptr(ch))
+		return POLLERR;
+	poll_wait(file, (wait_queue_head_t *)ch->wait_queue, wait);
+	if (!(ch->streaming & 1))
+		return POLLERR;
+	if (!list_empty(&ch->done))
+		return POLLIN | POLLRDNORM;
+	return 0;
+}
+
 static long frame_channel_unlocked_ioctl(struct file *file, unsigned int cmd,
 					 unsigned long arg)
 {
@@ -16736,6 +17056,12 @@ static long frame_channel_unlocked_ioctl(struct file *file, unsigned int cmd,
 
 	if (!t21_isp_valid_ptr(ch))
 		return -ENODEV;
+
+	/* text_watch: every call but the per-frame QBUF/DQBUF/frame wait */
+	if (cmd != 0xc044560f && cmd != 0xc0445611 && cmd != 0x400456bf)
+		t21_text_check("framechan_ioctl", cmd);
+	else
+		t21_free_watch_check("framechan_ioctl-frame");
 
 	switch (cmd) {
 	case 0xc0145608: {
@@ -16873,6 +17199,13 @@ static long frame_channel_unlocked_ioctl(struct file *file, unsigned int cmd,
 		for (;;) {
 			if (!(ch->streaming & 1))
 				return -EINVAL;
+			/*
+			 * O_NONBLOCK (as vb2_dqbuf): -EAGAIN instead of sleeping.
+			 * OpenIMP opens /dev/framechanN non-blocking and select()s
+			 * first.  The stock driver ignores the flag.
+			 */
+			if (list_empty(&ch->done) && (file->f_flags & O_NONBLOCK))
+				return -EAGAIN;
 			if (!list_empty(&ch->done)) {
 				__private_spin_lock_irqsave(
 					(spinlock_t *)&ch->done_count, &flags);
@@ -16887,7 +17220,12 @@ static long frame_channel_unlocked_ioctl(struct file *file, unsigned int cmd,
 			ret = private_wait_event_interruptible(
 				(wait_queue_head_t *)ch->wait_queue, check_state,
 				&ch->type);
-			if (ret && ret != -ERESTARTSYS)
+			/*
+			 * A pending signal makes every further interruptible wait
+			 * return at once; looping on -ERESTARTSYS (as the stock
+			 * driver does) spins unkillably until a frame arrives.
+			 */
+			if (ret)
 				return ret;
 		}
 		__fill_v4l2_buffer((uintptr_t)buffer, (uintptr_t)&user);
@@ -16940,6 +17278,9 @@ static long frame_channel_unlocked_ioctl(struct file *file, unsigned int cmd,
 
 		if (!t21_isp_valid_ptr(argp))
 			return -EINVAL;
+		if ((file->f_flags & O_NONBLOCK) &&
+		    !completion_done((struct completion *)ch->completion))
+			return -EAGAIN;
 		ret = private_wait_for_completion_interruptible(
 			(struct completion *)ch->completion);
 		if (ret < 0)
@@ -17517,7 +17858,12 @@ int32_t tx_isp_video_s_stream(void *arg1, int32_t arg2)
 		if (video == NULL || video->s_stream == NULL)
 			continue;
 
+		if (!arg2)
+			T21_STOP_TRACE("s_stream(0) subdev[%d]=%p fn=%pS", i,
+				       subdev, video->s_stream);
 		result = video->s_stream(subdev, arg2);
+		if (!arg2)
+			T21_STOP_TRACE("s_stream(0) subdev[%d] ret=%d", i, result);
         if (result != 0 && result != -515) {
             int32_t j;
 
@@ -17551,7 +17897,13 @@ int32_t tx_isp_video_link_stream(void *arg1, int32_t arg2)
 		if (video == NULL || video->link_stream == NULL)
 			continue;
 
+		if (!arg2)
+			T21_STOP_TRACE("link_stream(0) subdev[%d]=%p fn=%pS", i,
+				       subdev, video->link_stream);
 		result = video->link_stream(subdev, arg2);
+		if (!arg2)
+			T21_STOP_TRACE("link_stream(0) subdev[%d] ret=%d", i,
+				       result);
 		if (result != 0 && result != -515) {
 			int32_t j;
 
@@ -18180,6 +18532,8 @@ int32_t tx_isp_video_link_destroy_isra_1(void *arg1)
 		pad2 = (u8 *)(uintptr_t)find_subdev_link_pad(arg1,
 					(int32_t *)&link->sink);
 
+		T21_STOP_TRACE("link_destroy set=%d link=%u pads=%p/%p", idx, i,
+			       pad1, pad2);
 		if (pad1 && pad2) {
 			ret = subdev_video_destroy_link((uintptr_t)(pad1 + 8));
 			if (ret && ret != -515)
@@ -18285,6 +18639,8 @@ int32_t tx_isp_release(int32_t arg1, void *arg2)
 	void *internal;
 	int32_t link_val;
 
+	T21_STOP_TRACE("tx_isp_release count=%d link=%d", count,
+		       *(int32_t *)((char *)dev + 0x10c));
 	if (count == 0) {
 		for (i = 0; i < 0x40; i += 4) {
 			link = *(void **)((char *)dev + i - 0xc + 0x38);
@@ -18298,7 +18654,10 @@ int32_t tx_isp_release(int32_t arg1, void *arg2)
 				result = -515;
 				continue;
 			}
+			T21_STOP_TRACE("tx_isp_release slake[%d]=%p fn=%pS", i / 4,
+				       link, release_fn);
 			ret = release_fn(link);
+			T21_STOP_TRACE("tx_isp_release slake[%d] ret=%d", i / 4, ret);
 			if (ret == 0)
 				continue;
 			if (ret == -515) {
@@ -19316,8 +19675,11 @@ static long tx_isp_unlocked_ioctl(struct file *file, unsigned int cmd,
 		pr_debug("tx-isp-t21: ioctl stream on\n");
 		return tx_isp_video_s_stream(base, 1);
 	case 0x80045613:
-		pr_debug("tx-isp-t21: ioctl stream off\n");
-		return tx_isp_video_s_stream(base, 0);
+		T21_STOP_TRACE("ioctl DISABLE_SENSOR (stream off) pid=%d",
+			       current->pid);
+		ret = tx_isp_video_s_stream(base, 0);
+		T21_STOP_TRACE("ioctl DISABLE_SENSOR ret=%d", ret);
+		return ret;
 	case 0x800456d0:
 		if (private_copy_from_user(&val, (void __user *)arg, sizeof(val))) {
 			isp_printf(2, "[%s][%d] copy from user error\n",
@@ -19329,15 +19691,18 @@ static long tx_isp_unlocked_ioctl(struct file *file, unsigned int cmd,
 		pr_debug("tx-isp-t21: ioctl link setup ret=%d\n", ret);
 		return ret;
 	case 0x800456d1:
-		pr_debug("tx-isp-t21: ioctl link destroy\n");
+		T21_STOP_TRACE("ioctl DESTROY_LINKS");
 		tx_isp_video_link_destroy_isra_1(base);
+		T21_STOP_TRACE("ioctl DESTROY_LINKS done");
 		return 0;
 	case 0x800456d2:
 		pr_debug("tx-isp-t21: ioctl link stream on\n");
 		return tx_isp_video_link_stream(base, 1);
 	case 0x800456d3:
-		pr_debug("tx-isp-t21: ioctl link stream off\n");
-		return tx_isp_video_link_stream(base, 0);
+		T21_STOP_TRACE("ioctl DISABLE_LINKS");
+		ret = tx_isp_video_link_stream(base, 0);
+		T21_STOP_TRACE("ioctl DISABLE_LINKS ret=%d", ret);
+		return ret;
 	case 0x805056c1:
 	case 0x805056c2:
 	case 0xc050561a:
@@ -21223,21 +21588,22 @@ int32_t tisp_param_operate_process(void *payload, int payload_len)
 
 		if (msg_id == 0) {
 			memcpy(ae_buf, (char *)arg + 0x18, 0x40);
-			*(int32_t *)&tisp_ae_tune = ae_buf[0];
-			*(int32_t *)((char *)&tisp_ae_tune + 4) = ae_buf[1];
-			*(int32_t *)((char *)&tisp_ae_tune + 8) = ae_buf[2];
-			*(int32_t *)((char *)&tisp_ae_tune + 12) = ae_buf[3];
-			*(int32_t *)((char *)&tisp_ae_tune + 16) = ae_buf[4];
-			*(int32_t *)((char *)&tisp_ae_tune + 20) = ae_buf[5];
-			*(int32_t *)((char *)&tisp_ae_tune + 24) = ae_buf[6];
-			*(int32_t *)((char *)&tisp_ae_tune + 28) = ae_buf[7];
-			*(int32_t *)((char *)&tisp_ae_tune + 32) = ae_buf[8];
-			*(int32_t *)((char *)&tisp_ae_tune + 48) = ae_buf[12];
-			*(int32_t *)((char *)&tisp_ae_tune + 52) = ae_buf[13];
-			*(int32_t *)((char *)&tisp_ae_tune + 56) = ae_buf[14];
-			*(int32_t *)((char *)&tisp_ae_tune + 60) = ae_buf[15];
+			/* OEM stores to tisp_ae_ctrls; the recovery wrote tisp_ae_tune()'s text */
+			*(int32_t *)tisp_ae_ctrls = ae_buf[0];
+			*(int32_t *)((char *)tisp_ae_ctrls + 4) = ae_buf[1];
+			*(int32_t *)((char *)tisp_ae_ctrls + 8) = ae_buf[2];
+			*(int32_t *)((char *)tisp_ae_ctrls + 12) = ae_buf[3];
+			*(int32_t *)((char *)tisp_ae_ctrls + 16) = ae_buf[4];
+			*(int32_t *)((char *)tisp_ae_ctrls + 20) = ae_buf[5];
+			*(int32_t *)((char *)tisp_ae_ctrls + 24) = ae_buf[6];
+			*(int32_t *)((char *)tisp_ae_ctrls + 28) = ae_buf[7];
+			*(int32_t *)((char *)tisp_ae_ctrls + 32) = ae_buf[8];
+			*(int32_t *)((char *)tisp_ae_ctrls + 48) = ae_buf[12];
+			*(int32_t *)((char *)tisp_ae_ctrls + 52) = ae_buf[13];
+			*(int32_t *)((char *)tisp_ae_ctrls + 56) = ae_buf[14];
+			*(int32_t *)((char *)tisp_ae_ctrls + 60) = ae_buf[15];
 		} else if (msg_id == 1) {
-			system_reg_write(0xc, arg[2]);
+			system_reg_write(0xc, t21_top_bypass_fix(arg[2]));
 		} else if (msg_id == 2) {
 			system_reg_write(arg[2] & 0x1ffff, arg[3]);
 		} else if (msg_id == 3) {
@@ -21271,7 +21637,7 @@ int32_t tisp_param_operate_process(void *payload, int payload_len)
 		reply[5] = 0;
 
 		if (msg_id == 0) {
-			memcpy((char *)reply + 0x18, &tisp_ae_tune, 0x40);
+			memcpy((char *)reply + 0x18, tisp_ae_ctrls, 0x40);
 			netlink_send_msg(reply, 0x58);
 			return 0;
 		}
@@ -21501,15 +21867,11 @@ int32_t tisp_deinit(void)
 	}
 
 
-	private_kfree(info->ae_buffer);
+	/* The statistics buffers stay allocated (see t21_tisp_stats). */
 	info->ae_buffer = NULL;
-	private_kfree(info->awb_buffer);
 	info->awb_buffer = NULL;
-	private_kfree(info->af_buffer);
 	info->af_buffer = NULL;
-	private_kfree(info->defog_buffer);
 	info->defog_buffer = NULL;
-	private_kfree(info->mdns_buffer);
 	info->mdns_buffer = NULL;
 
 	return 0;
@@ -21618,7 +21980,12 @@ int32_t tisp_channel_stop_save(void)
     reg_val = system_reg_read(0x2304);
     ch_en = reg_val & 7;
     ch_en_masked = reg_val & 0xfffffff8;
-    *(uint32_t *)((char *)&dump_vic_reg + 0x2944) = ch_en;
+    /*
+     * OEM: sw to .bss ch_en_value, which tisp_channel_start_restore() reads
+     * back. The recovered store went to &dump_vic_reg + 0x2944, i.e. into
+     * this module's own text, on every channel attribute change.
+     */
+    *(uint32_t *)ch_en_value = ch_en;
     system_reg_write(0x2304, ch_en_masked);
     timeout = 0xbb9;
     ch_status = system_reg_read(0x2308);
@@ -21800,6 +22167,41 @@ out_close:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000ebdc origin=model_output original=tisp_init */
+/*
+ * ISP statistics DMA targets (AE, AWB, AF, defog, MDNS).  They live for the
+ * whole module lifetime instead of one tisp_init/tisp_deinit session: the
+ * statistics engines keep their programmed addresses across a stream-off
+ * and clock gating, and resume DMA into them as soon as the next
+ * /dev/tx-isp open ungates the clocks -- before tisp_init programs new
+ * buffers.  With per-session buffers that wrote into freed kmalloc-8192
+ * (and page-backed) objects for about half a second on every timps
+ * restart, corrupting the slab freelist (__kmalloc oops in the next
+ * single_open_size) -- caught by free_watch=1 on the PC420.
+ */
+static void *t21_tisp_stats[5];
+static const size_t t21_tisp_stats_size[5] = {
+	0x6000, 0x4000, 0x2000, 0x4000, 0x4000
+};
+
+static void *t21_tisp_stats_buffer(unsigned int index)
+{
+	if (!t21_tisp_stats[index])
+		t21_tisp_stats[index] =
+			private_kmalloc(t21_tisp_stats_size[index], GFP_KERNEL);
+	return t21_tisp_stats[index];
+}
+
+/* Module exit only: the platform devices and clocks are gone by then. */
+static void t21_tisp_stats_free(void)
+{
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(t21_tisp_stats); i++) {
+		private_kfree(t21_tisp_stats[i]);
+		t21_tisp_stats[i] = NULL;
+	}
+}
+
 int32_t tisp_init(int32_t *arg1)
 {
 	uint32_t sensor_w = *(uint32_t *)(arg1);
@@ -21840,16 +22242,16 @@ int32_t tisp_init(int32_t *arg1)
 	memcpy(custom_eff + 0x1c4, tparams_night + 0xf954, 0x24);
 
 	memset(mdns_ratio, 0x80, 0x168);
-	memcpy(mdns_ratio, tparams_day + 0x8c4, 0x24);
-	memcpy(mdns_ratio + 0x24, tparams_day + 0x8e8, 0x24);
-	memcpy(mdns_ratio + 0x48, tparams_day + 0x90c, 0x24);
-	memcpy(mdns_ratio + 0x6c, tparams_day + 0xc38, 0x24);
-	memcpy(mdns_ratio + 0x90, tparams_day + 0xc14, 0x24);
-	memcpy(mdns_ratio + 0xb4, tparams_night + 0x8c4, 0x24);
-	memcpy(mdns_ratio + 0xd8, tparams_night + 0x8e8, 0x24);
-	memcpy(mdns_ratio + 0xfc, tparams_night + 0x90c, 0x24);
-	memcpy(mdns_ratio + 0x120, tparams_night + 0xc38, 0x24);
-	memcpy(mdns_ratio + 0x144, tparams_night + 0xc14, 0x24);
+	memcpy(mdns_ratio, tparams_day + 0x108c4, 0x24);
+	memcpy(mdns_ratio + 0x24, tparams_day + 0x108e8, 0x24);
+	memcpy(mdns_ratio + 0x48, tparams_day + 0x1090c, 0x24);
+	memcpy(mdns_ratio + 0x6c, tparams_day + 0x10c38, 0x24);
+	memcpy(mdns_ratio + 0x90, tparams_day + 0x10c14, 0x24);
+	memcpy(mdns_ratio + 0xb4, tparams_night + 0x108c4, 0x24);
+	memcpy(mdns_ratio + 0xd8, tparams_night + 0x108e8, 0x24);
+	memcpy(mdns_ratio + 0xfc, tparams_night + 0x1090c, 0x24);
+	memcpy(mdns_ratio + 0x120, tparams_night + 0x10c38, 0x24);
+	memcpy(mdns_ratio + 0x144, tparams_night + 0x10c14, 0x24);
 	pr_debug("tx-isp-t21: tisp tables prepared irq_disabled=%d pid=%d\n",
 		irqs_disabled(), current->pid);
 
@@ -21970,10 +22372,10 @@ int32_t tisp_init(int32_t *arg1)
 		uint32_t val = *(uint32_t *)((char *)&tparams + (i << 2) + 0x6640) << (i & 0x1f);
 		loop_acc = (loop_acc & mask) + val;
 	}
-	system_reg_write(0xc, loop_acc);
+	system_reg_write(0xc, t21_top_bypass_fix(loop_acc));
 	system_reg_write(0x1c, 0x200000);
 
-	buf1 = private_kmalloc(0x6000, 0xd0);
+	buf1 = t21_tisp_stats_buffer(0);
 	pr_debug("tx-isp-t21: tisp buf1=%p irq_disabled=%d pid=%d\n",
 		buf1, irqs_disabled(), current->pid);
 	if (!buf1)
@@ -21996,7 +22398,7 @@ int32_t tisp_init(int32_t *arg1)
 	*(uint32_t *)(tispinfo + 0x14) = 4;
 	*(uint32_t *)(tispinfo + 0x1c) = (uint32_t)buf1 - 0x7fffc000;
 
-	buf2 = private_kmalloc(0x4000, 0xd0);
+	buf2 = t21_tisp_stats_buffer(1);
 	pr_debug("tx-isp-t21: tisp buf2=%p irq_disabled=%d pid=%d\n",
 		buf2, irqs_disabled(), current->pid);
 	if (!buf2)
@@ -22011,7 +22413,7 @@ int32_t tisp_init(int32_t *arg1)
 	*(uint32_t *)(tispinfo + 0x20) = 4;
 	*(uint32_t *)(tispinfo + 0x28) = (uint32_t)buf2 - 0x80000000;
 
-	buf3 = private_kmalloc(0x2000, 0xd0);
+	buf3 = t21_tisp_stats_buffer(2);
 	pr_debug("tx-isp-t21: tisp buf3=%p irq_disabled=%d pid=%d\n",
 		buf3, irqs_disabled(), current->pid);
 	if (!buf3)
@@ -22026,7 +22428,7 @@ int32_t tisp_init(int32_t *arg1)
 	*(uint32_t *)(tispinfo + 0x2c) = 4;
 	*(uint32_t *)(tispinfo + 0x34) = (uint32_t)buf3 - 0x80000000;
 
-	buf4 = private_kmalloc(0x4000, 0xd0);
+	buf4 = t21_tisp_stats_buffer(3);
 	pr_debug("tx-isp-t21: tisp buf4=%p irq_disabled=%d pid=%d\n",
 		buf4, irqs_disabled(), current->pid);
 	if (!buf4)
@@ -22041,7 +22443,7 @@ int32_t tisp_init(int32_t *arg1)
 	*(uint32_t *)(tispinfo + 0x38) = 4;
 	*(uint32_t *)(tispinfo + 0x40) = (uint32_t)buf4 - 0x80000000;
 
-	buf5 = private_kmalloc(0x4000, 0xd0);
+	buf5 = t21_tisp_stats_buffer(4);
 	pr_debug("tx-isp-t21: tisp buf5=%p irq_disabled=%d pid=%d\n",
 		buf5, irqs_disabled(), current->pid);
 	if (!buf5)
@@ -22184,6 +22586,7 @@ int32_t tisp_event_process(void)
 	struct t21_event_node *node;
 	t21_event_cb_t cb = NULL;
 	uint32_t args[8];
+	uint32_t event;
 
 	result = private_wait_for_completion_timeout(&tevent_info.ready, 20);
 	if (result == 0xfffffe00UL) {
@@ -22204,17 +22607,20 @@ int32_t tisp_event_process(void)
 	node = list_first_entry(&tevent_info.pending,
 				struct t21_event_node, link);
 	list_del_init(&node->link);
-	if (node->event < ARRAY_SIZE(tisp_event_cb_table))
-		cb = tisp_event_cb_table[node->event];
+	event = node->event;
+	if (event < ARRAY_SIZE(tisp_event_cb_table))
+		cb = tisp_event_cb_table[event];
 	memcpy(args, node->args, sizeof(args));
 	list_add_tail(&node->link, &tevent_info.free);
 	arch_local_irq_restore(flags);
 
 	/* Sensor callbacks perform I2C transfers.  Dispatching them with local
 	 * IRQs disabled was both unnecessary and unsafe. */
-	if (cb)
+	if (cb) {
 		cb(args[0], args[1], args[2], args[3],
 		   args[4], args[5], args[6], args[7]);
+		t21_text_check_module("isp-event", event);
+	}
 	return 0;
 }
 
@@ -22785,6 +23191,14 @@ fail:
 /* Run T21's generic, tuning-driven AWB path.  No sensor identity or sensor
  * register knowledge belongs here: calibration and scene classification are
  * entirely described by the active tuning binary. */
+/*
+ * AWB-local EV word, OEM tiziano_awb.c "_ev" at .data+0x41d3c (initial
+ * 0x64000), written by tisp_awb_ev_update and read by JZ_Isp_Awb.  The
+ * recovery aliased it to tparams+0x12ec (HI16 0x40000 dropped), which
+ * overwrote a tuning word and was reset by every day/night table copy.
+ */
+static uint32_t awb_ev = 0x64000;
+
 static int32_t t21_awb_process(void)
 {
 	/* Retain the original controller's two initialized state words.  Besides
@@ -22805,7 +23219,6 @@ static int32_t t21_awb_process(void)
 	uint32_t rounding = q ? 1U << (q - 1) : 0;
 	uint32_t cols = awb_parameter[3];
 	uint32_t rows = awb_parameter[1];
-	uint32_t awb_ev = get_unaligned_le32(tparams + 0x12ec);
 	uint32_t count;
 	uint32_t red_calibration_q;
 	uint32_t blue_calibration_q;
@@ -24148,13 +24561,44 @@ Tiziano_awb_fpga0x998:
     return (void*)v0;
 }
 
+/*
+ * OEM JZ_Isp_Awb @0x1010c-0x101a0, after Tiziano_awb_fpga: when the AWB EV
+ * crosses _awb_mode[2] << 10 into low light, program the statistics R/G
+ * threshold 0x828 from _awb_lowlight_rg_th; when it drops back, restore the
+ * normal _awb_parameter[0x88/0x8c] value.  Edge-triggered via a .bss flag
+ * (ModeFlag), skipped while AWB is frozen.
+ */
+static void t21_awb_lowlight_update(void)
+{
+	const uint32_t *mode = (const uint32_t *)_awb_mode;
+	const uint32_t *ll = (const uint32_t *)_awb_lowlight_rg_th;
+	const uint32_t *par = (const uint32_t *)_awb_parameter;
+
+	if ((mode[2] << 10) < awb_ev) {
+		if (ModeFlag_18824)
+			return;
+		ModeFlag_18824 = 1;
+		if (!awb_frz)
+			system_reg_write(0x828, (ll[1] << 16) | ll[0]);
+	} else {
+		if (ModeFlag_18824 != 1)
+			return;
+		ModeFlag_18824 = 0;
+		if (!awb_frz)
+			system_reg_write(0x828, (par[0x8c / 4] << 16) |
+					 par[0x88 / 4]);
+	}
+}
+
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000010790 origin=fragment_seed original=JZ_Isp_Awb */
 int32_t JZ_Isp_Awb(void)
 {
     /* The model-recovered body below collapsed the T21 AWB controller's
      * alias-heavy stack objects and silently mixed pointer-sized and scalar
      * fields.  Run the audited, tuning-driven reconstruction instead. */
-    return t21_awb_process();
+    t21_awb_process();
+    t21_awb_lowlight_update();
+    return 0;
 
 #if 0
     uint32_t local_10 = 0;
@@ -24490,10 +24934,8 @@ JZ_Isp_Awb0x2f8:
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000010ac8 origin=fragment_seed original=tisp_awb_ev_update */
 int32_t tisp_awb_ev_update(uint32_t a0)
 {
-	/* Stock writes the AWB-local EV word at .data+0x41d4c.  In the
-	 * reconstructed layout that object is the slot at tparams+0x12ec; the
-	 * source-level `_ev` name resolves to a different OEM-local duplicate. */
-	put_unaligned_le32(a0, tparams + 0x12ec);
+	/* OEM @0x101e8: sw a0, .data+0x41d3c (tiziano_awb.c _ev). */
+	awb_ev = a0;
 	return 0;
 }
 
@@ -31389,55 +31831,20 @@ tiziano_gib_dn_params_refresh0x4c:
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000017588 origin=fragment_seed original=tiziano_gib_deir_reg */
 int32_t tiziano_gib_deir_reg(uint32_t a0, uint32_t a1, uint32_t a2)
 {
-    uint32_t local_10 = 0;
-    uint32_t local_14 = 0;
-    uint32_t local_18 = 0;
-    uint32_t local_1c = 0;
-    uint32_t local_20 = 0;
-    uint32_t local_24 = 0;
-    uint32_t local_28 = 0;
-    uint32_t local_2c = 0;
-    uint32_t ra = 0;
-    uint32_t s0 = 0;
-    uint32_t s1 = 0;
-    uint32_t s2 = 0;
-    uint32_t s3 = 0;
-    uint32_t s4 = 0;
-    uint32_t s5 = 0;
-    uint32_t s6 = 0;
-    uintptr_t *v0 = 0;
+	/* OEM @0x16ca8: three 32-entry tables at 0x8000/0x8080/0x8100, each
+	 * word = x[i + 1] << 12 | x[i].  The recovered loop advanced the
+	 * offset before the third write, shifting it to 0x8104..0x8180. */
+	const uint32_t *r = (const uint32_t *)(uintptr_t)a0;
+	const uint32_t *g = (const uint32_t *)(uintptr_t)a1;
+	const uint32_t *b = (const uint32_t *)(uintptr_t)a2;
+	uint32_t i;
 
-    /* fragment 0: Prologue */
-    /* function prologue: stack frame and callee-saved register setup */
-
-    /* fragment 1: CallSetup */
-    s4 = a0;
-    s3 = a1;
-    s2 = a2;
-    s0 = 32768;
-    s6 = (uintptr_t)&system_reg_write;
-    s5 = 32896;
-    v0 = s4 + s0;
-
-tiziano_gib_deir_reg0x40:
-    /* fragment 2: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(s0, ((*(uint32_t *)((char *)((uintptr_t)v0) + -32764)) << 12) | (*(uint32_t *)((char *)((uintptr_t)v0) + -32768))); /* jalr target resolved by relocation */
-
-    /* fragment 3: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(s0 + 128, ((*(uint32_t *)((char *)(s3 + s0) + -32764)) << 12) | (*(uint32_t *)((char *)(s3 + s0) + -32768))); /* jalr target resolved by relocation */
-
-    /* fragment 4: CallSetup */
-    s0 = s0 + 4;
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(s0 + 256, ((*(uint32_t *)((char *)(s2 + s0) + -32764)) << 12) | (*(uint32_t *)((char *)(s2 + s0) + -32768))); /* jalr target resolved by relocation */
-
-    /* fragment 5: Branch */
-    v0 = s4 + s0;
-    if (s0 != s5) { goto tiziano_gib_deir_reg0x40; }
-
-    /* fragment 6: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    return 0;
+	for (i = 0; i < 0x20; i++) {
+		system_reg_write(0x8000 + i * 4, (r[i + 1] << 12) | r[i]);
+		system_reg_write(0x8080 + i * 4, (g[i + 1] << 12) | g[i]);
+		system_reg_write(0x8100 + i * 4, (b[i + 1] << 12) | b[i]);
+	}
+	return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000017650 origin=model_output original=tiziano_gib_deir_interpolate */
@@ -31865,7 +32272,7 @@ int32_t tiziano_lsc_lut_parameter(void)
 
 	/* Three packed two-lane mesh entries become two 24-bit hardware
 	 * words.  This is the exact T21 lane order at OEM 0x17edc..0x17f24. */
-	for (i = 0; i + 2 < lsc_lut_num; i += 3, lut += 12) {
+	for (i = 0; i < lsc_lut_num; i += 3, lut += 12) {
 		uint32_t index = i / 3;
 		uint32_t reg = (index + 0xc00) << 3;
 		uint32_t word0 = get_unaligned_le16(lut) |
@@ -31913,281 +32320,136 @@ uint32_t jz_isp_lsc_inter_str(int32_t arg1, int32_t arg2, int32_t arg3)
 	return 0xff;
 }
 
-static uint16_t t21_lsc_table_word(const uint8_t *table, uint32_t index)
-{
-	const uint8_t *entry = table + index * sizeof(uint32_t);
+/*
+ * LSC mesh programming, ported from OEM tx-isp-t21.ko jz_isp_lsc_ct @0x17708,
+ * jz_isp_lsc_interpolate @0x17684, jz_isp_lsc_inter_str @0x176e4,
+ * tisp_lsc_gain_update @0x17ce0.
+ *
+ * The previous reconstruction computed the strength scaling as
+ * base + (((lane - base) * strength) >> 12) with an unsigned strength, so
+ * every lane below the unity value (0x80 for mesh_scale 0) wrapped and was
+ * clamped to 0xff, i.e. a 2x gain.  The mesh is per Bayer channel and
+ * bilinearly interpolated by the hardware, which produced large smooth
+ * magenta / yellow / cyan zones.  OEM adds base << 12 before the shift.
+ * It also reprogrammed the mesh on every call; OEM only does so when the
+ * colour-temperature band changes, when the CT moved by >= 300 K inside an
+ * interpolation band, or after a gain change (lsc_change_flag == 0).
+ */
+static uint32_t lsc_state;		/* OEM .bss+0x81d4 */
+static uint32_t lsc_state_last;		/* OEM .bss+0x81d8 */
 
-	return entry[0] | ((uint16_t)entry[1] << 8);
+static uint32_t t21_lsc_entry(const uint8_t *table, uint32_t index)
+{
+	return get_unaligned_le32(table + index * 4);
 }
 
-static uint16_t t21_lsc_blend_word(uint16_t low, uint16_t high,
-				   uint32_t weight)
+/* OEM jz_isp_lsc_interpolate(ct, hi_ct, lo_ct, hi_entry, lo_entry) */
+static uint32_t t21_lsc_interpolate(uint32_t x, uint32_t hi_ct, uint32_t lo_ct,
+				    uint32_t hi_val, uint32_t lo_val)
 {
-	int32_t low0 = low & 0xff;
-	int32_t low1 = low >> 8;
-	int32_t high0 = high & 0xff;
-	int32_t high1 = high >> 8;
-	int32_t out0 = low0 + (((high0 - low0) * (int32_t)weight) >> 12);
-	int32_t out1 = low1 + (((high1 - low1) * (int32_t)weight) >> 12);
+	uint32_t range = hi_ct - lo_ct;
+	uint32_t pos = x - lo_ct;
+	uint32_t lo_hi = lo_val >> 8, lo_lo = lo_val & 0xff;
+	uint32_t h, l;
 
-	out0 = clamp_t(int32_t, out0, 0, 0xff);
-	out1 = clamp_t(int32_t, out1, 0, 0xff);
-	return (uint16_t)out0 | ((uint16_t)out1 << 8);
+	if (!range)
+		return lo_val;
+	h = (lo_hi * range + ((hi_val >> 8) - lo_hi) * pos) / range;
+	l = (lo_lo * range + ((hi_val & 0xff) - lo_lo) * pos) / range;
+	return (h << 8) | l;
 }
 
-static uint16_t t21_lsc_word_for_ct(uint32_t index, uint32_t ct)
+/* OEM jz_isp_lsc_inter_str: unsigned, clamps only above 0xff */
+static uint32_t t21_lsc_inter_str(uint32_t strength, uint32_t base, uint32_t lane)
 {
-	const uint32_t *points = (const uint32_t *)tiziano_lsc_ct_points;
-	uint16_t a = t21_lsc_table_word(a_linear, index);
-	uint16_t t = t21_lsc_table_word(t_linear, index);
-	uint16_t d = t21_lsc_table_word(d_linear, index);
-	uint32_t weight;
+	uint32_t v = ((lane - base) * strength + (base << 12)) >> 12;
 
-	if (ct <= points[0])
-		return a;
-	if (ct < points[1]) {
-		weight = ((ct - points[0]) << 12) / (points[1] - points[0]);
-		return t21_lsc_blend_word(a, t, weight);
-	}
-	if (ct <= points[2])
-		return t;
-	if (ct < points[3]) {
-		weight = ((ct - points[2]) << 12) / (points[3] - points[2]);
-		return t21_lsc_blend_word(t, d, weight);
-	}
-	return d;
+	return v < 0x100 ? v : 0xff;
 }
 
-static uint16_t t21_lsc_scale_word(uint16_t value, uint32_t strength)
+static void t21_lsc_program(uint32_t cur_ct, uint32_t state, uint32_t strength)
 {
-	uint32_t base;
-	int32_t lane0;
-	int32_t lane1;
+	const uint32_t *pts = (const uint32_t *)tiziano_lsc_ct_points;
+	uint32_t base, i, k;
 
 	switch (mesh_scale) {
 	case 0: base = 0x80; break;
 	case 1: base = 0x40; break;
 	case 2: base = 0x20; break;
 	case 3: base = 0x10; break;
-	default: base = 0x80; break;
+	default:
+		isp_printf(2, "mesh scale is failed\n", 0);
+		base = 0;
+		break;
 	}
-	lane0 = base + ((((int32_t)(value & 0xff) - (int32_t)base) *
-			 strength) >> 12);
-	lane1 = base + ((((int32_t)(value >> 8) - (int32_t)base) *
-			 strength) >> 12);
-	lane0 = clamp_t(int32_t, lane0, 0, 0xff);
-	lane1 = clamp_t(int32_t, lane1, 0, 0xff);
-	return (uint16_t)lane0 | ((uint16_t)lane1 << 8);
+
+	for (i = 0; i < lsc_lut_num; i += 3) {
+		uint32_t w[3], lane[6], r0, r1;
+
+		for (k = 0; k < 3; k++) {
+			uint32_t a = t21_lsc_entry(a_linear, i + k);
+			uint32_t t = t21_lsc_entry(t_linear, i + k);
+			uint32_t d = t21_lsc_entry(d_linear, i + k);
+
+			switch (state) {
+			case 0: w[k] = d; break;
+			case 1: w[k] = t21_lsc_interpolate(cur_ct, pts[3], pts[2], d, t); break;
+			case 2: w[k] = t; break;
+			case 3: w[k] = t21_lsc_interpolate(cur_ct, pts[1], pts[0], t, a); break;
+			default: w[k] = a; break;
+			}
+		}
+		/* OEM lane order: w0.b0, w0.b1, w1.b0 | w1.b1, w2.b0, w2.b1 */
+		lane[0] = w[0] & 0xff;
+		lane[1] = (w[0] >> 8) & 0xff;
+		lane[2] = w[1] & 0xff;
+		lane[3] = (w[1] >> 8) & 0xff;
+		lane[4] = w[2] & 0xff;
+		lane[5] = (w[2] >> 8) & 0xff;
+		for (k = 0; k < 6; k++)
+			lane[k] = t21_lsc_inter_str(strength, base, lane[k]);
+		r0 = (lane[2] << 16) | ((lane[1] << 8) & 0xffff) | lane[0];
+		r1 = (lane[5] << 16) | ((lane[4] << 8) & 0xffff) | lane[3];
+		system_reg_write(((i / 3) + 0xc00) << 3, r0);
+		system_reg_write((((i / 3) + 0xc00) << 3) + 4, r1);
+	}
 }
 
-static int32_t t21_lsc_program_ct(uint32_t ct)
+/* WHOLE_DRIVER_CANDIDATE fn_0000000000017fe8 origin=oem_disasm original=jz_isp_lsc_ct */
+int32_t jz_isp_lsc_ct(void)
 {
+	const uint32_t *pts = (const uint32_t *)tiziano_lsc_ct_points;
+	uint32_t cur_ct = get_unaligned_le32(ct);
 	uint32_t strength = 0x1000;
-	uint32_t i;
+	bool program;
 
 	if (lsc_gain_old != ~0U)
 		strength = tisp_simple_intp(lsc_gain_old >> 16,
-					   lsc_gain_old & 0xffff,
-					   mesh_lsc_str);
-	for (i = 0; i + 2 < lsc_lut_num; i += 3) {
-		uint16_t v0 = t21_lsc_scale_word(t21_lsc_word_for_ct(i, ct),
-						 strength);
-		uint16_t v1 = t21_lsc_scale_word(t21_lsc_word_for_ct(i + 1, ct),
-						 strength);
-		uint16_t v2 = t21_lsc_scale_word(t21_lsc_word_for_ct(i + 2, ct),
-						 strength);
-		uint32_t reg = ((i / 3) + 0xc00) << 3;
+					    lsc_gain_old & 0xffff, mesh_lsc_str);
 
-		system_reg_write(reg, v0 | ((uint32_t)(v1 & 0xff) << 16));
-		system_reg_write(reg + 4, (v1 >> 8) | ((uint32_t)v2 << 8));
-	}
-	return 0;
-}
+	if (cur_ct > pts[3])
+		lsc_state = 0;
+	else if (cur_ct > pts[2])
+		lsc_state = 1;
+	else if (cur_ct > pts[1])
+		lsc_state = 2;
+	else if (cur_ct > pts[0])
+		lsc_state = 3;
+	else
+		lsc_state = 4;
 
-/* WHOLE_DRIVER_CANDIDATE fn_0000000000017fe8 origin=model_output original=jz_isp_lsc_ct */
-int32_t jz_isp_lsc_ct(void)
-{
-	return t21_lsc_program_ct(get_unaligned_le32(ct));
-#if 0
-	uint32_t *base = (uint32_t *)((char *)&tiziano_lsc_ct_points + 0x4);
-	uint32_t a0_val = base[1];
-	uint32_t a1_val = base[2];
-	uint32_t v0_val = base[0];
-	uint32_t ct_points = base[4];
-	uint32_t lsc_gain_old = base[8];
-	uint32_t ct = base[12];
-	uint32_t ct_last = base[13];
-	uint32_t *lsc_state = (uint32_t *)((char *)&af_array_fird1 + 0x1f0);
-	uint32_t *lsc_state_last = (uint32_t *)((char *)&af_array_fird1 + 0x1f4);
-	uint32_t *lsc_state_flag = (uint32_t *)((char *)&af_array_fird1 + 0x1f8);
-	uint32_t *lsc_data_a = (uint32_t *)((char *)&af_array_fird1 + 0x1fc);
-	uint32_t *lsc_data_b = (uint32_t *)&a_linear;
-	uint32_t *lsc_data_c = (uint32_t *)&d_linear;
-	uint32_t mesh_scale = data_96e8c;
-	uint32_t *interp_table = (uint32_t *)((char *)&af_array_fird1 + 0x1cc);
-	uint32_t s1_val = 0x1000;
-	uint32_t s3_val = 3;
-	uint32_t s0_val = 0;
-	uint32_t v1_val = 0;
-	uint32_t result = 0;
-
-	if (lsc_gain_old != 0xffffffff) {
-		s1_val = tisp_simple_intp(lsc_gain_old >> 0x10, lsc_gain_old & 0xffff, (uintptr_t)interp_table);
-	}
-
-	if (a0_val >= ct) {
-		*lsc_state = 0;
+	if (lsc_state == 0 || lsc_state == 2 || lsc_state == 4) {
+		program = lsc_state_last != lsc_state || !lsc_change_flag;
 	} else {
-		if (a1_val < ct)
-			*lsc_state = 1;
-		else if (v0_val < ct)
-			*lsc_state = 2;
-		else if (ct_points >= ct)
-			*lsc_state = 4;
-		else
-			*lsc_state = 3;
+		uint32_t last = get_unaligned_le32(ct_last);
+		uint32_t diff = last > cur_ct ? last - cur_ct : cur_ct - last;
+
+		program = diff >= 300 || !lsc_change_flag;
 	}
-
-	if (*lsc_state != 0) {
-		if (*lsc_state != 2 && *lsc_state != 4) {
-			if (*lsc_state != 1 && *lsc_state != 3)
-				goto label_18180;
-			{
-				uint32_t diff = (ct_last >= ct) ? (ct_last - ct) : (ct - ct_last);
-				if (diff >= 0x12c || *lsc_state_flag == 0)
-					goto label_18180;
-			}
-			v1_val = *lsc_state;
-		} else {
-			if (*lsc_state_last != *lsc_state || *lsc_state_flag == 0)
-				goto label_18180;
-			v1_val = *lsc_state;
-		}
-	} else {
-		if (*lsc_state_last == 0 && *lsc_state_flag != 0)
-			v1_val = *lsc_state;
-		else
-			goto label_18180;
-	}
-
-label_18180:
-	{
-		uint32_t *var_58 = lsc_data_a;
-		uint32_t *var_54 = lsc_data_b;
-		uint32_t *var_50 = lsc_data_c;
-		uint32_t s3 = 3;
-		uint32_t s0 = 0;
-
-		while (1) {
-			uint32_t *state = *lsc_state;
-			if ((s3 - 3) >= mesh_scale)
-				break;
-
-			int16_t var_68[3];
-			int32_t var_64 = 0;
-
-			if (state >= 5) {
-				var_64 = 0;
-			} else {
-				switch ((uintptr_t)state) {
-				case 0:
-					{
-						uint32_t idx = 0;
-						while (idx < s3) {
-							((void **)var_68)[idx] = (int16_t)var_50[idx];
-							idx++;
-						}
-					}
-					var_64 = 0;
-					break;
-				case 1:
-					{
-						uint32_t idx = 0;
-						while (idx < s3) {
-							((void **)var_68)[idx] = (int16_t)jz_isp_lsc_interpolate(ct, a0_val, a1_val, var_50[idx], var_58[idx]);
-							idx++;
-						}
-					}
-					var_64 = 0;
-					break;
-				case 2:
-					{
-						uint32_t idx = 0;
-						while (idx < s3) {
-							((void **)var_68)[idx] = (int16_t)var_58[idx];
-							idx++;
-						}
-					}
-					var_64 = 0;
-					break;
-				case 3:
-					{
-						uint32_t idx = 0;
-						while (idx < s3) {
-							((void **)var_68)[idx] = (int16_t)jz_isp_lsc_interpolate(ct, v0_val, ct_points, var_58[idx], var_54[idx]);
-							idx++;
-						}
-					}
-					var_64 = 0;
-					break;
-				case 4:
-					{
-						uint32_t idx = 0;
-						while (idx < s3) {
-							((void **)var_68)[idx] = (int16_t)var_54[idx];
-							idx++;
-						}
-					}
-					var_64 = 0;
-					break;
-				}
-			}
-
-			uint32_t s7 = (var_64 & 0xff) << 0x10 | (uint32_t)(uint16_t)var_68[0];
-			uint32_t v0_26 = (var_64 & 0xff00) >> 8 | (uint32_t)(uint16_t)var_68[1] << 8;
-			uint32_t s2 = s7 & 0xff;
-			uint32_t a2_5;
-
-			if (mesh_scale == 1) {
-				s0 = 0x40;
-				a2_5 = s2;
-			} else if (mesh_scale == 0) {
-				s0 = 0x80;
-				a2_5 = s2;
-			} else if (mesh_scale == 2) {
-				s0 = 0x20;
-				a2_5 = s2;
-			} else if (mesh_scale != 3) {
-				isp_printf(2, "mesh scale is failed\n", 0);
-				a2_5 = s2;
-			} else {
-				s0 = 0x10;
-				a2_5 = s2;
-			}
-
-			uint32_t v0_28 = jz_isp_lsc_inter_str(s1_val, s0, a2_5);
-			uint32_t v0_29 = jz_isp_lsc_inter_str(s1_val, s0, (uint32_t)(uint8_t)((s7 >> 8) & 0xff));
-			uint32_t v0_30 = jz_isp_lsc_inter_str(s1_val, s0, s7 >> 0x10);
-			uint32_t v0_31 = jz_isp_lsc_inter_str(s1_val, s0, v0_26 & 0xff);
-			uint32_t v0_32 = jz_isp_lsc_inter_str(s1_val, s0, (uint32_t)(uint8_t)((v0_26 >> 8) & 0xff));
-			uint32_t lo_1 = (s3 - 3) / 3;
-			uint32_t t2_5 = (uint32_t)(uint16_t)jz_isp_lsc_inter_str(s1_val, s0, v0_26 >> 0x10) << 0x10 |
-				(uint32_t)(uint16_t)((v0_32 << 8) & 0xffff) | (uint32_t)(uint16_t)v0_31;
-			s3 += 3;
-			uint32_t s6_7 = (lo_1 + 0xc00) << 3;
-			system_reg_write(s6_7, (uint32_t)(uint16_t)v0_30 << 0x10 |
-				(uint32_t)(uint16_t)((v0_29 << 8) & 0xffff) | (uint32_t)(uint16_t)v0_28);
-			system_reg_write(s6_7 + 4, t2_5);
-			var_54 = (void *)(uintptr_t)((uintptr_t)var_54 + (3));
-			var_58 = (void *)(uintptr_t)((uintptr_t)var_58 + (3));
-			var_50 = (void *)(uintptr_t)((uintptr_t)var_50 + (3));
-		}
-		v1_val = *lsc_state;
-	}
-
-	*lsc_state_last = v1_val;
+	if (program)
+		t21_lsc_program(cur_ct, lsc_state, strength);
+	lsc_state_last = lsc_state;
 	return 0;
-#endif
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000018578 origin=fragment_seed original=tisp_lsc_ct_update */
@@ -32196,35 +32458,23 @@ int32_t tisp_lsc_ct_update(uint32_t a0, uint32_t a1)
 	(void)a1;
 	put_unaligned_le32(a0, ct);
 	jz_isp_lsc_ct();
-	put_unaligned_le32(a0, ct_last);
+	put_unaligned_le32(get_unaligned_le32(ct), ct_last);
 	return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000185b8 origin=fragment_seed original=jz_isp_lsc_gain */
 int32_t jz_isp_lsc_gain(void)
 {
-    uint32_t ra = 0;
-    uintptr_t *v0 = 0;
-
-    /* fragment 0: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    /* fragment 1: Arithmetic */
-    v0 = 0;
-
-    return 0;
+	return 0;
 }
 
-/* WHOLE_DRIVER_CANDIDATE fn_00000000000185c0 origin=fragment_seed original=tisp_lsc_gain_update */
+/* WHOLE_DRIVER_CANDIDATE fn_00000000000185c0 origin=oem_disasm original=tisp_lsc_gain_update */
 int32_t tisp_lsc_gain_update(uint32_t a0, uint32_t a1)
 {
 	uint32_t delta;
 
 	if (lsc_gain_old == ~0U) {
 		lsc_gain_old = a0;
-		lsc_change_flag = 0;
-		t21_lsc_program_ct(get_unaligned_le32(ct));
-		lsc_change_flag = 1;
 		return 0;
 	}
 	delta = lsc_gain_old > a0 ? lsc_gain_old - a0 : a0 - lsc_gain_old;
@@ -32232,7 +32482,7 @@ int32_t tisp_lsc_gain_update(uint32_t a0, uint32_t a1)
 		return 0;
 	lsc_change_flag = 0;
 	lsc_gain_old = a0;
-	t21_lsc_program_ct(get_unaligned_le32(ct));
+	jz_isp_lsc_ct();
 	lsc_change_flag = 1;
 	return 0;
 }
@@ -32481,7 +32731,9 @@ int32_t tisp_dmsc_sp_d_sigma_3_np_cfg(void)
     local_1c = ra;
 
     /* fragment 3: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(int32_t *))(uintptr_t)system_reg_write)(a0); /* jalr target resolved by relocation */
+    /* OEM (@0x182f8 dmsc / @0x1ace8 sharpen): value = a1 | arr[1] << 5,
+     * the or sits in the jalr delay slot; the decompile dropped it. */
+    system_reg_write((uint32_t)(uintptr_t)a0, (uint32_t)(uintptr_t)a1 | (uint32_t)(uintptr_t)v0);
 
     /* fragment 4: CallSetup */
     v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(4280, ((*(uint32_t *)((char *)(s0) + 44)) << 25) | ((*(uint32_t *)((char *)(s0) + 40)) << 20) | (*(uint32_t *)((char *)(s0) + 24)) | ((*(uint32_t *)((char *)(s0) + 36)) << 15) | ((*(uint32_t *)((char *)(s0) + 32)) << 10) | ((*(uint32_t *)((char *)(s0) + 28)) << 5)); /* jalr target resolved by relocation */
@@ -32724,7 +32976,7 @@ int32_t tisp_dmsc_uu_par_cfg(void)
 int32_t tisp_dmsc_alias_par_cfg(void)
 {
     uint32_t dir_thres = dmsc_alias_dir_thres_intp;
-    uint32_t par_array = dmsc_alias_par_array;
+    uint32_t par_array = *(uint32_t *)dmsc_alias_par_array;	/* OEM lw 0(par); was the array address */
     uint32_t stren_intp = dmsc_alias_stren_intp;
     uint32_t thres_1 = dmsc_alias_thres_1_intp;
     uint32_t thres_2 = dmsc_alias_thres_2_intp;
@@ -33083,11 +33335,11 @@ int32_t tisp_dmsc_intp_reg_refresh(int32_t arg1)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000019cb8 origin=model_output original=tisp_dmsc_par_refresh */
 int32_t tisp_dmsc_par_refresh(uint32_t a0, uint32_t a1, uint32_t a2)
 {
-	uint32_t gain_old_1 = *(uint32_t *)&gain_old;
+	uint32_t gain_old_1 = *(uint32_t *)&dmsc_gain_old;
 	uint32_t diff;
 
 	if (gain_old_1 == 0xffffffff) {
-		*(uint32_t *)&gain_old = a0;
+		*(uint32_t *)&dmsc_gain_old = a0;
 		tisp_dmsc_all_reg_refresh(a0);
 	} else {
 		if (a0 < gain_old_1)
@@ -33096,7 +33348,7 @@ int32_t tisp_dmsc_par_refresh(uint32_t a0, uint32_t a1, uint32_t a2)
 			diff = a0 - gain_old_1;
 
 		if (diff >= a1) {
-			*(uint32_t *)&gain_old = a0;
+			*(uint32_t *)&dmsc_gain_old = a0;
 			tisp_dmsc_intp_reg_refresh(a0);
 		}
 	}
@@ -33174,11 +33426,11 @@ int32_t tiziano_dmsc_dn_params_refresh(void)
     /* function prologue: stack frame and callee-saved register setup */
 
     /* fragment 1: CallSetup */
-    *(uint32_t *)((char *)((char *)&gain_old)) = ((*(uint32_t *)((char *)((char *)&gain_old))) + 512);
+    *(uint32_t *)((char *)((char *)&dmsc_gain_old)) = ((*(uint32_t *)((char *)((char *)&dmsc_gain_old))) + 512);
     v0 = (uintptr_t *)((uintptr_t (*)(int32_t *))(uintptr_t)tiziano_dmsc_params_refresh)(a0); /* jalr target resolved by relocation */
 
     /* fragment 2: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(int32_t *))(uintptr_t)tisp_dmsc_all_reg_refresh)(*(uint32_t *)((char *)((char *)&gain_old))); /* jalr target resolved by relocation */
+    v0 = (uintptr_t *)((uintptr_t (*)(int32_t *))(uintptr_t)tisp_dmsc_all_reg_refresh)(*(uint32_t *)((char *)((char *)&dmsc_gain_old))); /* jalr target resolved by relocation */
 
     /* fragment 3: Epilogue */
     /* function epilogue: restore registers and return */
@@ -33195,7 +33447,7 @@ int32_t tiziano_dmsc_dn_params_refresh(void)
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001a1fc origin=model_output original=tiziano_dmsc_init */
 int32_t tiziano_dmsc_init(void)
 {
-	gain_old = -1;
+	dmsc_gain_old = -1;
 	tiziano_dmsc_params_refresh();
 	tisp_dmsc_par_refresh(0x10000, 0x10000, 0);
 	return 0;
@@ -33610,7 +33862,7 @@ int32_t tisp_dmsc_param_array_set(int32_t param_id, const void *src)
 	}
 
 	memcpy(dst, src, size);
-	tisp_dmsc_all_reg_refresh((uint32_t)(uintptr_t)gain_old + 0x200);
+	tisp_dmsc_all_reg_refresh((uint32_t)(uintptr_t)dmsc_gain_old + 0x200);
 	return 0;
 }
 
@@ -34375,7 +34627,9 @@ int32_t tisp_sharpen_v1_sigma_np_cfg(void)
     local_1c = ra;
 
     /* fragment 3: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(int32_t *))(uintptr_t)system_reg_write)(a0); /* jalr target resolved by relocation */
+    /* OEM (@0x182f8 dmsc / @0x1ace8 sharpen): value = a1 | arr[1] << 5,
+     * the or sits in the jalr delay slot; the decompile dropped it. */
+    system_reg_write((uint32_t)(uintptr_t)a0, (uint32_t)(uintptr_t)a1 | (uint32_t)(uintptr_t)v0);
 
     /* fragment 4: CallSetup */
     v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(6448, ((*(uint32_t *)((char *)(s0) + 44)) << 25) | ((*(uint32_t *)((char *)(s0) + 40)) << 20) | (*(uint32_t *)((char *)(s0) + 24)) | ((*(uint32_t *)((char *)(s0) + 36)) << 15) | ((*(uint32_t *)((char *)(s0) + 32)) << 10) | ((*(uint32_t *)((char *)(s0) + 28)) << 5)); /* jalr target resolved by relocation */
@@ -34666,26 +34920,24 @@ int32_t tisp_sharpen_intp_reg_refresh(int32_t arg1)
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001bbe4 origin=model_output original=tisp_sharpen_par_refresh */
 int32_t tisp_sharpen_par_refresh(uint32_t arg1, int32_t arg2, int32_t arg3)
 {
-	uint32_t *gain_old;
 	uint32_t diff;
 
-	gain_old = *(uint32_t *)((char *)&get_isp_clk + 8176);
-
-	if (gain_old != 0xffffffff) {
-		if (arg1 < gain_old)
-			diff = gain_old - arg1;
-		else
-			diff = arg1 - (uintptr_t)gain_old;
-
-		if (diff < (uint32_t)arg2) {
-			*(uint32_t *)((char *)&get_isp_clk + 8176) = arg1;
-			tisp_sharpen_intp_reg_refresh(arg1);
-		} else {
-			tisp_sharpen_all_reg_refresh(arg1);
-		}
-	} else {
-		*(uint32_t *)((char *)&get_isp_clk + 8176) = arg1;
+	/*
+	 * OEM (stock 0x1b304): the first call and every gain step of at least
+	 * arg2 store the gain and refresh; smaller steps only retrigger.  The
+	 * recovered body kept the gain in get_isp_clk()'s text (+8176) and had
+	 * the threshold test inverted.
+	 */
+	if (sharpen_gain_old == 0xffffffffU) {
+		sharpen_gain_old = arg1;
 		tisp_sharpen_all_reg_refresh(arg1);
+	} else {
+		diff = arg1 < sharpen_gain_old ? sharpen_gain_old - arg1 :
+						 arg1 - sharpen_gain_old;
+		if (diff >= (uint32_t)arg2) {
+			sharpen_gain_old = arg1;
+			tisp_sharpen_intp_reg_refresh(arg1);
+		}
 	}
 
 	if (arg3 == 1)
@@ -34706,7 +34958,7 @@ int32_t tiziano_sharpen_init(void)
     uint32_t v1 = 0;
 
     /* fragment 0: CallSetup */
-    *(uint32_t *)((char *)((char *)&tparams + 0x1590)) = (-1);
+    sharpen_gain_old = 0xffffffffU; /* OEM .data gain_old, not tparams+0x1590 */
     v0 = (uintptr_t *)((uintptr_t (*)(int32_t *))(uintptr_t)tiziano_sharpen_params_refresh)(a0); /* jalr target resolved by relocation */
 
     /* fragment 1: CallSetup */
@@ -34737,7 +34989,7 @@ int32_t tisp_sharpen_refresh(uint32_t arg1)
 int32_t tiziano_sharpen_dn_params_refresh(void)
 {
 	tiziano_sharpen_params_refresh();
-	tisp_sharpen_all_reg_refresh(gain_old);
+	tisp_sharpen_all_reg_refresh(sharpen_gain_old);
 	return 0;
 }
 
@@ -34877,7 +35129,7 @@ int32_t tisp_sharpen_param_array_set(int32_t param_id, int32_t src)
 		size = 0x24;
 		break;
 	case 0x8f:
-		tisp_sharpen_all_reg_refresh(gain_old + 0x200);
+		tisp_sharpen_all_reg_refresh(sharpen_gain_old + 0x200);
 		dst = (int32_t *)&sharpen_con_par_array;
 		size = 0x20;
 		break;
@@ -34900,725 +35152,79 @@ int32_t tisp_sdns_top_func_cfg(void)
 	return 0;
 }
 
-/* WHOLE_DRIVER_CANDIDATE fn_000000000001c010 origin=fragment_seed original=tisp_sdns_y_param_cfg */
-int32_t tisp_sdns_y_param_cfg(void)
+/*
+ * SDNS register writers, rewritten from OEM tx-isp-t21.ko (PC420 build):
+ * tisp_sdns_y_param_cfg @0x1b730 and tisp_sdns_c_param_cfg @0x1c058.
+ * The decompiled versions wrote uninitialised locals and a one-argument
+ * system_reg_write(0x2084).  Each npv array is scaled by its *_stren_intp
+ * and packed four bytes per register, byte 0 in bits 7:0 (OEM order, no
+ * masking, same write order).
+ */
+static inline uint32_t sdns_pack4(const uint32_t *v)
 {
-    uint32_t local_10 = 0;
-    uint32_t local_14 = 0;
-    uint32_t local_18 = 0;
-    uint32_t local_1c = 0;
-    uint32_t local_20 = 0;
-    uint32_t local_24 = 0;
-    uint32_t local_28 = 0;
-    uint32_t local_2c = 0;
-    uint32_t local_30 = 0;
-    uint32_t local_34 = 0;
-    uint32_t local_38 = 0;
-    uint32_t local_3c = 0;
-    uint32_t local_40 = 0;
-    uint32_t local_44 = 0;
-    uint32_t local_48 = 0;
-    uint32_t local_4c = 0;
-    uint32_t local_50 = 0;
-    uint32_t local_54 = 0;
-    uint32_t local_58 = 0;
-    uint32_t local_5c = 0;
-    uint32_t local_60 = 0;
-    uint32_t local_64 = 0;
-    uint32_t local_68 = 0;
-    uint32_t local_6c = 0;
-    uint32_t local_70 = 0;
-    uint32_t local_74 = 0;
-    uint32_t local_78 = 0;
-    uint32_t local_7c = 0;
-    uint32_t local_80 = 0;
-    uint32_t local_84 = 0;
-    uint32_t local_88 = 0;
-    uint32_t local_8c = 0;
-    uint32_t local_90 = 0;
-    uint32_t local_94 = 0;
-    uint32_t local_98 = 0;
-    uint32_t *local_9c = 0;
-    uint32_t local_a0 = 0;
-    uint32_t local_a4 = 0;
-    uint32_t local_a8 = 0;
-    uint32_t local_ac = 0;
-    uint32_t *local_b0 = 0;
-    uint32_t local_b4 = 0;
-    uint32_t local_b8 = 0;
-    uint32_t local_bc = 0;
-    uint32_t local_c0 = 0;
-    uint32_t *local_c4 = 0;
-    uint32_t local_c8 = 0;
-    uint32_t local_cc = 0;
-    uint32_t local_d0 = 0;
-    uint32_t local_d4 = 0;
-    uint32_t *local_d8 = 0;
-    uint32_t local_dc = 0;
-    uint32_t local_e0 = 0;
-    uint32_t local_e4 = 0;
-    uint32_t local_e8 = 0;
-    uint32_t *local_ec = 0;
-    uint32_t local_f0 = 0;
-    uint32_t local_f4 = 0;
-    uint32_t local_f8 = 0;
-    uint32_t local_fc = 0;
-    uint32_t *local_100 = 0;
-    uint32_t local_104 = 0;
-    uint32_t local_108 = 0;
-    uint32_t local_10c = 0;
-    uint32_t local_110 = 0;
-    uint32_t local_114 = 0;
-    uint32_t local_118 = 0;
-    uint32_t local_11c = 0;
-    uint32_t local_120 = 0;
-    uint32_t local_124 = 0;
-    uint32_t local_128 = 0;
-    uint32_t local_12c = 0;
-    uint32_t local_130 = 0;
-    uint32_t local_134 = 0;
-    uint32_t local_138 = 0;
-    uint32_t local_13c = 0;
-    uint32_t local_140 = 0;
-    uint32_t local_144 = 0;
-    uint32_t local_148 = 0;
-    uint32_t local_14c = 0;
-    uint32_t local_150 = 0;
-    uint32_t local_154 = 0;
-    uint32_t local_158 = 0;
-    uint32_t local_15c = 0;
-    uint32_t local_160 = 0;
-    uint32_t local_164 = 0;
-    uintptr_t *a0 = 0;
-    uint32_t a1 = 0;
-    uint32_t a2 = 0;
-    uint32_t a3 = 0;
-    uint32_t ra = 0;
-    uint32_t s0 = 0;
-    uint32_t s1 = 0;
-    uint32_t s2 = 0;
-    uint32_t s3 = 0;
-    uint32_t s4 = 0;
-    uint32_t s5 = 0;
-    uint32_t s6 = 0;
-    uint32_t s7 = 0;
-    uint32_t s8 = 0;
-    uint32_t t0 = 0;
-    uint32_t t1 = 0;
-    uint32_t t2 = 0;
-    uint32_t t3 = 0;
-    uint32_t t4 = 0;
-    uint32_t t5 = 0;
-    uint32_t t6 = 0;
-    uint32_t t7 = 0;
-    uint32_t t8 = 0;
-    uint32_t t9 = 0;
-    uintptr_t *v0 = 0;
-    uintptr_t v1 = 0;
-
-    /* fragment 0: Arithmetic */
-    v1 = (uintptr_t)&sdns_y_dtl_npv_0_intp;
-
-    /* fragment 1: MemoryAccess */
-    t7 = *(uint32_t *)((char *)((char *)&sdns_y_dtl_npv_0_intp));
-    v1 = (uintptr_t)&sdns_y_dtl_npv_1_intp;
-    t6 = *(uint32_t *)((char *)((char *)&sdns_y_dtl_npv_1_intp));
-    v1 = (uintptr_t)&sdns_y_dtl_npv_2_intp;
-    t8 = *(uint32_t *)((char *)((char *)&sdns_y_dtl_npv_2_intp));
-    v1 = (uintptr_t)&sdns_y_dtl_npv_3_intp;
-    t9 = *(uint32_t *)((char *)((char *)&sdns_y_dtl_npv_3_intp));
-    v0 = (uintptr_t *)&sdns_y_dtl_stren_intp;
-    v1 = (uintptr_t)&sdns_y_dtl_npv_4_intp;
-    v0 = *(uint32_t *)((char *)((char *)&sdns_y_dtl_stren_intp));
-    local_144 = s1;
-    s1 = *(uint32_t *)((char *)((char *)&sdns_y_dtl_npv_4_intp));
-    v1 = (uintptr_t)&sdns_y_fus_npv_array;
-    local_164 = ra;
-    local_160 = s8;
-    local_15c = s7;
-    local_158 = s6;
-    local_154 = s5;
-    local_150 = s4;
-    local_14c = s3;
-    local_148 = s2;
-    local_140 = s0;
-    t7 = (uintptr_t)v0 * t7;
-    t6 = (uintptr_t)v0 * t6;
-    t8 = (uintptr_t)v0 * t8;
-    t9 = (uintptr_t)v0 * t9;
-    s1 = (uintptr_t)v0 * s1;
-    t3 = *(uint32_t *)((char *)((char *)&sdns_y_fus_npv_array));
-    v0 = (uintptr_t *)&sdns_y_fus_stren_intp;
-
-    /* fragment 2: Arithmetic */
-    v1 = v1;
-
-    /* fragment 3: MemoryAccess */
-    v0 = *(uint32_t *)((char *)((char *)&sdns_y_fus_stren_intp));
-    a0 = *(uint32_t *)((char *)v1 + 16);
-    t2 = *(uint32_t *)((char *)v1 + 4);
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 20);
-    local_10 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 24);
-    local_14 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 28);
-    local_18 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 32);
-    local_1c = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 36);
-    local_20 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    t4 = *(uint32_t *)((char *)v1 + 8);
-    t5 = *(uint32_t *)((char *)v1 + 12);
-    local_24 = a1;
-    a0 = *(uint32_t *)((char *)v1 + 40);
-    t3 = (uintptr_t)v0 * t3;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 44);
-    local_28 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 48);
-    local_2c = a1;
-
-    /* fragment 4: Arithmetic */
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-
-    /* fragment 5: MemoryAccess */
-    a0 = *(uint32_t *)((char *)v1 + 52);
-    local_30 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 56);
-    v1 = *(uint32_t *)((char *)v1 + 60);
-    local_34 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = (uintptr_t)v0 * v1;
-    t2 = (uintptr_t)v0 * t2;
-    t4 = (uintptr_t)v0 * t4;
-    t5 = (uintptr_t)v0 * t5;
-    v1 = (uintptr_t)&sdns_y_lum_npv_array;
-    v0 = (uintptr_t *)&sdns_y_lum_stren_intp;
-    v0 = *(uint32_t *)((char *)((char *)&sdns_y_lum_stren_intp));
-    local_3c = a0;
-    a0 = *(uint32_t *)((char *)((char *)&sdns_y_lum_npv_array));
-    local_38 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    v1 = v1;
-    a0 = *(uint32_t *)((char *)v1 + 4);
-    local_40 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 8);
-    local_44 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 12);
-    local_48 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 16);
-    local_4c = a1;
-
-    /* fragment 6: Arithmetic */
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-
-    /* fragment 7: MemoryAccess */
-    a0 = *(uint32_t *)((char *)v1 + 20);
-    local_50 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 24);
-    local_54 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 28);
-    local_58 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 32);
-    local_5c = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 36);
-    local_60 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 40);
-    local_64 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    s0 = (uintptr_t)&system_reg_write;
-    local_68 = a1;
-    a0 = *(uint32_t *)((char *)v1 + 44);
-    s0 = s0;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 48);
-    local_6c = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 52);
-    local_70 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 56);
-
-    /* fragment 8: MemoryAccess */
-    v1 = *(uint32_t *)((char *)v1 + 60);
-    local_74 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = (uintptr_t)v0 * v1;
-    v1 = (uintptr_t)&sdns_y_bsp_npv_array;
-    v0 = (uintptr_t *)&sdns_y_bsp_stren_intp;
-    v0 = *(uint32_t *)((char *)((char *)&sdns_y_bsp_stren_intp));
-    local_7c = a0;
-    a0 = *(uint32_t *)((char *)((char *)&sdns_y_bsp_npv_array));
-    local_78 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    v1 = v1;
-    a0 = *(uint32_t *)((char *)v1 + 4);
-    local_80 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 8);
-    local_84 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 12);
-    local_88 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 16);
-    local_8c = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 20);
-    local_90 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 24);
-    local_94 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-
-    /* fragment 9: MemoryAccess */
-    a0 = *(uint32_t *)((char *)v1 + 28);
-    local_98 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 32);
-    local_9c = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 36);
-    local_a0 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 40);
-    local_a4 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 44);
-    local_a8 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    local_ac = a1;
-    a0 = *(uint32_t *)((char *)v1 + 48);
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 52);
-    local_b0 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 56);
-    v1 = *(uint32_t *)((char *)v1 + 60);
-    local_b4 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = (uintptr_t)v0 * v1;
-    v1 = (uintptr_t)&sdns_y_dsp_npv_array;
-    v0 = (uintptr_t *)&sdns_y_dsp_stren_intp;
-    v0 = *(uint32_t *)((char *)((char *)&sdns_y_dsp_stren_intp));
-    local_bc = a0;
-
-    /* fragment 10: MemoryAccess */
-    a0 = *(uint32_t *)((char *)((char *)&sdns_y_dsp_npv_array));
-    local_b8 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    v1 = v1;
-    a0 = *(uint32_t *)((char *)v1 + 4);
-    local_c0 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 8);
-    local_c4 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 12);
-    local_c8 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 16);
-    local_cc = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 20);
-    local_d0 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 24);
-    local_d4 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 28);
-    local_d8 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 32);
-    local_dc = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 36);
-    local_e0 = a1;
-
-    /* fragment 11: Arithmetic */
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-
-    /* fragment 12: MemoryAccess */
-    a0 = *(uint32_t *)((char *)v1 + 40);
-    local_e4 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 44);
-    local_e8 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 48);
-    local_ec = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    local_f0 = a1;
-    a0 = *(uint32_t *)((char *)v1 + 52);
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = *(uint32_t *)((char *)v1 + 56);
-    v1 = *(uint32_t *)((char *)v1 + 60);
-    local_f4 = a1;
-    a1 = (uintptr_t)v0 * (uintptr_t)a0;
-    a0 = (uintptr_t)v0 * v1;
-    v0 = (uintptr_t *)&sdns_y_bil_stren_intp;
-    local_fc = a0;
-    a0 = (uint32_t *)&sdns_y_bil_npv_array;
-    v0 = *(uint32_t *)((char *)((char *)&sdns_y_bil_stren_intp));
-    v1 = *(uint32_t *)((char *)((char *)&sdns_y_bil_npv_array));
-    local_f8 = a1;
-    a1 = (uintptr_t)v0 * v1;
-    a0 = a0;
-    v1 = *(uint32_t *)((char *)a0 + 4);
-    local_100 = a1;
-    a1 = (uintptr_t)v0 * v1;
-    v1 = *(uint32_t *)((char *)a0 + 16);
-    local_104 = a1;
-
-    /* fragment 13: Arithmetic */
-    a1 = (uintptr_t)v0 * v1;
-
-    /* fragment 14: MemoryAccess */
-    t0 = *(uint32_t *)((char *)a0 + 8);
-    t1 = *(uint32_t *)((char *)a0 + 12);
-    v1 = *(uint32_t *)((char *)a0 + 20);
-    a2 = *(uint32_t *)((char *)a0 + 24);
-    a3 = *(uint32_t *)((char *)a0 + 28);
-    s6 = *(uint32_t *)((char *)a0 + 32);
-    s5 = *(uint32_t *)((char *)a0 + 36);
-    s7 = *(uint32_t *)((char *)a0 + 40);
-    s8 = *(uint32_t *)((char *)a0 + 44);
-    s2 = *(uint32_t *)((char *)a0 + 48);
-    s3 = *(uint32_t *)((char *)a0 + 52);
-    s4 = *(uint32_t *)((char *)a0 + 56);
-    v1 = (uintptr_t)v0 * v1;
-    a2 = (uintptr_t)v0 * a2;
-    a3 = (uintptr_t)v0 * a3;
-    t0 = (uintptr_t)v0 * t0;
-    t1 = (uintptr_t)v0 * t1;
-    s5 = (uintptr_t)v0 * s5;
-    s2 = (uintptr_t)v0 * s2;
-    s6 = (uintptr_t)v0 * s6;
-    s7 = (uintptr_t)v0 * s7;
-    s8 = (uintptr_t)v0 * s8;
-    s3 = (uintptr_t)v0 * s3;
-    s4 = (uintptr_t)v0 * s4;
-    v0 = (uintptr_t *)&sdns_y_fus_slope_intp;
-    local_108 = a1;
-    a1 = *(uint32_t *)((char *)((char *)&sdns_y_fus_slope_intp));
-    v0 = (uintptr_t *)&sdns_y_dtl_thres_intp;
-    v0 = *(uint32_t *)((char *)((char *)&sdns_y_dtl_thres_intp));
-    a1 = a1 << 16;
-
-    /* fragment 15: CallSetup */
-    local_134 = v1;
-    local_138 = a2;
-    local_13c = a3;
-    local_12c = t0;
-    local_130 = t1;
-    local_120 = t2;
-    local_11c = t3;
-    local_124 = t4;
-    local_128 = t5;
-    local_110 = t6;
-    local_10c = t7;
-    local_114 = t8;
-    local_118 = t9;
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8212, (a1 | ((uintptr_t)v0 << 8)) | (*(uint32_t *)((char *)(uintptr_t)&sdns_y_lum_divop_intp)), a2, a3); /* jalr target resolved by relocation */
-
-    /* fragment 16: Arithmetic */
-    v0 = (uintptr_t *)&sdns_y_dsp_segop_intp;
-
-    /* fragment 17: CallSetup */
-    s8 = s8 << 24;
-    s7 = s7 << 16;
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8216, ((*(uint32_t *)((char *)(uintptr_t)&sdns_y_dsp_segop_intp)) << 28) | ((*(uint32_t *)((char *)(uintptr_t)&sdns_y_bsp_segop_intp)) << 24) | (*(uint32_t *)((char *)(uintptr_t)&sdns_y_fus_segop_intp)) | ((*(uint32_t *)((char *)(uintptr_t)&sdns_y_lum_segop_intp)) << 16) | ((*(uint32_t *)((char *)(uintptr_t)&sdns_y_dtl_segop_intp)) << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 18: CallSetup */
-    t9 = local_118;
-    t8 = local_114;
-    t6 = local_110;
-    t9 = t9 << 24;
-    t7 = local_10c;
-    t8 = t8 << 16;
-    t8 = t9 | t8;
-    t7 = t8 | t7;
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8236, ((local_118 << 24) | (local_114 << 16) | local_10c) | (local_110 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 19: CallSetup */
-    s1 = s1 << 8;
-    s1 = ((s1 << 24) | (s1 << 16) | s1) | s1;
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8240, ((s1 << 24) | (s1 << 16) | s1) | (s1 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 20: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(int32_t *)system_reg_write)(8244, s1); /* jalr target resolved by relocation */
-
-    /* fragment 21: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(int32_t *)system_reg_write)(8248, s1); /* jalr target resolved by relocation */
-
-    /* fragment 22: CallSetup */
-    t5 = local_128;
-    t4 = local_124;
-    t2 = local_120;
-    t5 = t5 << 24;
-    t3 = local_11c;
-    t4 = t4 << 16;
-    t4 = t5 | t4;
-    t3 = t4 | t3;
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8220, ((local_128 << 24) | (local_124 << 16) | local_11c) | (local_120 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 23: CallSetup */
-    s7 = s8 | s7;
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8224, ((local_1c << 24) | (local_18 << 16) | local_10) | (local_14 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 24: CallSetup */
-    s6 = s7 | s6;
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8228, ((local_2c << 24) | (local_28 << 16) | local_20) | (local_24 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 25: CallSetup */
-    s4 = s4 << 16;
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8232, ((local_3c << 24) | (local_38 << 16) | local_30) | (local_34 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 26: CallSetup */
-    s3 = s3 << 8;
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8252, ((local_4c << 24) | (local_48 << 16) | local_40) | (local_44 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 27: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8256, ((local_5c << 24) | (local_58 << 16) | local_50) | (local_54 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 28: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8260, ((local_6c << 24) | (local_68 << 16) | local_60) | (local_64 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 29: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8264, ((local_7c << 24) | (local_78 << 16) | local_70) | (local_74 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 30: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8268, ((local_8c << 24) | (local_88 << 16) | local_80) | (local_84 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 31: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8272, (((uintptr_t)local_9c << 24) | (local_98 << 16) | local_90) | (local_94 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 32: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8276, ((local_ac << 24) | (local_a8 << 16) | local_a0) | (local_a4 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 33: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8280, ((local_bc << 24) | (local_b8 << 16) | (uintptr_t)local_b0) | (local_b4 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 34: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8284, ((local_cc << 24) | (local_c8 << 16) | local_c0) | ((uintptr_t)local_c4 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 35: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8288, ((local_dc << 24) | ((uintptr_t)local_d8 << 16) | local_d0) | (local_d4 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 36: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8292, (((uintptr_t)local_ec << 24) | (local_e8 << 16) | local_e0) | (local_e4 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 37: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8296, ((local_fc << 24) | (local_f8 << 16) | local_f0) | (local_f4 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 38: CallSetup */
-    t1 = local_130;
-    t0 = local_12c;
-    t0 = t0 << 16;
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8300, ((local_130 << 24) | (local_12c << 16) | (uintptr_t)local_100) | (local_104 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 39: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8304, ((local_13c << 24) | (local_138 << 16) | local_108) | (local_134 << 8), local_138 << 16, local_13c); /* jalr target resolved by relocation */
-
-    /* fragment 40: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8308, s6 | (s5 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 41: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8312, (s4 | s3) | s2); /* jalr target resolved by relocation */
-
-    /* fragment 42: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    /* fragment 43: Arithmetic */
-    v0 = 0;
-
-    /* fragment 44: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    return 0;
+	return (v[3] << 24) | (v[2] << 16) | v[0] | (v[1] << 8);
 }
 
-/* WHOLE_DRIVER_CANDIDATE fn_000000000001c938 origin=fragment_seed original=tisp_sdns_c_param_cfg */
+static void sdns_write_npv16(uint32_t reg, const void *arr, uint32_t stren)
+{
+	const uint32_t *src = arr;
+	uint32_t v[16];
+	int i;
+
+	for (i = 0; i < 16; i++)
+		v[i] = src[i] * stren;
+	for (i = 0; i < 16; i += 4)
+		system_reg_write(reg + i, sdns_pack4(&v[i]));
+}
+
+/* WHOLE_DRIVER_CANDIDATE fn_000000000001c010 origin=oem_disasm original=tisp_sdns_y_param_cfg */
+int32_t tisp_sdns_y_param_cfg(void)
+{
+	const uint32_t *bil = (const uint32_t *)sdns_y_bil_npv_array;
+	uint32_t s = (uint32_t)sdns_y_dtl_stren_intp;
+	uint32_t d[4], d4, b[15];
+	int i;
+
+	d[0] = (uint32_t)sdns_y_dtl_npv_0_intp * s;
+	d[1] = (uint32_t)sdns_y_dtl_npv_1_intp * s;
+	d[2] = (uint32_t)sdns_y_dtl_npv_2_intp * s;
+	d[3] = (uint32_t)sdns_y_dtl_npv_3_intp * s;
+	d4 = (uint32_t)sdns_y_dtl_npv_4_intp * s;
+	for (i = 0; i < 15; i++)
+		b[i] = bil[i] * (uint32_t)sdns_y_bil_stren_intp;
+
+	system_reg_write(0x2014, ((uint32_t)sdns_y_fus_slope_intp << 16) |
+				 ((uint32_t)sdns_y_dtl_thres_intp << 8) |
+				 (uint32_t)sdns_y_lum_divop_intp);
+	system_reg_write(0x2018, ((uint32_t)sdns_y_dsp_segop_intp << 28) |
+				 ((uint32_t)sdns_y_bsp_segop_intp << 24) |
+				 (uint32_t)sdns_y_fus_segop_intp |
+				 ((uint32_t)sdns_y_lum_segop_intp << 16) |
+				 ((uint32_t)sdns_y_dtl_segop_intp << 8));
+	system_reg_write(0x202c, sdns_pack4(d));
+	d4 = (d4 << 24) | (d4 << 16) | d4 | (d4 << 8);
+	system_reg_write(0x2030, d4);
+	system_reg_write(0x2034, d4);
+	system_reg_write(0x2038, d4);
+	sdns_write_npv16(0x201c, sdns_y_fus_npv_array, (uint32_t)sdns_y_fus_stren_intp);
+	sdns_write_npv16(0x203c, sdns_y_lum_npv_array, (uint32_t)sdns_y_lum_stren_intp);
+	sdns_write_npv16(0x204c, sdns_y_bsp_npv_array, (uint32_t)sdns_y_bsp_stren_intp);
+	sdns_write_npv16(0x205c, sdns_y_dsp_npv_array, (uint32_t)sdns_y_dsp_stren_intp);
+	system_reg_write(0x206c, sdns_pack4(&b[0]));
+	system_reg_write(0x2070, sdns_pack4(&b[4]));
+	system_reg_write(0x2074, sdns_pack4(&b[8]));
+	system_reg_write(0x2078, (b[14] << 16) | (b[13] << 8) | b[12]);
+	return 0;
+}
+
+/* WHOLE_DRIVER_CANDIDATE fn_000000000001c938 origin=oem_disasm original=tisp_sdns_c_param_cfg */
 int32_t tisp_sdns_c_param_cfg(void)
 {
-    uint32_t local_10 = 0;
-    uint32_t local_14 = 0;
-    uint32_t local_18 = 0;
-    uint32_t local_1c = 0;
-    uint32_t local_20 = 0;
-    uint32_t local_24 = 0;
-    uint32_t local_28 = 0;
-    uint32_t local_2c = 0;
-    uint32_t local_30 = 0;
-    uint32_t local_34 = 0;
-    uint32_t local_38 = 0;
-    uint32_t local_3c = 0;
-    uint32_t local_40 = 0;
-    uint32_t local_44 = 0;
-    uint32_t local_48 = 0;
-    uint32_t local_4c = 0;
-    uint32_t local_50 = 0;
-    uint32_t local_54 = 0;
-    uint32_t *a0 = 0;
-    uint32_t a1 = 0;
-    uint32_t a2 = 0;
-    uint32_t a3 = 0;
-    uint32_t ra = 0;
-    uint32_t s0 = 0;
-    uint32_t s1 = 0;
-    uint32_t s2 = 0;
-    uint32_t s3 = 0;
-    uint32_t s4 = 0;
-    uint32_t s5 = 0;
-    uint32_t s6 = 0;
-    uint32_t s7 = 0;
-    uint32_t s8 = 0;
-    uint32_t t0 = 0;
-    uint32_t t1 = 0;
-    uint32_t t2 = 0;
-    uint32_t t3 = 0;
-    uint32_t t4 = 0;
-    uint32_t t5 = 0;
-    uintptr_t *v0 = 0;
-    uintptr_t v1 = 0;
-
-    /* fragment 0: Arithmetic */
-    v1 = (uintptr_t)&sdns_c_flu_npv_array;
-
-    /* fragment 1: MemoryAccess */
-    t3 = *(uint32_t *)((char *)((char *)&sdns_c_flu_npv_array));
-    v0 = (uintptr_t *)&sdns_c_flu_stren_intp;
-    v1 = v1;
-    v0 = *(uint32_t *)((char *)((char *)&sdns_c_flu_stren_intp));
-    t2 = *(uint32_t *)((char *)v1 + 4);
-    t4 = *(uint32_t *)((char *)v1 + 8);
-    t5 = *(uint32_t *)((char *)v1 + 12);
-    a3 = *(uint32_t *)((char *)v1 + 16);
-    a2 = *(uint32_t *)((char *)v1 + 20);
-    t0 = *(uint32_t *)((char *)v1 + 24);
-    t1 = *(uint32_t *)((char *)v1 + 28);
-    local_50 = s8;
-    local_4c = s7;
-    s8 = *(uint32_t *)((char *)v1 + 44);
-    s7 = *(uint32_t *)((char *)v1 + 40);
-    local_48 = s6;
-    local_44 = s5;
-    s6 = *(uint32_t *)((char *)v1 + 32);
-    s5 = *(uint32_t *)((char *)v1 + 36);
-    local_40 = s4;
-    local_3c = s3;
-    s4 = *(uint32_t *)((char *)v1 + 60);
-    s3 = *(uint32_t *)((char *)v1 + 56);
-    local_38 = s2;
-    local_34 = s1;
-    s2 = *(uint32_t *)((char *)v1 + 48);
-    s1 = *(uint32_t *)((char *)v1 + 52);
-    a3 = (uintptr_t)v0 * a3;
-    a2 = (uintptr_t)v0 * a2;
-    t0 = (uintptr_t)v0 * t0;
-
-    /* fragment 2: Arithmetic */
-    t1 = (uintptr_t)v0 * t1;
-    t3 = (uintptr_t)v0 * t3;
-    t2 = (uintptr_t)v0 * t2;
-    t4 = (uintptr_t)v0 * t4;
-    t5 = (uintptr_t)v0 * t5;
-    s5 = (uintptr_t)v0 * s5;
-    s1 = (uintptr_t)v0 * s1;
-    s6 = (uintptr_t)v0 * s6;
-    s7 = (uintptr_t)v0 * s7;
-    s8 = (uintptr_t)v0 * s8;
-    s2 = (uintptr_t)v0 * s2;
-    s3 = (uintptr_t)v0 * s3;
-    s4 = (uintptr_t)v0 * s4;
-    v0 = (uintptr_t *)&sdns_c_bas_wei_intp;
-
-    /* fragment 3: MemoryAccess */
-    a1 = *(uint32_t *)((char *)((char *)&sdns_c_bas_wei_intp));
-    v0 = (uintptr_t *)&sdns_c_fus_mod_intp;
-    v0 = *(uint32_t *)((char *)((char *)&sdns_c_fus_mod_intp));
-    a1 = a1 << 16;
-    v0 = (uintptr_t)v0 << 8;
-    a1 = a1 | (uintptr_t)v0;
-    v0 = (uintptr_t *)&sdns_c_flu_cal_intp;
-    v0 = *(uint32_t *)((char *)((char *)&sdns_c_flu_cal_intp));
-    local_30 = s0;
-    s0 = (uintptr_t)&system_reg_write;
-    s0 = s0;
-    a0 = 8324;
-    a1 = a1 | (uintptr_t)v0;
-    local_54 = ra;
-    local_24 = a2;
-    local_20 = a3;
-    local_28 = t0;
-    local_2c = t1;
-    local_14 = t2;
-    local_10 = t3;
-    local_18 = t4;
-
-    /* fragment 4: CallSetup */
-    local_1c = t5;
-    v0 = (uintptr_t *)((uintptr_t (*)(int32_t *))(uintptr_t)system_reg_write)(a0); /* jalr target resolved by relocation */
-
-    /* fragment 5: CallSetup */
-    t5 = local_1c;
-    t4 = local_18;
-    t2 = local_14;
-    t5 = t5 << 24;
-    t3 = local_10;
-    t4 = t4 << 16;
-    t4 = t5 | t4;
-    t3 = t4 | t3;
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8328, ((local_1c << 24) | (local_18 << 16) | local_10) | (local_14 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 6: CallSetup */
-    t1 = local_2c;
-    t0 = local_28;
-    t1 = t1 << 24;
-    t0 = t0 << 16;
-    t0 = t1 | t0;
-    s8 = s8 << 24;
-    s7 = s7 << 16;
-    s7 = s8 | s7;
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8332, ((local_2c << 24) | (local_28 << 16) | local_20) | (local_24 << 8), local_24, (local_2c << 24) | (local_28 << 16) | local_20); /* jalr target resolved by relocation */
-
-    /* fragment 7: CallSetup */
-    s6 = s7 | s6;
-    s4 = s4 << 24;
-    s3 = s3 << 16;
-    s3 = s4 | s3;
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8336, (s7 | s6) | (s5 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 8: CallSetup */
-    s2 = s3 | s2;
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(8340, (s3 | s2) | (s1 << 8)); /* jalr target resolved by relocation */
-
-    /* fragment 9: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    /* fragment 10: Arithmetic */
-    v0 = 0;
-
-    /* fragment 11: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    return 0;
+	system_reg_write(0x2084, ((uint32_t)sdns_c_bas_wei_intp << 16) |
+				 ((uint32_t)sdns_c_fus_mod_intp << 8) |
+				 (uint32_t)sdns_c_flu_cal_intp);
+	sdns_write_npv16(0x2088, sdns_c_flu_npv_array, (uint32_t)sdns_c_flu_stren_intp);
+	return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001cb20 origin=fragment_seed original=tisp_sdns_intp */
@@ -35777,7 +35383,7 @@ int32_t tisp_sdns_intp_reg_refresh(int32_t arg1)
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001cebc origin=model_output original=tisp_sdns_par_refresh */
 int32_t tisp_sdns_par_refresh(uint32_t a0, uint32_t a1)
 {
-	uint32_t gain_old_value = gain_old;
+	uint32_t gain_old_value = sdns_gain_old;
 	uint32_t diff;
 
 	if (gain_old_value != 0xffffffff) {
@@ -35789,139 +35395,74 @@ int32_t tisp_sdns_par_refresh(uint32_t a0, uint32_t a1)
 		if (diff < a1)
 			return 0;
 
-		*(uint32_t *)&gain_old_value = a0;
+		sdns_gain_old = a0;
 		tisp_sdns_intp_reg_refresh(a0);
 	} else {
-		*(uint32_t *)&gain_old_value = a0;
+		sdns_gain_old = a0;
 		tisp_sdns_all_reg_refresh(a0);
 	}
 
 	return 0;
 }
 
-/* WHOLE_DRIVER_CANDIDATE fn_000000000001cf24 origin=fragment_seed original=tiziano_sdns_params_refresh */
+/*
+ * tiziano_sdns_params_refresh: OEM tx-isp-t21.ko @0x1c644 copies the 30 SDNS
+ * arrays from tparams+0x10354..0x107d4 (lui 0x1 / addiu 0x354.. on tparams).
+ * The decompile dropped the 0x10000 high part and copied from tparams+0, the
+ * ASCII descriptor table ("TISP_PARAM_TOP_BYPASS..."), so 2DNR ran with
+ * garbage thresholds.
+ */
 int32_t tiziano_sdns_params_refresh(void)
 {
-    uint32_t local_10 = 0;
-    uint32_t local_14 = 0;
-    uint32_t *a0 = 0;
-    uint32_t a1 = 0;
-    uint32_t a2 = 0;
-    uint32_t ra = 0;
-    uint32_t s0 = 0;
-    uintptr_t *v0 = 0;
+	static const struct {
+		void *dst;
+		uint16_t off;	/* tparams + 0x10000 + off */
+		uint16_t len;
+	} tbl[] = {
+		{ &sdns_top_func_array,     0x354, 8 },
+		{ &sdns_y_dtl_thres_array,  0x35c, 36 },
+		{ &sdns_y_fus_slope_array,  0x380, 36 },
+		{ &sdns_y_lum_divop_array,  0x3a4, 36 },
+		{ &sdns_y_dtl_segop_array,  0x3c8, 36 },
+		{ &sdns_y_fus_segop_array,  0x3ec, 36 },
+		{ &sdns_y_lum_segop_array,  0x410, 36 },
+		{ &sdns_y_dsp_segop_array,  0x434, 36 },
+		{ &sdns_y_bsp_segop_array,  0x458, 36 },
+		{ &sdns_y_dtl_stren_array,  0x47c, 36 },
+		{ &sdns_y_fus_stren_array,  0x4a0, 36 },
+		{ &sdns_y_lum_stren_array,  0x4c4, 36 },
+		{ &sdns_y_dsp_stren_array,  0x4e8, 36 },
+		{ &sdns_y_bsp_stren_array,  0x50c, 36 },
+		{ &sdns_y_dtl_npv_0_array,  0x530, 36 },
+		{ &sdns_y_dtl_npv_1_array,  0x554, 36 },
+		{ &sdns_y_dtl_npv_2_array,  0x578, 36 },
+		{ &sdns_y_dtl_npv_3_array,  0x59c, 36 },
+		{ &sdns_y_dtl_npv_4_array,  0x5c0, 36 },
+		{ &sdns_y_fus_npv_array,    0x5e4, 64 },
+		{ &sdns_y_lum_npv_array,    0x624, 64 },
+		{ &sdns_y_dsp_npv_array,    0x664, 64 },
+		{ &sdns_y_bsp_npv_array,    0x6a4, 64 },
+		{ &sdns_y_bil_stren_array,  0x6e4, 36 },
+		{ &sdns_y_bil_npv_array,    0x708, 60 },
+		{ &sdns_c_bas_wei_array,    0x744, 36 },
+		{ &sdns_c_fus_mod_array,    0x768, 36 },
+		{ &sdns_c_flu_cal_array,    0x78c, 36 },
+		{ &sdns_c_flu_stren_array,  0x7b0, 36 },
+		{ &sdns_c_flu_npv_array,    0x7d4, 64 },
+	};
+	size_t i;
 
-    /* fragment 0: Prologue */
-    /* function prologue: stack frame and callee-saved register setup */
-
-    /* fragment 1: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_top_func_array, (void *)(uintptr_t)&tparams, 8); /* jalr target resolved by relocation */
-
-    /* fragment 2: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_dtl_thres_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 3: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_fus_slope_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 4: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_lum_divop_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 5: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_dtl_segop_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 6: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_fus_segop_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 7: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_lum_segop_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 8: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_dsp_segop_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 9: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_bsp_segop_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 10: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_dtl_stren_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 11: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_fus_stren_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 12: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_lum_stren_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 13: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_dsp_stren_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 14: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_bsp_stren_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 15: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_dtl_npv_0_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 16: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_dtl_npv_1_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 17: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_dtl_npv_2_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 18: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_dtl_npv_3_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 19: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_dtl_npv_4_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 20: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_fus_npv_array, (void *)(uintptr_t)&tparams, 64); /* jalr target resolved by relocation */
-
-    /* fragment 21: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_lum_npv_array, (void *)(uintptr_t)&tparams, 64); /* jalr target resolved by relocation */
-
-    /* fragment 22: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_dsp_npv_array, (void *)(uintptr_t)&tparams, 64); /* jalr target resolved by relocation */
-
-    /* fragment 23: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_bsp_npv_array, (void *)(uintptr_t)&tparams, 64); /* jalr target resolved by relocation */
-
-    /* fragment 24: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_bil_stren_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 25: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_y_bil_npv_array, (void *)(uintptr_t)&tparams, 60); /* jalr target resolved by relocation */
-
-    /* fragment 26: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_c_bas_wei_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 27: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_c_fus_mod_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 28: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_c_flu_cal_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 29: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_c_flu_stren_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 30: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(int32_t *)&sdns_c_flu_npv_array, (void *)(uintptr_t)&tparams, 64); /* jalr target resolved by relocation */
-
-    /* fragment 31: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    /* fragment 32: Arithmetic */
-    v0 = 0;
-
-    /* fragment 33: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    return 0;
+	for (i = 0; i < ARRAY_SIZE(tbl); i++)
+		memcpy(tbl[i].dst, tparams + 0x10000 + tbl[i].off, tbl[i].len);
+	return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001d21c origin=model_output original=tiziano_sdns_dn_params_refresh */
 int32_t tiziano_sdns_dn_params_refresh(void)
 {
-	tiziano_sdns_gain_old += 0x200;
+	sdns_gain_old += 0x200;
 	tiziano_sdns_params_refresh();
-	tisp_sdns_all_reg_refresh(tiziano_sdns_gain_old);
+	tisp_sdns_all_reg_refresh(sdns_gain_old);
 	return 0;
 }
 
@@ -35936,7 +35477,7 @@ int32_t tiziano_sdns_init(void)
     uint32_t v1 = 0;
 
     /* fragment 0: CallSetup */
-    *(uint32_t *)((char *)((char *)&tparams + 0x15a0)) = (-1);
+    sdns_gain_old = 0xffffffffU; /* OEM sdns gain_old, not tparams+0x15a0 */
     v0 = (uintptr_t *)((uintptr_t (*)(int32_t *))(uintptr_t)tiziano_sdns_params_refresh)(a0); /* jalr target resolved by relocation */
 
     /* fragment 1: CallSetup */
@@ -38787,7 +38328,7 @@ int32_t tisp_mdns_intp_reg_refresh(int32_t arg1)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000020cc0 origin=model_output original=tisp_mdns_par_refresh */
 int32_t tisp_mdns_par_refresh(uint32_t arg1, int32_t arg2)
 {
-	uint32_t gain_old_1 = gain_old;
+	uint32_t gain_old_1 = mdns_gain_old;
 
 	if (gain_old_1 != 0xffffffffu) {
 		uint32_t diff = arg1 - gain_old_1;
@@ -38796,11 +38337,11 @@ int32_t tisp_mdns_par_refresh(uint32_t arg1, int32_t arg2)
 			diff = gain_old_1 - arg1;
 
 		if (diff >= (uint32_t)arg2) {
-			gain_old = arg1;
+			mdns_gain_old = arg1;
 			tisp_mdns_intp_reg_refresh(arg1);
 		}
 	} else {
-		gain_old = arg1;
+		mdns_gain_old = arg1;
 		tisp_mdns_all_reg_refresh(arg1);
 		system_reg_write(0x1b50, 0x101);
 	}
@@ -38975,16 +38516,16 @@ int32_t tisp_mdns_bypass(uint32_t a0)
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000219c0 origin=fragment_seed original=tiziano_mdns_dn_params_refresh */
 int32_t tiziano_mdns_dn_params_refresh(void)
 {
-	gain_old += 512;
+	mdns_gain_old += 512;
 	tiziano_mdns_params_refresh();
-	tisp_mdns_all_reg_refresh(gain_old);
+	tisp_mdns_all_reg_refresh(mdns_gain_old);
 	return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000021a10 origin=fragment_seed original=tiziano_mdns_init */
 int32_t tiziano_mdns_init(uint32_t a0, uint32_t a1)
 {
-	gain_old = UINT_MAX;
+	mdns_gain_old = UINT_MAX;
 	vin_width = a0;
 	vin_height = a1;
 	tiziano_mdns_params_refresh();
@@ -39230,7 +38771,7 @@ int32_t tisp_mdns_param_array_set(int32_t param_id, const void *src)
 		return 0;
 	case 0xe6:
 		memcpy(&mdns_y_ref_wei_min_array, (void *)src, 0x24);
-		tisp_mdns_all_reg_refresh(gain_old + 0x200);
+		tisp_mdns_all_reg_refresh(mdns_gain_old + 0x200);
 		return 0;
 	case 0xe7:
 		memcpy(&mdns_y_ref_wei_max_array, (void *)src, 0x24);
@@ -39333,15 +38874,15 @@ int32_t tisp_mdns_param_array_set(int32_t param_id, const void *src)
 		return 0;
 	case 0x108:
 		memcpy(&mdns_y_rs_npv_array, (void *)src, 0x40);
-		tisp_mdns_all_reg_refresh(gain_old + 0x200);
+		tisp_mdns_all_reg_refresh(mdns_gain_old + 0x200);
 		return 0;
 	case 0x109:
 		memcpy(&mdns_y_rm_npv_array, (void *)src, 0x40);
-		tisp_mdns_all_reg_refresh(gain_old + 0x200);
+		tisp_mdns_all_reg_refresh(mdns_gain_old + 0x200);
 		return 0;
 	case 0x10a:
 		memcpy(&mdns_y_shp_c_0_npv_array, (void *)src, 0x24);
-		tisp_mdns_all_reg_refresh(gain_old + 0x200);
+		tisp_mdns_all_reg_refresh(mdns_gain_old + 0x200);
 		return 0;
 	case 0x10b:
 		memcpy(&mdns_y_shp_c_1_npv_array, (void *)src, 0x24);
@@ -39552,7 +39093,7 @@ int32_t tisp_mdns_param_array_set(int32_t param_id, const void *src)
 		return 0;
 	case 0x150:
 		memcpy(&mdns_c_adj_wcrm_n_array, (void *)src, 0x20);
-		tisp_mdns_all_reg_refresh(gain_old + 0x200);
+		tisp_mdns_all_reg_refresh(mdns_gain_old + 0x200);
 		return 0;
 	}
 	return 0;
@@ -39716,7 +39257,8 @@ int32_t tisp_dpc_d_par_cfg(void)
 	m1 = (uint32_t *)&dpc_d_m1_con_par_array;
 	m2 = (uint32_t *)&dpc_d_m2_con_par_array;
 
-	s1 = (m1[0] << 26) | (m1[1] << 25) | m1[3] | (m2[0] << 24) |
+	/* OEM @0x230ec: bit 0.. comes from dpc_d_m2_con_par[2] */
+	s1 = (m1[0] << 26) | (m1[1] << 25) | m2[2] | (m2[0] << 24) |
 		(m2[1] << 23) | (m1[4] << 1) | (a1 << 22) | ((uintptr_t)a0 << 21) |
 		(v1 << 20) | ((uintptr_t)v0 << 19) | (a1 << 18) | ((uintptr_t)a0 << 17) |
 		(v1 << 16) | ((uintptr_t)v0 << 15) | ((uintptr_t)a0 << 14) | (v1 << 13) |
@@ -39843,11 +39385,11 @@ int32_t tisp_ctr_par_cfg(void)
 
 	system_reg_write(0x258, a1);
 
+	/* OEM @0x23648: both scaled terms come from ctr_con_par[4] */
 	v = p[4];
 	a1 = (v * 63) >> 4;
-	v = p[3];
-	a1 |= v << 0x10;
 	a1 |= ((v * 255) >> 4) << 6;
+	a1 |= p[3] << 0x10;
 	system_reg_write(0x25c, a1);
 
 	a1 = ctr_eh_thres_intp << 0x10;
@@ -40068,20 +39610,19 @@ int32_t tisp_dpc_intp_reg_refresh(int32_t arg1)
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002456c origin=model_output original=tisp_dpc_par_refresh */
 int32_t tisp_dpc_par_refresh(uint32_t a0, uint32_t a1, uint32_t a2)
 {
-	static uint32_t gain_old_value = UINT_MAX;
 	uint32_t diff;
 
-	if (gain_old_value == UINT_MAX) {
-		gain_old_value = a0;
+	if (dpc_gain_old == UINT_MAX) {
+		dpc_gain_old = a0;
 		tisp_dpc_all_reg_refresh(a0);
 	} else {
-		if (a0 < gain_old_value)
-			diff = gain_old_value - a0;
+		if (a0 < dpc_gain_old)
+			diff = dpc_gain_old - a0;
 		else
-			diff = a0 - gain_old_value;
+			diff = a0 - dpc_gain_old;
 
 		if (diff >= a1) {
-			gain_old_value = a0;
+			dpc_gain_old = a0;
 			tisp_dpc_intp_reg_refresh(a0);
 		}
 	}
@@ -40157,11 +39698,11 @@ int32_t tiziano_dpc_dn_params_refresh(void)
     /* function prologue: stack frame and callee-saved register setup */
 
     /* fragment 1: CallSetup */
-    *(uint32_t *)((char *)((char *)&tparams + 0x15c0)) = ((*(uint32_t *)((char *)((char *)&tparams + 0x15c0))) + 512);
+    dpc_gain_old += 512; /* OEM .data gain_old, not tparams+0x15c0 */
     v0 = (uintptr_t *)((uintptr_t (*)(int32_t *))(uintptr_t)tiziano_dpc_params_refresh)(a0); /* jalr target resolved by relocation */
 
     /* fragment 2: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t))(uintptr_t)tisp_dpc_all_reg_refresh)(*(uint32_t *)((char *)((char *)&tparams + 0x15c0))); /* jalr target resolved by relocation */
+    tisp_dpc_all_reg_refresh(dpc_gain_old);
 
     /* fragment 3: Epilogue */
     /* function epilogue: restore registers and return */
@@ -40187,7 +39728,7 @@ int32_t tiziano_dpc_init(void)
     uint32_t v1 = 0;
 
     /* fragment 0: CallSetup */
-    *(uint32_t *)((char *)((char *)&tparams + 0x15c0)) = (-1);
+    dpc_gain_old = 0xffffffffU; /* OEM .data gain_old, not tparams+0x15c0 */
     v0 = (uintptr_t *)((uintptr_t (*)(int32_t *))(uintptr_t)tiziano_dpc_params_refresh)(a0); /* jalr target resolved by relocation */
 
     /* fragment 1: CallSetup */
@@ -40472,7 +40013,8 @@ int32_t tisp_dpc_param_array_set(int32_t param_id, int32_t src)
 		return 0;
 	case 0xb0:
 		memcpy(&rdns_con_par_array, (void *)src, 40);
-		tisp_dpc_all_reg_refresh(*(int32_t *)((char *)&get_isp_clk + 8224) + 512);
+		/* OEM: dpc gain_old + 0x200; recovered read get_isp_clk()'s text */
+		tisp_dpc_all_reg_refresh(dpc_gain_old + 512);
 		return 0;
 	}
 	return 0;
@@ -40654,44 +40196,35 @@ uint32_t *tiziano_defog_get_data(void *arg1)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000025498 origin=model_output original=tiziano_defog_interrupt_static */
 int32_t tiziano_defog_interrupt_static(void)
 {
-	uint32_t status;
-	uint32_t *info;
-	uint32_t *buf;
-	uint32_t irq_val;
-	uint32_t event_type;
-	uint32_t *event_data;
+	/*
+	 * OEM (stock 0x24bb8): read register 0x1500 and compare it with the
+	 * defog DMA bank in tispinfo (+0x3c virtual, +0x40 physical, four
+	 * 0x1000-byte pages).  The recovered body passed the address of the
+	 * "BGGR" string as the register offset, used tisp_init()'s text as
+	 * tispinfo and stepped a u32 pointer by 0x1000 elements.  Not registered
+	 * with system_irq_func_set() in this driver (the OEM uses slot 21).
+	 */
+	uint32_t status = system_reg_read(0x1500);
+	uint32_t *info = (uint32_t *)tispinfo;
+	uint32_t buf = info[15];
+	uint32_t irq_val = info[16];
+	uint32_t event[12] = { 0 };
+	uint32_t page;
 
-	status = system_reg_read(((char *)&LC1));
-	info = (uint32_t *)tisp_init;
-	buf = (uint32_t *)(*(uint32_t *)((char *)info + 60));
-	irq_val = *(uint32_t *)((char *)info + 64);
+	if (!buf)
+		return 1;
 
-	if (status == irq_val) {
-		dma_cache_sync(0, (void *)buf, 0x1000, 0);
-		tiziano_defog_get_data((void *)buf);
-		buf = (uint32_t *)(*(uint32_t *)((char *)info + 60));
+	for (page = 0; page < 4; page++) {
+		if (status == irq_val + page * 0x1000) {
+			dma_cache_sync(0, (void *)(uintptr_t)(buf + page * 0x1000),
+				       0x1000, 0);
+			tiziano_defog_get_data((void *)(uintptr_t)(buf + page * 0x1000));
+			break;
+		}
 	}
 
-	if (status == irq_val + 0x1000) {
-		dma_cache_sync(0, (void *)(buf + 0x1000), 0x1000, 0);
-		tiziano_defog_get_data((void *)(buf + 0x1000));
-		buf = (uint32_t *)(*(uint32_t *)((char *)info + 60));
-	}
-
-	if (status == irq_val + 0x2000) {
-		dma_cache_sync(0, (void *)(buf + 0x2000), 0x1000, 0);
-		tiziano_defog_get_data((void *)(buf + 0x2000));
-		buf = (uint32_t *)(*(uint32_t *)((char *)info + 60));
-	}
-
-	if (status == irq_val + 0x3000) {
-		dma_cache_sync(0, (void *)(buf + 0x3000), 0x1000, 0);
-		tiziano_defog_get_data((void *)(buf + 0x3000));
-	}
-
-	event_type = 3;
-	event_data = 0;
-	tisp_event_push(&event_type);
+	event[2] = 3;
+	tisp_event_push(event);
 	return 1;
 }
 
@@ -42213,9 +41746,14 @@ int32_t tiziano_adr_params_init(void)
 	system_reg_write(0xe14, (coc[14] << 24) | (coc[13] << 16) | coc[11] | (coc[12] << 8));
 	system_reg_write(0xe18, (coc[18] << 24) | (coc[17] << 16) | coc[15] | (coc[16] << 8));
 	system_reg_write(0xe1c, (coc[20] << 8) | coc[19]);
-	system_reg_write(0xe08, (coc[5] << 16) | coc[4]);
-	system_reg_write(0xe0c, (coc[7] << 16) | coc[6]);
-	system_reg_write(0xe10, coc[3]);
+	/* OEM @0x2830c: these three come from param_adr_ct_par_array */
+	{
+		const uint32_t *ctp = (const uint32_t *)&param_adr_ct_par_array;
+
+		system_reg_write(0xe08, (ctp[5] << 16) | ctp[4]);
+		system_reg_write(0xe0c, (ctp[7] << 16) | ctp[6]);
+		system_reg_write(0xe10, ctp[3]);
+	}
 
 	system_reg_write(0xe20, (st[1] << 16) | st[0]);
 	system_reg_write(0xe24, (st[3] << 16) | st[2]);
@@ -42611,7 +42149,7 @@ int32_t tisp_s_adr_str_internal(uint32_t a0)
 	} while ((uint32_t)i != t3);
 
 	tiziano_adr_params_init();
-	*(uint32_t *)((char *)((char *)&awb_array_g + 0x6c)) = 1;
+	ev_changed = 1; /* OEM ev_changed, not awb_array_g+0x6c */
 	return (int32_t)&sinfo_root;
 }
 
@@ -43065,6 +42603,12 @@ int32_t ae_interrupt_static(void)
 		return IRQ_HANDLED;
 	dma_cache_sync(NULL, (void *)(uintptr_t)(base + offset), 0x1000, 0);
 	tisp_ae_get_statistics((u32 *)(uintptr_t)(base + offset), 0xf001f001);
+	ae_dbg_stat_irqs++;
+	ae_dbg_zone[0] = ((u32 *)ae_array_d)[112];
+	ae_dbg_zone[1] = ((u32 *)ae_array_m)[112];
+	ae_dbg_zone[2] = ((u32 *)ae_array_s)[112];
+	ae_dbg_zone[3] = ((u32 *)ae_array_dc)[112];
+	ae_dbg_zone[4] = ((u32 *)ae_array_sc)[112];
 	return IRQ_HANDLED;
 }
 
@@ -43084,7 +42628,7 @@ static int t21_ae_update_luma(void)
 
 	if (!params[1] || !params[3] ||
 	    params[1] > 15 || params[3] > 15)
-		return -EINVAL;
+		return ae_dbg_ret = -EINVAL;
 
 	/* Match the OEM scene-mode selection.  These channel multipliers are
 	 * supplied by the active tuning bank; they account for the Bayer channel
@@ -43113,9 +42657,11 @@ static int t21_ae_update_luma(void)
 			      (u32 *)_AePointPos, mix_r, mix_b,
 			      &mean, fractions, &zone_sum,
 			      &roi_mean, &roui_mean);
+	ae_dbg_ret = ret;
 	if (ret < 0)
 		return 0;
 	t21_ae_measured_luma = mean;
+	ae_dbg_luma = mean;
 	pr_debug_ratelimited("tx-isp-t21: ae stats grid=%ux%u mix=%u/%u dms=%u/%u/%u luma=%u roi=%u/%u\n",
 			    params[1], params[3], mix_r, mix_b,
 			    ((u32 *)ae_array_d)[0], ((u32 *)ae_array_m)[0],
@@ -45601,20 +45147,28 @@ Tiziano_ae_fpga0x340:
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002c768 origin=model_output original=tisp_set_ag_func */
 uint32_t tisp_set_ag_func(void *arg1, void *arg2, void *arg3, int32_t *arg4)
 {
+	/*
+	 * NOTE: the OEM receives IspAeTuneParam (17 words) by value and reads
+	 * words 0, 4, 5 and 13; this recovered 4-argument form does not match.
+	 * Its only caller, tisp_ae_process_impl(), is unreachable because
+	 * tisp_ae_process() is the rewritten AE.  Fixed only so that it no
+	 * longer reads and writes module and kernel text.
+	 */
 	uint32_t dg_max = *(uint32_t *)((char *)arg1 + 0x10);
 	uint32_t old_ag = *(uint32_t *)((char *)arg2 + 0xc);
 	uint32_t old_dg = *(uint32_t *)((char *)arg2 + 0x4);
 	uint32_t cur_ag = *(uint32_t *)((char *)arg3 + 0xc);
 	uint32_t cur_dg = *(uint32_t *)((char *)arg3 + 0x4);
 	uint32_t shift = *arg4;
-	uint32_t ftune = *(uint32_t *)(PDE_DATA + 0x4a7c);
+	uint32_t ftune_val = (uint32_t)ftune; /* OEM .data ftune; recovered read kernel text at PDE_DATA+0x4a7c */
+	uint8_t *ae = tisp_ae_ctrls; /* OEM: tisp_ae_ctrls, not the AE tune function's text */
 	uint32_t ag_val;
 	uint32_t dg_val;
 	uint32_t dg_result;
 	uint32_t ag_new;
 	uint32_t dg_new;
 
-	if (ftune == 1) {
+	if (ftune_val == 1) {
 		goto do_update;
 	}
 
@@ -45627,23 +45181,23 @@ uint32_t tisp_set_ag_func(void *arg1, void *arg2, void *arg3, int32_t *arg4)
 	}
 
 	dg_val = dg_new;
-	if (tisp_ae_tune == 0) {
+	if (*(uint32_t *)ae == 0) {
 		goto store_result;
 	}
 
 do_update:
-	if (tisp_ae_tune != 0) {
-		cur_ag = *(uint32_t *)(tisp_ae_tune + 4);
-		dg_val = fix_point_mult2_32(shift, *(uint32_t *)(tisp_ae_tune + 8), *(uint32_t *)(tisp_ae_tune + 16), 0);
+	if (*(uint32_t *)ae != 0) {
+		cur_ag = *(uint32_t *)(ae + 4);
+		dg_val = fix_point_mult2_32(shift, *(uint32_t *)(ae + 8), *(uint32_t *)(ae + 16), 0);
 	}
 
 	ag_val = tisp_set_sensor_analog_gain(cur_ag);
 	ag_new = (uintptr_t (*)())(uintptr_t)ag_val;
-	*(uint32_t *)(tisp_ae_tune + 4) = ag_val;
+	*(uint32_t *)(ae + 4) = ag_val;
 
 	dg_val = tisp_set_sensor_digital_gain(dg_val);
 	dg_new = (uintptr_t (*)())(uintptr_t)dg_val;
-	*(uint32_t *)(tisp_ae_tune + 8) = dg_val;
+	*(uint32_t *)(ae + 8) = dg_val;
 
 	{
 		uint32_t num = fix_point_mult2_32(shift, cur_ag, dg_val, 0);
@@ -45656,8 +45210,8 @@ do_update:
 	}
 
 	dg_new = (uintptr_t (*)())(uintptr_t)dg_max;
-	*(uint32_t *)(tisp_ae_tune + 16) = dg_max;
-	*(uint32_t *)(PDE_DATA + 0x4a7c) = 0;
+	*(uint32_t *)(ae + 16) = dg_max;
+	ftune = 0;
 	dg_val = dg_new;
 
 store_result:
@@ -45897,8 +45451,10 @@ int tiziano_ae_params_refresh(void)
 int32_t tiziano_ae_compensation_set(uint32_t a0)
 {
     ae_compensation = (uintptr_t (*)())(uintptr_t)a0;
-    *(uint32_t *)((char *)((char *)&d_linear + 0x1014)) = 1;
-    *(uint32_t *)((char *)((char *)&d_linear + 0x1004)) = 1;
+    /* OEM: trig = force_trig = 1; the recovery wrote both into d_linear
+     * (the LSC table) at +0x1014/+0x1004 (HI16 0x10000 dropped). */
+    trig = 1;
+    force_trig = 1;
     return 0;
 }
 
@@ -46625,6 +46181,7 @@ int32_t tisp_ae_process(void)
 	u32 current_ev;
 	u32 *reg = (u32 *)_ae_reg;
 	u32 *result = (u32 *)_ae_result;
+	bool hold = false;
 
 	BUILD_BUG_ON(sizeof(*ae_ctrl) != sizeof(tisp_ae_ctrls));
 	BUILD_BUG_ON(offsetof(struct t21_ae_ctrls_view, sensor_dgain) != 0x08);
@@ -46682,56 +46239,87 @@ int32_t tisp_ae_process(void)
 	target = t21_ae_target_for_exposure(current_ev);
 	if (target < 20 || target > 160)
 		target = 64;
-	desired = current_exposure * target;
-	desired = div_u64(desired, luma);
+	ae_dbg_target = target;
+	{
+		u32 tol = target * (u32)clamp_t(int, ae_hold_pct, 0, 50) / 100;
+		u32 shift = (u32)clamp_t(int, ae_step_shift, 0, 4);
+
+		if (luma + tol >= target && luma <= target + tol) {
+			hold = true;
+			desired = current_exposure;
+		} else {
+			/* desired = current * (target/luma)^(1/2^shift), at
+			 * most 8x either way per step.  Moving in the log
+			 * domain converges against a luma that lags one or two
+			 * AE steps; the old full step oscillated against one. */
+			u32 ratio = (u32)min_t(u64, div_u64((u64)target << 10, luma),
+					       64U << 10);
+			u32 i;
+
+			for (i = 0; i < shift; i++)
+				ratio = int_sqrt((unsigned long)ratio << 10);
+			ratio = clamp_t(u32, ratio, 1024 / 8, 1024 * 8);
+			desired = div_u64(current_exposure * ratio, 1024);
+		}
+	}
 	max_exposure = (u64)max_it * max_again;
 	max_exposure = div_u64(max_exposure * max_sensor_dgain, 1024);
 	max_exposure = div_u64(max_exposure * max_isp_dgain, 1024);
+	/* A lowered limit (day/night max ISP dgain, IT cap) is applied even
+	 * inside the hold band. */
+	if (hold && (current_exposure > max_exposure ||
+		     t21_ae_current_it > max_it ||
+		     t21_ae_current_isp_dgain_q10 > max_isp_dgain))
+		hold = false;
 	if (desired < (u64)min_it * 1024U)
 		desired = (u64)min_it * 1024U;
 	if (desired > max_exposure)
 		desired = max_exposure;
 
-	/* Stock spends integration time first, then sensor analogue/digital gain,
-	 * and uses ISP digital gain for the remaining budget and sensor
-	 * quantisation error.  The active tuning bank and sensor descriptor own
-	 * every limit and quantisation decision. */
-	new_it = div_u64(desired + 1023, 1024);
-	new_it = clamp_t(u32, new_it, min_it, max_it);
-	total_gain_q10 = div_u64(desired + new_it - 1, new_it);
-	requested_again = clamp_t(u32, total_gain_q10, 1024, max_again);
-	requested_sensor_dgain = div_u64((u64)total_gain_q10 * 1024 +
-					 requested_again - 1,
-					 requested_again);
-	requested_sensor_dgain = clamp_t(u32, requested_sensor_dgain,
-					  1024, max_sensor_dgain);
+	/* Holding: the sensor and the ISP digital gain keep what they have; no
+	 * register or I2C writes, so quantisation cannot dither them. */
+	if (!hold) {
+		/* Stock spends integration time first, then sensor analogue/digital gain,
+		 * and uses ISP digital gain for the remaining budget and sensor
+		 * quantisation error.  The active tuning bank and sensor descriptor own
+		 * every limit and quantisation decision. */
+		new_it = div_u64(desired + 1023, 1024);
+		new_it = clamp_t(u32, new_it, min_it, max_it);
+		total_gain_q10 = div_u64(desired + new_it - 1, new_it);
+		requested_again = clamp_t(u32, total_gain_q10, 1024, max_again);
+		requested_sensor_dgain = div_u64((u64)total_gain_q10 * 1024 +
+						 requested_again - 1,
+						 requested_again);
+		requested_sensor_dgain = clamp_t(u32, requested_sensor_dgain,
+						  1024, max_sensor_dgain);
 
-	if (ctrl->start_changes)
-		ctrl->start_changes();
-	ctrl->set_integration_time(new_it & 0xffff);
-	t21_ae_current_it = new_it;
-	actual_again = tisp_set_sensor_analog_gain(requested_again);
-	actual_sensor_dgain =
-		tisp_set_sensor_digital_gain(requested_sensor_dgain);
-	if (ctrl->end_changes)
-		ctrl->end_changes();
-	actual_again = max_t(u32, actual_again, 1);
-	actual_sensor_dgain = max_t(u32, actual_sensor_dgain, 1);
-	actual_sensor_gain = (u64)actual_again * actual_sensor_dgain;
-	isp_dgain = div_u64((u64)total_gain_q10 * 1024 * 1024,
-				 actual_sensor_gain);
-	isp_dgain = clamp_t(u32, isp_dgain, 1024, max_isp_dgain);
-	t21_ae_current_gain_q10 = actual_again;
-	t21_ae_current_sensor_dgain_q10 = actual_sensor_dgain;
-	t21_ae_current_isp_dgain_q10 = isp_dgain;
+		if (ctrl->start_changes)
+			ctrl->start_changes();
+		ctrl->set_integration_time(new_it & 0xffff);
+		t21_ae_current_it = new_it;
+		actual_again = tisp_set_sensor_analog_gain(requested_again);
+		actual_sensor_dgain =
+			tisp_set_sensor_digital_gain(requested_sensor_dgain);
+		if (ctrl->end_changes)
+			ctrl->end_changes();
+		actual_again = max_t(u32, actual_again, 1);
+		actual_sensor_dgain = max_t(u32, actual_sensor_dgain, 1);
+		actual_sensor_gain = (u64)actual_again * actual_sensor_dgain;
+		isp_dgain = div_u64((u64)total_gain_q10 * 1024 * 1024,
+					 actual_sensor_gain);
+		isp_dgain = clamp_t(u32, isp_dgain, 1024, max_isp_dgain);
+		t21_ae_current_gain_q10 = actual_again;
+		t21_ae_current_sensor_dgain_q10 = actual_sensor_dgain;
+		t21_ae_current_isp_dgain_q10 = isp_dgain;
 
-	JZ_Isp_Ae_Dg2reg(10, dg_regs, isp_dgain, linear_pair);
-	system_reg_write_ae(2, 0x408, dg_regs[0]);
-	system_reg_write_ae(2, 0x40c, dg_regs[1]);
+		JZ_Isp_Ae_Dg2reg(10, dg_regs, isp_dgain, linear_pair);
+		system_reg_write_ae(2, 0x408, dg_regs[0]);
+		system_reg_write_ae(2, 0x40c, dg_regs[1]);
+	}
 
 	/* Keep the OEM result/control records coherent for userspace queries and
 	 * for the downstream gain-driven tuning callbacks. */
-	reg[1] = isp_dgain;
+	reg[1] = t21_ae_current_isp_dgain_q10;
 	reg[2] = t21_ae_current_it;
 	reg[3] = t21_ae_current_gain_q10;
 	memcpy(result, reg, sizeof(_ae_result));
@@ -46739,22 +46327,31 @@ int32_t tisp_ae_process(void)
 	ae_ctrl->sensor_dgain = t21_ae_current_sensor_dgain_q10;
 	ae_ctrl->integration_time = t21_ae_current_it;
 	ae_ctrl->isp_dgain = t21_ae_current_isp_dgain_q10;
-	ae_ctrl->total_gain = div_u64((u64)t21_ae_current_gain_q10 *
-				      t21_ae_current_sensor_dgain_q10 *
-				      t21_ae_current_isp_dgain_q10,
-				      1024 * 1024);
+	total_gain_q10 = (u32)min_t(u64, div_u64((u64)t21_ae_current_gain_q10 *
+					 t21_ae_current_sensor_dgain_q10 *
+					 t21_ae_current_isp_dgain_q10,
+					 1024 * 1024), 0x3ffffff);
 
 	/* OEM event 6 carries the effective exposure to every tuning block which
 	 * selects curves by EV (AWB, CCM, ADR and defog).  The first-pass AE body
 	 * retained gain-change events 4/5 but dropped this unconditional event,
-	 * pinning those generic, tuning-driven consumers at EV zero. */
+	 * pinning those generic, tuning-driven consumers at EV zero.
+	 *
+	 * The payload is the EV in Q10 (lines x linear gain x 1024), exactly the
+	 * word stock tisp_ae_process_impl also stores at tisp_ae_ctrls+0x24:
+	 * tisp_ccm_ev_update and the ADR/defog updates shift it right by 10,
+	 * and the AWB compares it with its _awb_mode lux thresholds << 10.
+	 * Pushing the integer EV made every consumer see a scene 1024 times
+	 * brighter than it was, so AWB always ran its outdoor high-lux CT
+	 * window and CCM/ADR/defog stayed on their brightest-scene curves. */
 	current_exposure = (u64)t21_ae_current_it *
 			   t21_ae_current_gain_q10;
 	current_exposure = div_u64(current_exposure *
 				   t21_ae_current_sensor_dgain_q10, 1024);
 	current_exposure = div_u64(current_exposure *
 				   t21_ae_current_isp_dgain_q10, 1024);
-	current_ev = div_u64(current_exposure, 1024);
+	current_ev = (u32)min_t(u64, current_exposure, 0xffffffffULL);
+	ae_ctrl->ev_q10 = current_ev;
 	event[2] = 6;
 	event[4] = current_ev;
 	tisp_event_push(event);
@@ -46762,11 +46359,14 @@ int32_t tisp_ae_process(void)
 
 	/* The dynamic ISP blocks consume gain in Q16 log2 form.  Keep that
 	 * policy generic: the sensor callback supplies the quantized Q10 gain,
-	 * while every interpolation curve comes from the active tuning bank. */
-	total_gain = tisp_log2_fixed_to_fixed(ae_ctrl->total_gain << 6,
-					       16, 16);
+	 * while every interpolation curve comes from the active tuning bank.
+	 * Stock keeps both logs in tisp_ae_ctrls+0x28/+0x2c; isp-m0's
+	 * "ISP Tgain DB" is the integer part of the first. */
+	total_gain = tisp_log2_fixed_to_fixed(total_gain_q10 << 6, 16, 16);
 	again = tisp_log2_fixed_to_fixed(t21_ae_current_gain_q10 << 6,
 					 16, 16);
+	ae_ctrl->total_gain_log2 = total_gain;
+	ae_ctrl->again_log2 = again;
 	if (total_gain != last_total_gain) {
 		event[2] = 4;
 		event[4] = total_gain;
@@ -46783,14 +46383,14 @@ int32_t tisp_ae_process(void)
 
 	pr_debug_ratelimited("tx-isp-t21: ae luma=%u target=%u ev=%u it=%u again=%u sdgain=%u ispgain=%u limits=%u/%u/%u\n",
 			    t21_ae_measured_luma, target,
-			    current_ev,
+			    current_ev >> 10,
 			    t21_ae_current_it, t21_ae_current_gain_q10,
 			    t21_ae_current_sensor_dgain_q10,
 			    t21_ae_current_isp_dgain_q10,
 			    max_it, max_again, max_isp_dgain);
 	if (!(t21_ae_frame_count % 750))
 		pr_debug("tx-isp-t21: ae sample luma=%u target=%u ev=%u it=%u again=%u sdgain=%u ispgain=%u limits=%u/%u/%u\n",
-			t21_ae_measured_luma, target, current_ev,
+			t21_ae_measured_luma, target, current_ev >> 10,
 			t21_ae_current_it, t21_ae_current_gain_q10,
 			t21_ae_current_sensor_dgain_q10,
 			t21_ae_current_isp_dgain_q10,
@@ -46846,7 +46446,11 @@ int tiziano_ae_dn_params_refresh(void)
     ftune = 1;
     ae_dn_refresh_flag = 1;
     tiziano_ae_params_refresh();
-    *(uint32_t *)&tisp_ae_ctrls[0] =
+    /* Stock stores the reloaded maximum ISP digital gain to
+     * tisp_ae_ctrls+0x20.  The recovery wrote it over word 0 (the manual-mode
+     * flag), so a day/night switch put AE in "manual" for every reader of
+     * that flag and the new bank's ISP-gain limit was never applied. */
+    *(uint32_t *)&tisp_ae_ctrls[0x20] =
 	*(uint32_t *)((char *)&_exp_parameter + 0x10);
     tiziano_ae_set_hardware_param();
     return 0;
@@ -46978,12 +46582,12 @@ int32_t tiziano_ae_init(uint32_t arg1, uint32_t arg2, uint32_t arg3)
 	sensor_gain = result->analog_gain;
 	sensor_reg = result->sensor_reg;
 	val = fix_point_mult3_32(ae_point_pos, sensor_it << (ae_point_pos & 0x1f), sensor_gain, sensor_reg);
-	ae_ctrl->total_gain = val;
+	ae_ctrl->ev_q10 = val;
 	pr_debug("tx-isp-t21: ae initial exposure=%u point=%u\n", val,
 		ae_point_pos);
 
 	sensor_ctrl_val = ctrl->max_integration_time;
-	ctrl_val = ae_ctrl->total_gain;
+	ctrl_val = ae_ctrl->ev_q10;
 	if (sensor_ctrl_val == 0) {
 		*(uint32_t *)((char *)((char *)&_exp_parameter + 0x8)) = ctrl_val;
 	} else if (ctrl_val < sensor_ctrl_val) {
@@ -47051,7 +46655,7 @@ int32_t tisp_ae_manual_set(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, u
     *(uint32_t *)((char *)v0 + 52) = v1;
     *(uint32_t *)((char *)v0 + 12) = a3;
     v0 = (uintptr_t *)&isp_clk;
-    *(uint32_t *)((char *)((char *)&tparams + 0x4020)) = 0;
+    *(uint32_t *)trig_cal = 0; /* OEM trig_cal, not tparams+0x4020 */
     local_0 = a0;
     local_4 = a1;
     local_8 = a2;
@@ -47090,13 +46694,15 @@ uint8_t tisp_ae_get_luma(uint8_t *arg1)
     uint8_t result;
 
     for (i = 0; i < 256; i++) {
-        hist_val = *(uint32_t *)((char *)tisp_s_ae_hist + (i << 2));
+        /* OEM: .bss tisp_ae_hist; the recovery read the text of tisp_s_ae_hist() */
+        hist_val = *(uint32_t *)((char *)tisp_ae_hist + (i << 2));
         sum += i * hist_val;
     }
 
-    sensor_val = *(uint32_t *)&sensor_init;
-    denom = (*(uint32_t *)((char *)&sensor_init + 4) * sensor_val) / 4;
-    result = (uint8_t)(sum / denom);
+    /* OEM: sensor_info width/height; the recovery read the text of sensor_init() */
+    sensor_val = *(uint32_t *)sensor_info;
+    denom = (*(uint32_t *)(sensor_info + 4) * sensor_val) / 4;
+    result = denom ? (uint8_t)(sum / denom) : 0;
     *arg1 = result;
     return result;
 }
@@ -48468,7 +48074,7 @@ int32_t tisp_day_or_night_s_ctrl(uint32_t mode)
         reg_val += field_val << (i & 0x1f);
     }
 
-    system_reg_write(0xc, reg_val);
+    system_reg_write(0xc, t21_top_bypass_fix(reg_val));
 #define T21_DN_REFRESH(fn) do { \
 	pr_debug("tx-isp-t21: day/night refresh enter %s\n", #fn); \
 	fn(); \
@@ -48555,8 +48161,15 @@ int32_t tisp_set_fps(int32_t fps)
 	fps_frame = fps & 0xffff;
 	fps_hz = fps_hz / fps_frame;
 
-	get_fps = *(int32_t (*)(int32_t, void *))(void *)&sensor_ctrl;
-	ret = get_fps(fps_hz & 0xff, &sensor_ctrl);
+	/*
+	 * OEM: jalr through sensor_ctrl+0x80 (fps_control).  The recovered
+	 * call jumped to the address of sensor_ctrl itself, i.e. into data.
+	 */
+	get_fps = (int32_t (*)(int32_t, void *))
+		((struct t21_sensor_ctrl_view *)sensor_ctrl)->fps_control;
+	if (!get_fps)
+		return -1;
+	ret = get_fps(fps_hz & 0xff, sensor_ctrl);
 
 	if (ret < 0) {
 		isp_printf(2, "fps get wrong!\n", ret);
@@ -48569,15 +48182,16 @@ int32_t tisp_set_fps(int32_t fps)
 	flicker_a = *(int16_t *)((char *)((char *)&sensor_ctrl + 0x2));
 	flicker_b = *(int16_t *)((char *)((char *)&sensor_ctrl + 0x4));
 
-	*(int32_t *)((char *)&tisp_ae_tune + 28) = ae_ctrls_val;
-	*(int16_t *)((char *)&sensor_init + 48) = sensor_val;
-	*(int16_t *)((char *)&sensor_init + 50) = sensor_val;
-	*(int16_t *)((char *)&sensor_init + 52) = ae_ctrls_val;
-	*(int16_t *)((char *)&sensor_init + 64) = ae_ctrls_val;
-	*(int16_t *)((char *)&sensor_init + 54) = sensor_val32;
-	*(int32_t *)((char *)&sensor_init + 44) = ret;
-	*(int16_t *)((char *)&sensor_init + 60) = flicker_a;
-	*(int16_t *)((char *)&sensor_init + 62) = flicker_b;
+	*(int32_t *)((char *)tisp_ae_ctrls + 28) = ae_ctrls_val;
+	/* OEM stores these into sensor_info; the recovery wrote sensor_init()'s text. */
+	*(int16_t *)(sensor_info + 48) = sensor_val;
+	*(int16_t *)(sensor_info + 50) = sensor_val;
+	*(int16_t *)(sensor_info + 52) = ae_ctrls_val;
+	*(int16_t *)(sensor_info + 64) = ae_ctrls_val;
+	*(int16_t *)(sensor_info + 54) = sensor_val32;
+	*(int32_t *)(sensor_info + 44) = ret;
+	*(int16_t *)(sensor_info + 60) = flicker_a;
+	*(int16_t *)(sensor_info + 62) = flicker_b;
 
 	flicker_hz_val = flicker_hz;
 	if (flicker_hz_val != 0) {
@@ -49164,7 +48778,18 @@ tisp_g_af_weight0x5c:
     return 0;
 }
 
-/* Rebuilt from the stock T21 body at 0x30fc4. */
+/* Linear Q10 gain to IMP log2 units (Q5, 32 per doubling).  Stock feeds the
+ * raw word to the log2 helper; a gain below 1x (only the zeroed record
+ * before the first AE pass) would come out negative, so report it as 1x. */
+static u32 t21_gain_log2(u32 gain_q10)
+{
+	return tisp_log2_fixed_to_fixed(max_t(u32, gain_q10, 1024), 10, 5);
+}
+
+/* Rebuilt from the stock T21 body (0x30fc4 in the reference module,
+ * 0x306e4 in the libt21-firmware 1.0.33 link).  The first rebuild swapped
+ * the ISP and sensor digital gains at words 0x14/0x28 and built the
+ * TOTAL_GAIN word from the sensor digital gain instead of the ISP one. */
 int32_t tisp_g_ev_attr(uintptr_t a0)
 {
 	const struct t21_ae_ctrls_view *ctrl =
@@ -49172,49 +48797,124 @@ int32_t tisp_g_ev_attr(uintptr_t a0)
 	const struct t21_ev_sensor_info_view *sensor =
 		(const struct t21_ev_sensor_info_view *)sensor_info;
 	struct t21_ev_attr_view *out = (struct t21_ev_attr_view *)a0;
-	u32 fps_num = sensor->fps & 0xffff;
-	u32 fps_den = sensor->fps >> 16;
+	u32 fps_num = sensor->fps >> 16;
+	u32 fps_den = sensor->fps & 0xffff;
+	u64 gain;
 	u32 scaled;
 
 	BUILD_BUG_ON(sizeof(struct t21_ae_ctrls_view) != sizeof(tisp_ae_ctrls));
 	BUILD_BUG_ON(offsetof(struct t21_ae_ctrls_view, integration_time) != 0x0c);
-	BUILD_BUG_ON(offsetof(struct t21_ae_ctrls_view, total_gain) != 0x24);
+	BUILD_BUG_ON(offsetof(struct t21_ae_ctrls_view, isp_dgain) != 0x10);
+	BUILD_BUG_ON(offsetof(struct t21_ae_ctrls_view, max_isp_dgain) != 0x20);
+	BUILD_BUG_ON(offsetof(struct t21_ae_ctrls_view, ev_q10) != 0x24);
+	BUILD_BUG_ON(offsetof(struct t21_ae_ctrls_view, total_gain_log2) != 0x28);
 	BUILD_BUG_ON(offsetof(struct t21_ev_sensor_info_view, fps) != 0x2c);
-	BUILD_BUG_ON(offsetof(struct t21_ev_sensor_info_view, lines_per_second) != 0x3e);
+	BUILD_BUG_ON(offsetof(struct t21_ev_sensor_info_view, total_lines) != 0x3e);
 	BUILD_BUG_ON(sizeof(struct t21_ev_attr_view) != 0x30);
+	BUILD_BUG_ON(offsetof(struct t21_ev_attr_view, total_gain_q8) != 0x1c);
+	BUILD_BUG_ON(offsetof(struct t21_ev_attr_view, sensor_dgain_log2) != 0x28);
 
-	if (!out || !fps_num || !fps_den || !sensor->lines_per_second)
+	if (!out)
 		return -EINVAL;
 
 	out->integration_time = ctrl->integration_time;
-	out->total_gain = ctrl->total_gain >> 10;
-	out->total_gain_log2 =
-		tisp_log2_fixed_to_fixed(ctrl->total_gain, 10, 16);
+	out->ev = ctrl->ev_q10 >> 10;
+	out->ev_log2 = ctrl->ev_q10 ?
+		tisp_log2_fixed_to_fixed(ctrl->ev_q10, 10, 16) : 0;
 
-	/* Preserve the OEM's 32-bit arithmetic and division order. */
-	scaled = out->integration_time * 1000000U;
-	scaled *= fps_num;
-	scaled /= fps_den;
-	out->exposure_us = scaled / sensor->lines_per_second;
+	/* Stock: lines * 1e6 * den / num / VTS, in 32-bit arithmetic.  It has
+	 * no zero guard; report 0 us until the sensor timing is known. */
+	out->expr_us = 0;
+	if (fps_num && fps_den && sensor->total_lines) {
+		scaled = out->integration_time * 1000000U;
+		scaled *= fps_den;
+		scaled /= fps_num;
+		out->expr_us = scaled / sensor->total_lines;
+	}
 
 	out->sensor_again_log2 =
-		tisp_log2_fixed_to_fixed(ctrl->sensor_again, 10, 5);
-	out->sensor_dgain_log2 =
-		tisp_log2_fixed_to_fixed(ctrl->sensor_dgain, 10, 5);
-	out->field_18 = ctrl->field_2a;
-	out->sensor_gain =
-		(u32)fix_point_mult2_32(10, ctrl->sensor_again,
-					 ctrl->sensor_dgain, 0) >> 2;
-	out->field_20_log2 =
-		tisp_log2_fixed_to_fixed(ctrl->max_sensor_again + 4, 10, 5);
-	out->field_24_log2 =
-		tisp_log2_fixed_to_fixed(ctrl->max_isp_dgain + 4, 10, 5);
+		t21_gain_log2(ctrl->sensor_again);
 	out->isp_dgain_log2 =
-		tisp_log2_fixed_to_fixed(ctrl->isp_dgain, 10, 5);
-	out->field_2c_log2 =
-		tisp_log2_fixed_to_fixed(ctrl->max_sensor_dgain, 10, 5);
+		t21_gain_log2(ctrl->isp_dgain);
+	out->total_gain_db = ctrl->total_gain_log2 >> 16;
+
+	/* Stock forms again x ISP dgain (Q10) >> 2.  The sensor digital gain
+	 * is folded in as well so the [24.8] value is the whole gain the AE
+	 * applied; it is 1x whenever the sensor has no digital gain stage. */
+	gain = (u64)max_t(u32, ctrl->sensor_again, 1) *
+	       max_t(u32, ctrl->sensor_dgain, 1024);
+	gain = div_u64(gain * max_t(u32, ctrl->isp_dgain, 1024), 1024 * 1024);
+	out->total_gain_q8 = (u32)min_t(u64, gain >> 2, 0xffffffffULL);
+
+	out->max_sensor_again_log2 =
+		t21_gain_log2(ctrl->max_sensor_again + 4);
+	out->max_isp_dgain_log2 =
+		t21_gain_log2(ctrl->max_isp_dgain + 4);
+	out->sensor_dgain_log2 =
+		t21_gain_log2(ctrl->sensor_dgain);
+	out->max_sensor_dgain_log2 =
+		t21_gain_log2(ctrl->max_sensor_dgain);
 
 	return 0;
+}
+
+/* Integration-time window the AE actually uses (tisp_ae_process): the
+ * sensor's limits, narrowed by the AE's own maximum when that is valid. */
+static void t21_ae_it_limits(u32 *min_it, u32 *max_it)
+{
+	const struct t21_sensor_ctrl_view *sctrl =
+		(const struct t21_sensor_ctrl_view *)sensor_ctrl;
+	const struct t21_ae_ctrls_view *ae =
+		(const struct t21_ae_ctrls_view *)tisp_ae_ctrls;
+	u32 lo = max_t(u32, sctrl->min_integration_time, 1);
+	u32 hi = max_t(u32, sctrl->max_integration_time, lo);
+
+	if (ae->max_integration_time >= lo && ae->max_integration_time < hi)
+		hi = ae->max_integration_time;
+	*min_it = lo;
+	*max_it = hi;
+}
+
+/* IMPISPExpr.g_attr of the T21 SDK (12 bytes). */
+struct t21_expr_user_view {
+	u32 mode;
+	u16 integration_time;
+	u16 integration_time_min;
+	u16 integration_time_max;
+	u16 one_line_expr_in_us;
+};
+
+/* GET 0x8000025.  The stock dispatcher acknowledges this control without
+ * writing the caller's record, so IMP_ISP_Tuning_GetExpr always returned
+ * whatever the caller had in it (zeros).  Answer it from the live AE state. */
+static int t21_g_expr(void __user *dst)
+{
+	const struct t21_ae_ctrls_view *ae =
+		(const struct t21_ae_ctrls_view *)tisp_ae_ctrls;
+	const struct t21_ev_sensor_info_view *sensor =
+		(const struct t21_ev_sensor_info_view *)sensor_info;
+	struct t21_expr_user_view expr = { 0 };
+	u32 fps_num = sensor->fps >> 16;
+	u32 fps_den = sensor->fps & 0xffff;
+	u32 min_it;
+	u32 max_it;
+
+	BUILD_BUG_ON(sizeof(struct t21_expr_user_view) != 12);
+	if (!dst)
+		return -EINVAL;
+
+	t21_ae_it_limits(&min_it, &max_it);
+	expr.mode = ae->manual_mode ? 1 : 0;
+	expr.integration_time = min_t(u32, ae->integration_time, 0xffff);
+	expr.integration_time_min = min_t(u32, min_it, 0xffff);
+	expr.integration_time_max = min_t(u32, max_it, 0xffff);
+	if (fps_num && fps_den && sensor->total_lines)
+		expr.one_line_expr_in_us =
+			min_t(u32, div_u64((u64)1000000 * fps_den,
+					   (u64)fps_num * sensor->total_lines),
+			      0xffff);
+
+	return private_copy_to_user(dst, &expr, sizeof(expr)) ? -EFAULT : 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003111c origin=fragment_seed original=tisp_g_wb_attr */
@@ -49332,62 +49032,63 @@ tisp_s_ae_hist0x38:
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000031228 origin=model_output original=tisp_s_3dns_ratio */
 int32_t tisp_s_3dns_ratio(int32_t arg1)
 {
-	int32_t arr0[9];
-	int32_t arr1[9];
-	int32_t arr2[9];
-	int32_t arr3[9];
-	int32_t arr4[9];
-	int32_t arr5[9];
-	int32_t arr6[9];
-	int32_t arr7[9];
-	int32_t arr8[9];
-	int32_t arr9[9];
-	int32_t i;
-	int32_t *ratio_ptr;
-	int32_t delta;
-	int32_t val;
+	uint32_t arr0[9];
+	uint32_t arr1[9];
+	uint32_t arr2[9];
+	uint32_t arr3[9];
+	uint32_t arr4[9];
+	uint32_t arr5[9];
+	uint32_t arr6[9];
+	uint32_t arr7[9];
+	uint32_t arr8[9];
+	uint32_t arr9[9];
+	uint32_t i;
+	const uint32_t *ratio_ptr;
+	uint32_t delta;
+	uint32_t val;
+	uint32_t ratio = (uint32_t)arg1;	/* OEM: unsigned mul/srl */
 
 
-	ratio_ptr = (int32_t *)&mdns_ratio;
-	delta = arg1 - 0x80;
+	ratio_ptr = (const uint32_t *)mdns_ratio;
+	delta = ratio - 0x80;
 
 	/* mdns_ratio contains ten banks of nine 32-bit tuning values.  The OEM
 	 * loop advances its byte offset by four; in C these are element indexes.
 	 * Treating the byte offset as an int32_t index walked off every local
 	 * table and corrupted the dispatcher's return state. */
 	for (i = 0; i < ARRAY_SIZE(arr0); i++) {
-		if (arg1 >= 0x81) {
+		if (ratio >= 0x81) {
 			val = *ratio_ptr;
-			((uintptr_t *)(uintptr_t)(arr0))[i] = (((0x40 - val) * delta) >> 7) + val;
+			arr0[i] = (((0x40 - val) * delta) >> 7) + val;
 			val = ratio_ptr[9];
-			((uintptr_t *)(uintptr_t)(arr1))[i] = (((0x40 - val) * delta) >> 7) + val;
+			arr1[i] = (((0x40 - val) * delta) >> 7) + val;
 			val = ratio_ptr[0x12];
-			((uintptr_t *)(uintptr_t)(arr2))[i] = (((0x40 - val) * delta) >> 7) + val;
+			arr2[i] = (((0x40 - val) * delta) >> 7) + val;
 			val = ratio_ptr[0x1b];
-			((uintptr_t *)(uintptr_t)(arr3))[i] = (((0xfa - val) * delta) >> 7) + val;
+			arr3[i] = (((0xfa - val) * delta) >> 7) + val;
 			val = ratio_ptr[0x24];
-			((uintptr_t *)(uintptr_t)(arr4))[i] = (((0xc8 - val) * delta) >> 7) + val;
+			arr4[i] = (((0xc8 - val) * delta) >> 7) + val;
 			val = ratio_ptr[0x2d];
-			((uintptr_t *)(uintptr_t)(arr5))[i] = (((0x40 - val) * delta) >> 7) + val;
+			arr5[i] = (((0x40 - val) * delta) >> 7) + val;
 			val = ratio_ptr[0x36];
-			((uintptr_t *)(uintptr_t)(arr6))[i] = (((0x40 - val) * delta) >> 7) + val;
+			arr6[i] = (((0x40 - val) * delta) >> 7) + val;
 			val = ratio_ptr[0x3f];
-			((uintptr_t *)(uintptr_t)(arr7))[i] = (((0x40 - val) * delta) >> 7) + val;
+			arr7[i] = (((0x40 - val) * delta) >> 7) + val;
 			val = ratio_ptr[0x48];
-			((uintptr_t *)(uintptr_t)(arr8))[i] = (((0xfa - val) * delta) >> 7) + val;
+			arr8[i] = (((0xfa - val) * delta) >> 7) + val;
 			val = ratio_ptr[0x51];
-			((uintptr_t *)(uintptr_t)(arr9))[i] = (((0xc8 - val) * delta) >> 7) + val;
+			arr9[i] = (((0xc8 - val) * delta) >> 7) + val;
 		} else {
-			((uintptr_t *)(uintptr_t)(arr0))[i] = (arg1 * *ratio_ptr) >> 7;
-			((uintptr_t *)(uintptr_t)(arr1))[i] = (arg1 * ratio_ptr[9]) >> 7;
-			((uintptr_t *)(uintptr_t)(arr2))[i] = (arg1 * ratio_ptr[0x12]) >> 7;
-			((uintptr_t *)(uintptr_t)(arr3))[i] = (((ratio_ptr[0x1b] - 0xa) * arg1) >> 7) + 0xa;
-			((uintptr_t *)(uintptr_t)(arr4))[i] = (arg1 * ratio_ptr[0x24]) >> 7;
-			((uintptr_t *)(uintptr_t)(arr5))[i] = (arg1 * ratio_ptr[0x2d]) >> 7;
-			((uintptr_t *)(uintptr_t)(arr6))[i] = (arg1 * ratio_ptr[0x36]) >> 7;
-			((uintptr_t *)(uintptr_t)(arr7))[i] = (arg1 * ratio_ptr[0x3f]) >> 7;
-			((uintptr_t *)(uintptr_t)(arr8))[i] = (((ratio_ptr[0x48] - 0xa) * arg1) >> 7) + 0xa;
-			((uintptr_t *)(uintptr_t)(arr9))[i] = (arg1 * ratio_ptr[0x51]) >> 7;
+			arr0[i] = (ratio * *ratio_ptr) >> 7;
+			arr1[i] = (ratio * ratio_ptr[9]) >> 7;
+			arr2[i] = (ratio * ratio_ptr[0x12]) >> 7;
+			arr3[i] = (((ratio_ptr[0x1b] - 0xa) * ratio) >> 7) + 0xa;
+			arr4[i] = (ratio * ratio_ptr[0x24]) >> 7;
+			arr5[i] = (ratio * ratio_ptr[0x2d]) >> 7;
+			arr6[i] = (ratio * ratio_ptr[0x36]) >> 7;
+			arr7[i] = (ratio * ratio_ptr[0x3f]) >> 7;
+			arr8[i] = (((ratio_ptr[0x48] - 0xa) * ratio) >> 7) + 0xa;
+			arr9[i] = (ratio * ratio_ptr[0x51]) >> 7;
 		}
 		ratio_ptr++;
 	}
@@ -49406,16 +49107,18 @@ int32_t tisp_s_3dns_ratio(int32_t arg1)
 		tisp_mdns_param_array_set(0xe6, arr4);
 	}
 
-	memcpy((void *)&tparams_day, arr0, 0x24);
-	memcpy((void *)((char *)((char *)&tparams_day + 0x8e8)), arr1, 0x24);
-	memcpy((void *)((char *)((char *)&tparams_day + 0x90c)), arr2, 0x24);
-	memcpy((void *)((char *)((char *)&tparams_day + 0xc38)), arr3, 0x24);
-	memcpy((void *)((char *)((char *)&tparams_day + 0xc14)), arr4, 0x24);
-	memcpy((void *)&tparams_night, arr5, 0x24);
-	memcpy((void *)((char *)((char *)&tparams_night + 0x8e8)), arr6, 0x24);
-	memcpy((void *)((char *)((char *)&tparams_night + 0x90c)), arr7, 0x24);
-	memcpy((void *)((char *)((char *)&tparams_night + 0xc38)), arr8, 0x24);
-	memcpy((void *)((char *)((char *)&tparams_night + 0xc14)), arr9, 0x24);
+	/* OEM @0x30c84: banks live at tparams_{day,night}+0x108c4.. (lui 0x1);
+	 * the recovery wrote to +0x8c4.. and to the bank header at +0. */
+	memcpy((void *)((char *)&tparams_day + 0x108c4), arr0, 0x24);
+	memcpy((void *)((char *)((char *)&tparams_day + 0x108e8)), arr1, 0x24);
+	memcpy((void *)((char *)((char *)&tparams_day + 0x1090c)), arr2, 0x24);
+	memcpy((void *)((char *)((char *)&tparams_day + 0x10c38)), arr3, 0x24);
+	memcpy((void *)((char *)((char *)&tparams_day + 0x10c14)), arr4, 0x24);
+	memcpy((void *)((char *)&tparams_night + 0x108c4), arr5, 0x24);
+	memcpy((void *)((char *)((char *)&tparams_night + 0x108e8)), arr6, 0x24);
+	memcpy((void *)((char *)((char *)&tparams_night + 0x1090c)), arr7, 0x24);
+	memcpy((void *)((char *)((char *)&tparams_night + 0x10c38)), arr8, 0x24);
+	memcpy((void *)((char *)((char *)&tparams_night + 0x10c14)), arr9, 0x24);
 
 	return 0;
 }
@@ -49511,34 +49214,14 @@ int32_t tisp_g_ae_attr(void)
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000316cc origin=fragment_seed original=tisp_g_ae_min */
 int32_t tisp_g_ae_min(uintptr_t a0)
 {
-    uint32_t local_10 = 0;
-    uint32_t local_14 = 0;
-    uint32_t local_18 = 0;
-    uint32_t local_1c = 0;
-    uint32_t ra = 0;
-    uintptr_t s0 = 0;
-    uintptr_t *v0 = 0;
+	/* tisp_ae_g_min writes two words; the fragment rebuild handed it a
+	 * single stack word and copied a neighbouring local as the second. */
+	u32 ae_min[2];
 
-    /* fragment 0: Prologue */
-    /* function prologue: stack frame and callee-saved register setup */
-
-    /* fragment 1: CallSetup */
-    s0 = a0;
-    v0 = (uintptr_t *)((uintptr_t (*)(int32_t *))(uintptr_t)tisp_ae_g_min)(&local_10); /* jalr target resolved by relocation */
-
-    /* fragment 2: StackAccess */
-    v0 = local_10;
-    ra = local_1c;
-    *(uint32_t *)((char *)s0 + 0) = v0;
-    v0 = local_14;
-    *(uint32_t *)((char *)s0 + 4) = v0;
-    s0 = local_18;
-    v0 = 0;
-
-    /* fragment 3: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    return 0;
+	tisp_ae_g_min(ae_min);
+	((u32 *)a0)[0] = ae_min[0];
+	((u32 *)a0)[1] = ae_min[1];
+	return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000031710 origin=model_output original=tisp_s_ae_min */
@@ -49657,7 +49340,7 @@ uint8_t tisp_g_wb_frz(uint8_t *arg1)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000031824 origin=model_output original=tisp_s_module_control */
 int32_t tisp_s_module_control(int16_t arg1)
 {
-	return system_reg_write(0xc, (uint32_t)(uint16_t)arg1 | 0x80000000u);
+	return system_reg_write(0xc, t21_top_bypass_fix((uint32_t)(uint16_t)arg1 | 0x80000000u));
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000031840 origin=fragment_seed original=tisp_g_module_control */
@@ -50047,762 +49730,10 @@ int dump_isp_info_open(struct inode *inode, struct file *file)
 	return private_single_open_size(file, isp_info_show, PDE_DATA(inode), 8192);
 }
 
-/* WHOLE_DRIVER_CANDIDATE fn_0000000000031f78 origin=model_output original=isp_info_show */
-int32_t isp_info_show(struct seq_file *m)
+/* Stock raw-pattern names for isp-m0 (the decision tree is the stock one). */
+static const char *t21_isp_info_pattern(int32_t raw_pattern)
 {
-	int32_t ret;
-	struct t21_isp_device_info_view *ispdev;
-	struct t21_isp_core_info_view *isp_ctrl;
-	uint8_t *isp_data;
-	int32_t ev_attr[8];
-	int32_t ae_min[2];
-	int32_t wb_attr[8];
-	int32_t raw_pattern;
 	const char *pattern_str;
-	int32_t fps_val;
-	int32_t day_night_val;
-	const char *mode_str;
-	int32_t wb_rg;
-	int32_t wb_bg;
-	int32_t dbg_a;
-	int32_t dbg_b;
-	int32_t dbg_c;
-	int32_t dbg_d;
-	int32_t dbg_e;
-	int32_t dbg_f;
-	int32_t dbg_g;
-	int32_t dbg_h;
-	int32_t dbg_i;
-	int32_t dbg_j;
-	int32_t dbg_k;
-	int32_t dbg_l;
-	int32_t dbg_m;
-	int32_t dbg_n;
-	int32_t dbg_o;
-	int32_t dbg_p;
-	int32_t dbg_q;
-	int32_t dbg_r;
-	int32_t dbg_s;
-	int32_t dbg_t;
-	int32_t dbg_u;
-	int32_t dbg_v;
-	int32_t dbg_w;
-	int32_t dbg_x;
-	int32_t dbg_y;
-	int32_t dbg_z;
-	int32_t dbg_aa;
-	int32_t dbg_ab;
-	int32_t dbg_ac;
-	int32_t dbg_ad;
-	int32_t dbg_ae;
-	int32_t dbg_af;
-	int32_t dbg_ag;
-	int32_t dbg_ah;
-	int32_t dbg_ai;
-	int32_t dbg_aj;
-	int32_t dbg_ak;
-	int32_t dbg_al;
-	int32_t dbg_am;
-	int32_t dbg_an;
-	int32_t dbg_ao;
-	int32_t dbg_ap;
-	int32_t dbg_aq;
-	int32_t dbg_ar;
-	int32_t dbg_as;
-	int32_t dbg_at;
-	int32_t dbg_au;
-	int32_t dbg_av;
-	int32_t dbg_aw;
-	int32_t dbg_ax;
-	int32_t dbg_ay;
-	int32_t dbg_az;
-	int32_t dbg_ba;
-	int32_t dbg_bb;
-	int32_t dbg_bc;
-	int32_t dbg_bd;
-	int32_t dbg_be;
-	int32_t dbg_bf;
-	int32_t dbg_bg;
-	int32_t dbg_bh;
-	int32_t dbg_bi;
-	int32_t dbg_bj;
-	int32_t dbg_bk;
-	int32_t dbg_bl;
-	int32_t dbg_bm;
-	int32_t dbg_bn;
-	int32_t dbg_bo;
-	int32_t dbg_bp;
-	int32_t dbg_bq;
-	int32_t dbg_br;
-	int32_t dbg_bs;
-	int32_t dbg_bt;
-	int32_t dbg_bu;
-	int32_t dbg_bv;
-	int32_t dbg_bw;
-	int32_t dbg_bx;
-	int32_t dbg_by;
-	int32_t dbg_bz;
-	int32_t dbg_ca;
-	int32_t dbg_cb;
-	int32_t dbg_cc;
-	int32_t dbg_cd;
-	int32_t dbg_ce;
-	int32_t dbg_cf;
-	int32_t dbg_cg;
-	int32_t dbg_ch;
-	int32_t dbg_ci;
-	int32_t dbg_cj;
-	int32_t dbg_ck;
-	int32_t dbg_cl;
-	int32_t dbg_cm;
-	int32_t dbg_cn;
-	int32_t dbg_co;
-	int32_t dbg_cp;
-	int32_t dbg_cq;
-	int32_t dbg_cr;
-	int32_t dbg_cs;
-	int32_t dbg_ct;
-	int32_t dbg_cu;
-	int32_t dbg_cv;
-	int32_t dbg_cw;
-	int32_t dbg_cx;
-	int32_t dbg_cy;
-	int32_t dbg_cz;
-	int32_t dbg_da;
-	int32_t dbg_db;
-	int32_t dbg_dc;
-	int32_t dbg_dd;
-	int32_t dbg_de;
-	int32_t dbg_df;
-	int32_t dbg_dg;
-	int32_t dbg_dh;
-	int32_t dbg_di;
-	int32_t dbg_dj;
-	int32_t dbg_dk;
-	int32_t dbg_dl;
-	int32_t dbg_dm;
-	int32_t dbg_dn;
-	int32_t dbg_do;
-	int32_t dbg_dp;
-	int32_t dbg_dq;
-	int32_t dbg_dr;
-	int32_t dbg_ds;
-	int32_t dbg_dt;
-	int32_t dbg_du;
-	int32_t dbg_dv;
-	int32_t dbg_dw;
-	int32_t dbg_dx;
-	int32_t dbg_dy;
-	int32_t dbg_dz;
-	int32_t dbg_ea;
-	int32_t dbg_eb;
-	int32_t dbg_ec;
-	int32_t dbg_ed;
-	int32_t dbg_ee;
-	int32_t dbg_ef;
-	int32_t dbg_eg;
-	int32_t dbg_eh;
-	int32_t dbg_ei;
-	int32_t dbg_ej;
-	int32_t dbg_ek;
-	int32_t dbg_el;
-	int32_t dbg_em;
-	int32_t dbg_en;
-	int32_t dbg_eo;
-	int32_t dbg_ep;
-	int32_t dbg_eq;
-	int32_t dbg_er;
-	int32_t dbg_es;
-	int32_t dbg_et;
-	int32_t dbg_eu;
-	int32_t dbg_ev;
-	int32_t dbg_ew;
-	int32_t dbg_ex;
-	int32_t dbg_ey;
-	int32_t dbg_ez;
-	int32_t dbg_fa;
-	int32_t dbg_fb;
-	int32_t dbg_fc;
-	int32_t dbg_fd;
-	int32_t dbg_fe;
-	int32_t dbg_ff;
-	int32_t dbg_fg;
-	int32_t dbg_fh;
-	int32_t dbg_fi;
-	int32_t dbg_fj;
-	int32_t dbg_fk;
-	int32_t dbg_fl;
-	int32_t dbg_fm;
-	int32_t dbg_fn;
-	int32_t dbg_fo;
-	int32_t dbg_fp;
-	int32_t dbg_fq;
-	int32_t dbg_fr;
-	int32_t dbg_fs;
-	int32_t dbg_ft;
-	int32_t dbg_fu;
-	int32_t dbg_fv;
-	int32_t dbg_fw;
-	int32_t dbg_fx;
-	int32_t dbg_fy;
-	int32_t dbg_fz;
-	int32_t dbg_ga;
-	int32_t dbg_gb;
-	int32_t dbg_gc;
-	int32_t dbg_gd;
-	int32_t dbg_ge;
-	int32_t dbg_gf;
-	int32_t dbg_gg;
-	int32_t dbg_gh;
-	int32_t dbg_gi;
-	int32_t dbg_gj;
-	int32_t dbg_gk;
-	int32_t dbg_gl;
-	int32_t dbg_gm;
-	int32_t dbg_gn;
-	int32_t dbg_go;
-	int32_t dbg_gp;
-	int32_t dbg_gq;
-	int32_t dbg_gr;
-	int32_t dbg_gs;
-	int32_t dbg_gt;
-	int32_t dbg_gu;
-	int32_t dbg_gv;
-	int32_t dbg_gw;
-	int32_t dbg_gx;
-	int32_t dbg_gy;
-	int32_t dbg_gz;
-	int32_t dbg_ha;
-	int32_t dbg_hb;
-	int32_t dbg_hc;
-	int32_t dbg_hd;
-	int32_t dbg_he;
-	int32_t dbg_hf;
-	int32_t dbg_hg;
-	int32_t dbg_hh;
-	int32_t dbg_hi;
-	int32_t dbg_hj;
-	int32_t dbg_hk;
-	int32_t dbg_hl;
-	int32_t dbg_hm;
-	int32_t dbg_hn;
-	int32_t dbg_ho;
-	int32_t dbg_hp;
-	int32_t dbg_hq;
-	int32_t dbg_hr;
-	int32_t dbg_hs;
-	int32_t dbg_ht;
-	int32_t dbg_hu;
-	int32_t dbg_hv;
-	int32_t dbg_hw;
-	int32_t dbg_hx;
-	int32_t dbg_hy;
-	int32_t dbg_hz;
-	int32_t dbg_ia;
-	int32_t dbg_ib;
-	int32_t dbg_ic;
-	int32_t dbg_id;
-	int32_t dbg_ie;
-	int32_t dbg_if;
-	int32_t dbg_ig;
-	int32_t dbg_ih;
-	int32_t dbg_ii;
-	int32_t dbg_ij;
-	int32_t dbg_ik;
-	int32_t dbg_il;
-	int32_t dbg_im;
-	int32_t dbg_in;
-	int32_t dbg_io;
-	int32_t dbg_ip;
-	int32_t dbg_iq;
-	int32_t dbg_ir;
-	int32_t dbg_is;
-	int32_t dbg_it;
-	int32_t dbg_iu;
-	int32_t dbg_iv;
-	int32_t dbg_iw;
-	int32_t dbg_ix;
-	int32_t dbg_iy;
-	int32_t dbg_iz;
-	int32_t dbg_ja;
-	int32_t dbg_jb;
-	int32_t dbg_jc;
-	int32_t dbg_jd;
-	int32_t dbg_je;
-	int32_t dbg_jf;
-	int32_t dbg_jg;
-	int32_t dbg_jh;
-	int32_t dbg_ji;
-	int32_t dbg_jj;
-	int32_t dbg_jk;
-	int32_t dbg_jl;
-	int32_t dbg_jm;
-	int32_t dbg_jn;
-	int32_t dbg_jo;
-	int32_t dbg_jp;
-	int32_t dbg_jq;
-	int32_t dbg_jr;
-	int32_t dbg_js;
-	int32_t dbg_jt;
-	int32_t dbg_ju;
-	int32_t dbg_jv;
-	int32_t dbg_jw;
-	int32_t dbg_jx;
-	int32_t dbg_jy;
-	int32_t dbg_jz;
-	int32_t dbg_ka;
-	int32_t dbg_kb;
-	int32_t dbg_kc;
-	int32_t dbg_kd;
-	int32_t dbg_ke;
-	int32_t dbg_kf;
-	int32_t dbg_kg;
-	int32_t dbg_kh;
-	int32_t dbg_ki;
-	int32_t dbg_kj;
-	int32_t dbg_kk;
-	int32_t dbg_kl;
-	int32_t dbg_km;
-	int32_t dbg_kn;
-	int32_t dbg_ko;
-	int32_t dbg_kp;
-	int32_t dbg_kq;
-	int32_t dbg_kr;
-	int32_t dbg_ks;
-	int32_t dbg_kt;
-	int32_t dbg_ku;
-	int32_t dbg_kv;
-	int32_t dbg_kw;
-	int32_t dbg_kx;
-	int32_t dbg_ky;
-	int32_t dbg_kz;
-	int32_t dbg_la;
-	int32_t dbg_lb;
-	int32_t dbg_lc;
-	int32_t dbg_ld;
-	int32_t dbg_le;
-	int32_t dbg_lf;
-	int32_t dbg_lg;
-	int32_t dbg_lh;
-	int32_t dbg_li;
-	int32_t dbg_lj;
-	int32_t dbg_lk;
-	int32_t dbg_ll;
-	int32_t dbg_lm;
-	int32_t dbg_ln;
-	int32_t dbg_lo;
-	int32_t dbg_lp;
-	int32_t dbg_lq;
-	int32_t dbg_lr;
-	int32_t dbg_ls;
-	int32_t dbg_lt;
-	int32_t dbg_lu;
-	int32_t dbg_lv;
-	int32_t dbg_lw;
-	int32_t dbg_lx;
-	int32_t dbg_ly;
-	int32_t dbg_lz;
-	int32_t dbg_ma;
-	int32_t dbg_mb;
-	int32_t dbg_mc;
-	int32_t dbg_md;
-	int32_t dbg_me;
-	int32_t dbg_mf;
-	int32_t dbg_mg;
-	int32_t dbg_mh;
-	int32_t dbg_mi;
-	int32_t dbg_mj;
-	int32_t dbg_mk;
-	int32_t dbg_ml;
-	int32_t dbg_mm;
-	int32_t dbg_mn;
-	int32_t dbg_mo;
-	int32_t dbg_mp;
-	int32_t dbg_mq;
-	int32_t dbg_mr;
-	int32_t dbg_ms;
-	int32_t dbg_mt;
-	int32_t dbg_mu;
-	int32_t dbg_mv;
-	int32_t dbg_mw;
-	int32_t dbg_mx;
-	int32_t dbg_my;
-	int32_t dbg_mz;
-	int32_t dbg_na;
-	int32_t dbg_nb;
-	int32_t dbg_nc;
-	int32_t dbg_nd;
-	int32_t dbg_ne;
-	int32_t dbg_nf;
-	int32_t dbg_ng;
-	int32_t dbg_nh;
-	int32_t dbg_ni;
-	int32_t dbg_nj;
-	int32_t dbg_nk;
-	int32_t dbg_nl;
-	int32_t dbg_nm;
-	int32_t dbg_nn;
-	int32_t dbg_no;
-	int32_t dbg_np;
-	int32_t dbg_nq;
-	int32_t dbg_nr;
-	int32_t dbg_ns;
-	int32_t dbg_nt;
-	int32_t dbg_nu;
-	int32_t dbg_nv;
-	int32_t dbg_nw;
-	int32_t dbg_nx;
-	int32_t dbg_ny;
-	int32_t dbg_nz;
-	int32_t dbg_oa;
-	int32_t dbg_ob;
-	int32_t dbg_oc;
-	int32_t dbg_od;
-	int32_t dbg_oe;
-	int32_t dbg_of;
-	int32_t dbg_og;
-	int32_t dbg_oh;
-	int32_t dbg_oi;
-	int32_t dbg_oj;
-	int32_t dbg_ok;
-	int32_t dbg_ol;
-	int32_t dbg_om;
-	int32_t dbg_on;
-	int32_t dbg_oo;
-	int32_t dbg_op;
-	int32_t dbg_oq;
-	int32_t dbg_or;
-	int32_t dbg_os;
-	int32_t dbg_ot;
-	int32_t dbg_ou;
-	int32_t dbg_ov;
-	int32_t dbg_ow;
-	int32_t dbg_ox;
-	int32_t dbg_oy;
-	int32_t dbg_oz;
-	int32_t dbg_pa;
-	int32_t dbg_pb;
-	int32_t dbg_pc;
-	int32_t dbg_pd;
-	int32_t dbg_pe;
-	int32_t dbg_pf;
-	int32_t dbg_pg;
-	int32_t dbg_ph;
-	int32_t dbg_pi;
-	int32_t dbg_pj;
-	int32_t dbg_pk;
-	int32_t dbg_pl;
-	int32_t dbg_pm;
-	int32_t dbg_pn;
-	int32_t dbg_po;
-	int32_t dbg_pp;
-	int32_t dbg_pq;
-	int32_t dbg_pr;
-	int32_t dbg_ps;
-	int32_t dbg_pt;
-	int32_t dbg_pu;
-	int32_t dbg_pv;
-	int32_t dbg_pw;
-	int32_t dbg_px;
-	int32_t dbg_py;
-	int32_t dbg_pz;
-	int32_t dbg_qa;
-	int32_t dbg_qb;
-	int32_t dbg_qc;
-	int32_t dbg_qd;
-	int32_t dbg_qe;
-	int32_t dbg_qf;
-	int32_t dbg_qg;
-	int32_t dbg_qh;
-	int32_t dbg_qi;
-	int32_t dbg_qj;
-	int32_t dbg_qk;
-	int32_t dbg_ql;
-	int32_t dbg_qm;
-	int32_t dbg_qn;
-	int32_t dbg_qo;
-	int32_t dbg_qp;
-	int32_t dbg_qq;
-	int32_t dbg_qr;
-	int32_t dbg_qs;
-	int32_t dbg_qt;
-	int32_t dbg_qu;
-	int32_t dbg_qv;
-	int32_t dbg_qw;
-	int32_t dbg_qx;
-	int32_t dbg_qy;
-	int32_t dbg_qz;
-	int32_t dbg_ra;
-	int32_t dbg_rb;
-	int32_t dbg_rc;
-	int32_t dbg_rd;
-	int32_t dbg_re;
-	int32_t dbg_rf;
-	int32_t dbg_rg;
-	int32_t dbg_rh;
-	int32_t dbg_ri;
-	int32_t dbg_rj;
-	int32_t dbg_rk;
-	int32_t dbg_rl;
-	int32_t dbg_rm;
-	int32_t dbg_rn;
-	int32_t dbg_ro;
-	int32_t dbg_rp;
-	int32_t dbg_rq;
-	int32_t dbg_rr;
-	int32_t dbg_rs;
-	int32_t dbg_rt;
-	int32_t dbg_ru;
-	int32_t dbg_rv;
-	int32_t dbg_rw;
-	int32_t dbg_rx;
-	int32_t dbg_ry;
-	int32_t dbg_rz;
-	int32_t dbg_sa;
-	int32_t dbg_sb;
-	int32_t dbg_sc;
-	int32_t dbg_sd;
-	int32_t dbg_se;
-	int32_t dbg_sf;
-	int32_t dbg_sg;
-	int32_t dbg_sh;
-	int32_t dbg_si;
-	int32_t dbg_sj;
-	int32_t dbg_sk;
-	int32_t dbg_sl;
-	int32_t dbg_sm;
-	int32_t dbg_sn;
-	int32_t dbg_so;
-	int32_t dbg_sp;
-	int32_t dbg_sq;
-	int32_t dbg_sr;
-	int32_t dbg_ss;
-	int32_t dbg_st;
-	int32_t dbg_su;
-	int32_t dbg_sv;
-	int32_t dbg_sw;
-	int32_t dbg_sx;
-	int32_t dbg_sy;
-	int32_t dbg_sz;
-	int32_t dbg_ta;
-	int32_t dbg_tb;
-	int32_t dbg_tc;
-	int32_t dbg_td;
-	int32_t dbg_te;
-	int32_t dbg_tf;
-	int32_t dbg_tg;
-	int32_t dbg_th;
-	int32_t dbg_ti;
-	int32_t dbg_tj;
-	int32_t dbg_tk;
-	int32_t dbg_tl;
-	int32_t dbg_tm;
-	int32_t dbg_tn;
-	int32_t dbg_to;
-	int32_t dbg_tp;
-	int32_t dbg_tq;
-	int32_t dbg_tr;
-	int32_t dbg_ts;
-	int32_t dbg_tt;
-	int32_t dbg_tu;
-	int32_t dbg_tv;
-	int32_t dbg_tw;
-	int32_t dbg_tx;
-	int32_t dbg_ty;
-	int32_t dbg_tz;
-	int32_t dbg_ua;
-	int32_t dbg_ub;
-	int32_t dbg_uc;
-	int32_t dbg_ud;
-	int32_t dbg_ue;
-	int32_t dbg_uf;
-	int32_t dbg_ug;
-	int32_t dbg_uh;
-	int32_t dbg_ui;
-	int32_t dbg_uj;
-	int32_t dbg_uk;
-	int32_t dbg_ul;
-	int32_t dbg_um;
-	int32_t dbg_un;
-	int32_t dbg_uo;
-	int32_t dbg_up;
-	int32_t dbg_uq;
-	int32_t dbg_ur;
-	int32_t dbg_us;
-	int32_t dbg_ut;
-	int32_t dbg_uu;
-	int32_t dbg_uv;
-	int32_t dbg_uw;
-	int32_t dbg_ux;
-	int32_t dbg_uy;
-	int32_t dbg_uz;
-	int32_t dbg_va;
-	int32_t dbg_vb;
-	int32_t dbg_vc;
-	int32_t dbg_vd;
-	int32_t dbg_ve;
-	int32_t dbg_vf;
-	int32_t dbg_vg;
-	int32_t dbg_vh;
-	int32_t dbg_vi;
-	int32_t dbg_vj;
-	int32_t dbg_vk;
-	int32_t dbg_vl;
-	int32_t dbg_vm;
-	int32_t dbg_vn;
-	int32_t dbg_vo;
-	int32_t dbg_vp;
-	int32_t dbg_vq;
-	int32_t dbg_vr;
-	int32_t dbg_vs;
-	int32_t dbg_vt;
-	int32_t dbg_vu;
-	int32_t dbg_vv;
-	int32_t dbg_vw;
-	int32_t dbg_vx;
-	int32_t dbg_vy;
-	int32_t dbg_vz;
-	int32_t dbg_wa;
-	int32_t dbg_wb;
-	int32_t dbg_wc;
-	int32_t dbg_wd;
-	int32_t dbg_we;
-	int32_t dbg_wf;
-	int32_t dbg_wg;
-	int32_t dbg_wh;
-	int32_t dbg_wi;
-	int32_t dbg_wj;
-	int32_t dbg_wk;
-	int32_t dbg_wl;
-	int32_t dbg_wm;
-	int32_t dbg_wn;
-	int32_t dbg_wo;
-	int32_t dbg_wp;
-	int32_t dbg_wq;
-	int32_t dbg_wr;
-	int32_t dbg_ws;
-	int32_t dbg_wt;
-	int32_t dbg_wu;
-	int32_t dbg_wv;
-	int32_t dbg_ww;
-	int32_t dbg_wx;
-	int32_t dbg_wy;
-	int32_t dbg_wz;
-	int32_t dbg_xa;
-	int32_t dbg_xb;
-	int32_t dbg_xc;
-	int32_t dbg_xd;
-	int32_t dbg_xe;
-	int32_t dbg_xf;
-	int32_t dbg_xg;
-	int32_t dbg_xh;
-	int32_t dbg_xi;
-	int32_t dbg_xj;
-	int32_t dbg_xk;
-	int32_t dbg_xl;
-	int32_t dbg_xm;
-	int32_t dbg_xn;
-	int32_t dbg_xo;
-	int32_t dbg_xp;
-	int32_t dbg_xq;
-	int32_t dbg_xr;
-	int32_t dbg_xs;
-	int32_t dbg_xt;
-	int32_t dbg_xu;
-	int32_t dbg_xv;
-	int32_t dbg_xw;
-	int32_t dbg_xx;
-	int32_t dbg_xy;
-	int32_t dbg_xz;
-	int32_t dbg_ya;
-	int32_t dbg_yb;
-	int32_t dbg_yc;
-	int32_t dbg_yd;
-	int32_t dbg_ye;
-	int32_t dbg_yf;
-	int32_t dbg_yg;
-	int32_t dbg_yh;
-	int32_t dbg_yi;
-	int32_t dbg_yj;
-	int32_t dbg_yk;
-	int32_t dbg_yl;
-	int32_t dbg_ym;
-	int32_t dbg_yn;
-	int32_t dbg_yo;
-	int32_t dbg_yp;
-	int32_t dbg_yq;
-	int32_t dbg_yr;
-	int32_t dbg_ys;
-	int32_t dbg_yt;
-	int32_t dbg_yu;
-	int32_t dbg_yv;
-	int32_t dbg_yw;
-	int32_t dbg_yx;
-	int32_t dbg_yy;
-	int32_t dbg_yz;
-	int32_t dbg_za;
-	int32_t dbg_zb;
-	int32_t dbg_zc;
-	int32_t dbg_zd;
-	int32_t dbg_ze;
-	int32_t dbg_zf;
-	int32_t dbg_zg;
-	int32_t dbg_zh;
-	int32_t dbg_zi;
-	int32_t dbg_zj;
-	int32_t dbg_zk;
-	int32_t dbg_zl;
-	int32_t dbg_zm;
-	int32_t dbg_zn;
-	int32_t dbg_zo;
-	int32_t dbg_zp;
-	int32_t dbg_zq;
-	int32_t dbg_zr;
-	int32_t dbg_zs;
-	int32_t dbg_zt;
-	int32_t dbg_zu;
-	int32_t dbg_zv;
-	int32_t dbg_zw;
-	int32_t dbg_zx;
-	int32_t dbg_zy;
-	int32_t dbg_zz;
-
-	BUILD_BUG_ON(offsetof(struct t21_isp_device_info_view, core) != 0xd4);
-	BUILD_BUG_ON(offsetof(struct t21_isp_core_info_view, state) != 0xe8);
-	BUILD_BUG_ON(offsetof(struct t21_isp_core_info_view, width) != 0xec);
-	BUILD_BUG_ON(offsetof(struct t21_isp_core_info_view, height) != 0xf0);
-	BUILD_BUG_ON(offsetof(struct t21_isp_core_info_view, raw_pattern) != 0xf4);
-	BUILD_BUG_ON(offsetof(struct t21_isp_core_info_view, sensor_name) != 0x120);
-	BUILD_BUG_ON(offsetof(struct t21_isp_core_info_view, fps) != 0x12c);
-	BUILD_BUG_ON(offsetof(struct t21_isp_core_info_view, tuning) != 0x19c);
-
-	ispdev = m->private;
-	isp_ctrl = ispdev ? ispdev->core : NULL;
-	ret = private_seq_printf(m,
-		"****************** ISP INFO **********************\n");
-	if (!isp_ctrl)
-		return ret + private_seq_printf(m, "sensor doesn't work, please enable sensor\n");
-	isp_data = isp_ctrl->tuning;
-	ret += private_seq_printf(m, "SENSOR NAME : %s\n",
-				  isp_ctrl->sensor_name ?: "unknown");
-	ret += private_seq_printf(m, "SENSOR OUTPUT WIDTH : %d\n",
-				  isp_ctrl->width);
-	ret += private_seq_printf(m, "SENSOR OUTPUT HEIGHT : %d\n",
-				  isp_ctrl->height);
-	ret += private_seq_printf(m, "ISP OUTPUT FPS : %d / %d\n",
-				  isp_ctrl->fps >> 16,
-				  isp_ctrl->fps & 0xffff);
-	return ret;
-
-	if (isp_ctrl->state < 4) {
-		ret = seq_printf(m, "sensor doesn't work, please enable sensor\n", 0);
-		return ret;
-	}
-
-	tisp_g_ev_attr(ev_attr);
-	tisp_g_ae_min(ae_min);
-	tisp_g_wb_attr(wb_attr);
-	raw_pattern = isp_ctrl->raw_pattern;
 
 	if (raw_pattern == 0x3201) {
 		pattern_str = "RGGB";
@@ -50954,37 +49885,90 @@ int32_t isp_info_show(struct seq_file *m)
 		}
 	}
 
+	return pattern_str;
+}
+
+/* WHOLE_DRIVER_CANDIDATE fn_0000000000031f78 origin=model_output original=isp_info_show */
+/* /proc/jz/isp/isp-m0.  Labels, order, sources and units follow the stock
+ * T21 isp_info_show (libt21-firmware 1.0.33): integration time in sensor
+ * lines, gains in IMP log2 units (32 per doubling), EV log2 in Q16.  The one
+ * addition is "SENSOR Max Integration Time", the T31 label, carrying the
+ * AE's effective integration-time limit; consumers that compute
+ * IT / maxIT (timps day/night) need it and the stock T21 omits it.
+ * The first rebuild returned after the FPS line, so none of the exposure,
+ * gain or white-balance lines were ever printed. */
+int32_t isp_info_show(struct seq_file *m)
+{
+	struct t21_isp_device_info_view *ispdev = m->private;
+	struct t21_isp_core_info_view *isp_ctrl;
+	struct t21_ev_attr_view ev = { 0 };
+	struct t21_wb_internal_view wb = { 0 };
+	u32 ae_min[2] = { 0 };
+	uint8_t *isp_data;
+	u32 min_it;
+	u32 max_it;
+	int32_t ret;
+
+	BUILD_BUG_ON(offsetof(struct t21_isp_device_info_view, core) != 0xd4);
+	BUILD_BUG_ON(offsetof(struct t21_isp_core_info_view, state) != 0xe8);
+	BUILD_BUG_ON(offsetof(struct t21_isp_core_info_view, width) != 0xec);
+	BUILD_BUG_ON(offsetof(struct t21_isp_core_info_view, height) != 0xf0);
+	BUILD_BUG_ON(offsetof(struct t21_isp_core_info_view, raw_pattern) != 0xf4);
+	BUILD_BUG_ON(offsetof(struct t21_isp_core_info_view, sensor_attr) != 0x120);
+	BUILD_BUG_ON(offsetof(struct t21_isp_core_info_view, fps) != 0x12c);
+	BUILD_BUG_ON(offsetof(struct t21_isp_core_info_view, tuning) != 0x19c);
+	BUILD_BUG_ON(offsetof(struct t21_wb_internal_view, global_rgain) != 0x14);
+
+	isp_ctrl = t21_isp_valid_ptr(ispdev) ? ispdev->core : NULL;
+	ret = private_seq_printf(m,
+		"****************** ISP INFO **********************\n");
+	if (!t21_isp_valid_ptr(isp_ctrl) || isp_ctrl->state < 4)
+		return ret + private_seq_printf(m, "sensor doesn't work, please enable sensor\n");
+	isp_data = t21_isp_valid_ptr(isp_ctrl->tuning) ? isp_ctrl->tuning : NULL;
+
+	tisp_g_ev_attr((uintptr_t)&ev);
+	tisp_g_ae_min((uintptr_t)ae_min);
+	tisp_g_wb_attr(&wb);
+	t21_ae_it_limits(&min_it, &max_it);
+
 	ret += private_seq_printf(m, "Software Version : %s\n", "H20200509a");
 	ret += private_seq_printf(m, "Firmware Version : %s\n", "H01-380");
-	ret += private_seq_printf(m, "SENSOR NAME : %s\n", isp_ctrl->sensor_name);
+	ret += private_seq_printf(m, "SENSOR NAME : %s\n",
+				  t21_isp_valid_ptr(isp_ctrl->sensor_attr) &&
+				  t21_isp_valid_ptr(*isp_ctrl->sensor_attr)
+					? *isp_ctrl->sensor_attr : "unknown");
 	ret += private_seq_printf(m, "SENSOR OUTPUT WIDTH : %d\n", isp_ctrl->width);
 	ret += private_seq_printf(m, "SENSOR OUTPUT HEIGHT : %d\n", isp_ctrl->height);
-	fps_val = isp_ctrl->fps;
-	ret += ((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))private_seq_printf)((uintptr_t)(m), (uintptr_t)("ISP OUTPUT FPS : %d / %d\n"), (uintptr_t)(fps_val >> 16), (uintptr_t)(fps_val & 0xffff));
-	ret += private_seq_printf(m, "SENSOR OUTPUT RAW PATTERN : %s\n", (uintptr_t)pattern_str);
+	ret += private_seq_printf(m, "ISP OUTPUT FPS : %d / %d\n",
+				  isp_ctrl->fps >> 16, isp_ctrl->fps & 0xffff);
+	ret += private_seq_printf(m, "SENSOR OUTPUT RAW PATTERN : %s\n",
+				  t21_isp_info_pattern(isp_ctrl->raw_pattern));
 	ret += private_seq_printf(m, "ISP Top Value : 0x%x\n", tisp_top_read());
-
-	day_night_val = tisp_day_or_night_g_ctrl();
-	mode_str = (day_night_val != 1) ? "Day" : "Night";
-
-	ret += private_seq_printf(m, "ISP Runing Mode : %s\n", (uintptr_t)mode_str);
-	ret += private_seq_printf(m, "SENSOR Integration Time : %d lines\n", ev_attr[0]);
-	ret += private_seq_printf(m, "SENSOR analog gain : %d\n", ev_attr[1]);
-	ret += private_seq_printf(m, "MAX SENSOR analog gain : %d\n", ev_attr[2]);
-	ret += private_seq_printf(m, "SENSOR digital gain : %d\n", ev_attr[3]);
-	ret += private_seq_printf(m, "MAX SENSOR digital gain : %d\n", ev_attr[4]);
-	ret += private_seq_printf(m, "ISP digital gain : %d\n", ev_attr[5]);
-	ret += private_seq_printf(m, "MAX ISP digital gain : %d\n", ev_attr[6]);
-	ret += private_seq_printf(m, "ISP Tgain DB : %d\n", ev_attr[7]);
-	ret += private_seq_printf(m, "ISP EV value: %d\n", ae_min[0]);
-	ret += private_seq_printf(m, "ISP EV value log2: %d\n", ae_min[1]);
-	ret += private_seq_printf(m, "ISP EV value us: %d\n", ev_attr[0]);
+	ret += private_seq_printf(m, "ISP Runing Mode : %s\n",
+				  tisp_day_or_night_g_ctrl() == 1 ? "Night" : "Day");
+	ret += private_seq_printf(m, "SENSOR Integration Time : %d lines\n",
+				  ev.integration_time);
+	ret += private_seq_printf(m, "SENSOR Max Integration Time : %d lines\n",
+				  max_it);
+	ret += private_seq_printf(m, "SENSOR analog gain : %d\n", ev.sensor_again_log2);
+	ret += private_seq_printf(m, "MAX SENSOR analog gain : %d\n",
+				  ev.max_sensor_again_log2);
+	ret += private_seq_printf(m, "SENSOR digital gain : %d\n", ev.sensor_dgain_log2);
+	ret += private_seq_printf(m, "MAX SENSOR digital gain : %d\n",
+				  ev.max_sensor_dgain_log2);
+	ret += private_seq_printf(m, "ISP digital gain : %d\n", ev.isp_dgain_log2);
+	ret += private_seq_printf(m, "MAX ISP digital gain : %d\n",
+				  ev.max_isp_dgain_log2);
+	ret += private_seq_printf(m, "ISP Tgain DB : %d\n", ev.total_gain_db);
+	ret += private_seq_printf(m, "ISP EV value: %d\n", ev.ev);
+	ret += private_seq_printf(m, "ISP EV value log2: %d\n", ev.ev_log2);
+	ret += private_seq_printf(m, "ISP EV value us: %d\n", ev.expr_us);
 	ret += private_seq_printf(m, "ISP EV min int: %d\n", ae_min[0]);
 	ret += private_seq_printf(m, "ISP EV min again: %d\n", ae_min[1]);
-	wb_rg = wb_attr[0] ? 0x10000 / wb_attr[0] : 0;
-	ret += private_seq_printf(m, "ISP WB weighted rgain: %d\n", wb_rg);
-	wb_bg = wb_attr[1] ? 0x10000 / wb_attr[1] : 0;
-	ret += private_seq_printf(m, "ISP WB weighted bgain: %d\n", wb_bg);
+	ret += private_seq_printf(m, "ISP WB weighted rgain: %d\n",
+				  wb.global_rgain ? 0x10000 / wb.global_rgain : 0);
+	ret += private_seq_printf(m, "ISP WB weighted bgain: %d\n",
+				  wb.global_bgain ? 0x10000 / wb.global_bgain : 0);
 	if (isp_data)
 		ret += private_seq_printf(m, "Saturation : %d\n",
 					  *(int32_t *)(isp_data + 0x4090));
@@ -51036,6 +50020,7 @@ int32_t ispcore_activate_module(uintptr_t a0)
 		}
 		private_clk_enable(clk);
 	}
+	ACCESS_ONCE(t21_isp_clocks_off) = 0;
 
 	for (i = 0; i < *(u32 *)(core + 0x150); i++) {
 		u8 *channel = *(u8 **)(core + 0x14c) + i * 0xa0;
@@ -51387,6 +50372,9 @@ noinline int32_t system_reg_write(uint32_t offset,
 	return 0;
 }
 
+/* OEM .bss+0x18814: set after a running-mode switch, consumed next IRQ. */
+static int csc_day_pending;
+
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000330fc origin=fragment_seed original=ispcore_interrupt_service_routine */
 int32_t ispcore_interrupt_service_routine(uintptr_t a0)
 {
@@ -51488,12 +50476,40 @@ int32_t ispcore_interrupt_service_routine(uintptr_t a0)
 	 * after the current frame has reached a stable boundary.  The first-pass
 	 * ISR omitted this pending-control block, leaving Raptor's mode command
 	 * acknowledged but unapplied. */
+	/* OEM ISR @0x329d8: one IRQ after any mode switch, if the mode is day,
+	 * restore the CSC/chroma register 0x1730 to colour (0xff00ff00, same as
+	 * tisp_init).  Flag is OEM .bss+0x18814. */
+	if (csc_day_pending == 1) {
+		struct t21_tuning_state_view *tuning = runtime->tuning;
+
+		if (t21_isp_valid_ptr(tuning) && tuning->running_mode == 0)
+			system_reg_write(0x1730, 0xff00ff00);
+		csc_day_pending = 0;
+	}
+
 	if (runtime->running_mode_pending == 1) {
 		struct t21_tuning_state_view *tuning = runtime->tuning;
 
-		if (t21_isp_valid_ptr(tuning) && tuning->event)
-			tuning->event(tuning, 0x4000003, 0);
+		if (t21_isp_valid_ptr(tuning)) {
+			/* OEM @0x32a24: night mode zeroes the chroma
+			 * (0x1730 = 0xff008080, mono) before the table swap. */
+			if (tuning->running_mode == 1)
+				system_reg_write(0x1730, 0xff008080);
+			if (tuning->event)
+				tuning->event(tuning, 0x4000003, 0);
+		}
 		runtime->running_mode_pending = 0;
+		csc_day_pending = 1;
+	}
+
+	/* OEM ISR @0x32a74-0x32ac0: apply pending mirror/flip requests. */
+	if (runtime->hflip_pending == 1) {
+		runtime->hflip_pending = 0;
+		tisp_mirror_enable(runtime->hflip != 0);
+	}
+	if (runtime->vflip_pending == 1) {
+		runtime->vflip_pending = 0;
+		tisp_flip_enable(runtime->vflip != 0);
 	}
 
 	/* Match the OEM interrupt fan-out: every asserted slot gets its callback,
@@ -51600,8 +50616,13 @@ int32_t ispcore_video_s_stream(void *arg1, int32_t arg2)
 			while (1) {
 				void *ch = (void *)((char *)(uintptr_t)ch_base + ch_off);
 				ch_off += 0xa0;
-				if (*(int32_t *)((char *)ch + 0x50) == 4)
+				if (*(int32_t *)((char *)ch + 0x50) == 4) {
+					T21_STOP_TRACE("ispcore: channel %d streamoff",
+						       ch_off / 0xa0 - 1);
 					ispcore_frame_channel_streamoff(*(int32_t **)((char *)ch + 0x54));
+					T21_STOP_TRACE("ispcore: channel %d streamoff done",
+						       ch_off / 0xa0 - 1);
+				}
 				if (ch_off == 0x1e0)
 					break;
 				ch_base = *(void **)((char *)s0 + 0x14c);
@@ -51631,7 +50652,13 @@ int32_t ispcore_video_s_stream(void *arg1, int32_t arg2)
 				if (ops_fn == 0) {
 					result = -515;
 				} else {
+					if (!arg2)
+						T21_STOP_TRACE("ispcore: child %p s_stream(0) fn=%pS",
+							       dev, ops_fn);
 					result = ops_fn(dev, arg2);
+					if (!arg2)
+						T21_STOP_TRACE("ispcore: child s_stream(0) ret=%d",
+							       result);
 					if (result != 0) {
 						if (result != -515)
 							break;
@@ -51650,6 +50677,7 @@ int32_t ispcore_video_s_stream(void *arg1, int32_t arg2)
 
 	hw = *(void **)((char *)arg1 + 0xb8);
 	if (arg2 == 0) {
+		T21_STOP_TRACE("ispcore: irq mask write hw=%p", hw);
 		*(int32_t *)((char *)hw + 0x80) = 0;
 		irq_fn = tx_isp_disable_irq;
 	} else {
@@ -51657,6 +50685,8 @@ int32_t ispcore_video_s_stream(void *arg1, int32_t arg2)
 		irq_fn = tx_isp_enable_irq;
 	}
 	irq_fn((uintptr_t)arg1);
+	if (!arg2)
+		T21_STOP_TRACE("ispcore: s_stream(0) done result=%d", result);
 
 	if (result == -515)
 		result = 0;
@@ -52874,8 +51904,11 @@ int32_t ispcore_slake_module(void *arg1)
 		*(u32 *)(channels + i * 0xa0 + 0x50) = 1;
 
 	tuning = *(void **)(core + 0x19c);
+	T21_STOP_TRACE("core slake: tuning %p event fn=%p", tuning,
+		       *(void **)((u8 *)tuning + 0x40cc));
 	((void (*)(void *, u32, u32))
 	 *(void **)((u8 *)tuning + 0x40cc))(tuning, 0x4000001, 0);
+	T21_STOP_TRACE("core slake: tuning event done");
 	*(u32 *)(core + 0xe8) = 1;
 
 	for (i = 0; i < 16; i++) {
@@ -52891,7 +51924,9 @@ int32_t ispcore_slake_module(void *arg1)
 		slake = *(int (**)(void *))((u8 *)ops[4] + 4);
 		if (!slake)
 			continue;
+		T21_STOP_TRACE("core slake: child[%u]=%p fn=%p", i, child, slake);
 		ret = slake(child);
+		T21_STOP_TRACE("core slake: child[%u] ret=%d", i, ret);
 		if (ret && ret != -ENOIOCTLCMD) {
 			isp_printf(2, "Failed to slake %s\n",
 				   *(char **)(child + 8));
@@ -52901,8 +51936,11 @@ int32_t ispcore_slake_module(void *arg1)
 
 	isp_printf(0, "%s,%d: \n", "ispcore_slake_module", 1353);
 	clks = *(void ***)(subdev + 0xbc);
+	T21_STOP_TRACE("core slake: gating %u clocks", *(u32 *)(subdev + 0xc0));
+	ACCESS_ONCE(t21_isp_clocks_off) = 1;
 	for (i = *(u32 *)(subdev + 0xc0); i > 0; i--)
 		private_clk_disable(clks[i - 1]);
+	T21_STOP_TRACE("core slake: clocks gated");
 	return 0;
 }
 
@@ -53312,15 +52350,108 @@ int32_t system_irq_func_set(unsigned int index, t21_irq_callback_t callback)
 	return 0;
 }
 
+/*
+ * ramlog=1: poor man's pstore.  A console that copies every printk record
+ * (oops, soft-lockup panic included) through the uncached KSEG1 alias into
+ * 64 KiB of ordinary RAM whose physical address is logged at load.  After
+ * the panic=2 reboot the buffer is usually still intact until the new
+ * kernel reuses those pages; read it with
+ *   dd if=/dev/mem bs=4096 skip=$((PHYS >> 12)) count=16
+ * Layout: u32 magic "RAML", u32 size, u32 head, u32 wraps, then the ring.
+ */
+#define T21_RAMLOG_ORDER 4
+#define T21_RAMLOG_MAGIC 0x4c4d4152u
+static bool t21_ramlog;
+module_param_named(ramlog, t21_ramlog, bool, 0444);
+static unsigned long t21_ramlog_pages;
+static volatile u32 *t21_ramlog_hdr;
+static volatile u8 *t21_ramlog_ring;
+
+static void t21_ramlog_write(struct console *con, const char *text,
+			     unsigned int len)
+{
+	u32 size = t21_ramlog_hdr[1];
+	u32 head = t21_ramlog_hdr[2];
+
+	(void)con;
+	while (len--) {
+		t21_ramlog_ring[head] = *text++;
+		if (++head == size) {
+			head = 0;
+			t21_ramlog_hdr[3]++;
+		}
+	}
+	t21_ramlog_hdr[2] = head;
+}
+
+static struct console t21_ramlog_console = {
+	.name = "t21ram",
+	.write = t21_ramlog_write,
+	.flags = CON_ENABLED | CON_PRINTBUFFER,
+	.index = -1,
+};
+
+static void t21_ramlog_start(void)
+{
+	size_t bytes = PAGE_SIZE << T21_RAMLOG_ORDER;
+	unsigned long phys;
+
+	unsigned long spare[8];
+	unsigned int i, n = 0;
+
+	if (!t21_ramlog)
+		return;
+	/* Low RAM is rewritten by the bootloader and the kernel image on the
+	 * way back up; keep the highest of a few candidate blocks. */
+	for (i = 0; i < ARRAY_SIZE(spare); i++) {
+		spare[n] = __get_free_pages(GFP_KERNEL, T21_RAMLOG_ORDER);
+		if (spare[n])
+			n++;
+	}
+	for (i = 0; i < n; i++)
+		if (spare[i] > t21_ramlog_pages)
+			t21_ramlog_pages = spare[i];
+	for (i = 0; i < n; i++)
+		if (spare[i] != t21_ramlog_pages)
+			free_pages(spare[i], T21_RAMLOG_ORDER);
+	if (!t21_ramlog_pages)
+		return;
+	memset((void *)t21_ramlog_pages, 0, bytes);
+	dma_cache_wback_inv(t21_ramlog_pages, bytes);
+	phys = virt_to_phys((void *)t21_ramlog_pages);
+	t21_ramlog_hdr = (volatile u32 *)CKSEG1ADDR(phys);
+	t21_ramlog_ring = (volatile u8 *)t21_ramlog_hdr + 16;
+	t21_ramlog_hdr[1] = bytes - 16;
+	t21_ramlog_hdr[2] = 0;
+	t21_ramlog_hdr[3] = 0;
+	t21_ramlog_hdr[0] = T21_RAMLOG_MAGIC;
+	register_console(&t21_ramlog_console);
+	printk(KERN_ERR "tx-isp-t21: ramlog at phys 0x%08lx size 0x%zx\n",
+	       phys, bytes);
+}
+
+static void t21_ramlog_stop(void)
+{
+	if (!t21_ramlog_pages)
+		return;
+	unregister_console(&t21_ramlog_console);
+	t21_ramlog_hdr[0] = 0;
+	free_pages(t21_ramlog_pages, T21_RAMLOG_ORDER);
+	t21_ramlog_pages = 0;
+}
+
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000034540 origin=model_output original=init_module */
 int32_t init_module(void)
 {
 	int32_t result;
 
+	t21_ramlog_start();
 	regtrace_patch_relocated_data();
 	result = tx_isp_init();
-	if (result)
+	if (result) {
+		t21_ramlog_stop();
 		return result;
+	}
 	result = tx_isp_sinfo_init();
 	if (result)
 		goto fail_isp;
@@ -53333,6 +52464,7 @@ fail_sinfo:
 	tx_isp_sinfo_exit();
 fail_isp:
 	tx_isp_exit();
+	t21_ramlog_stop();
 	return result;
 }
 
@@ -53342,6 +52474,10 @@ void cleanup_module(void)
 	tx_isp_t21_v4l2_cleanup();
 	tx_isp_sinfo_exit();
 	tx_isp_exit();
+	t21_text_watch_free();
+	t21_tisp_stats_free();
+	t21_free_watch_flush();
+	t21_ramlog_stop();
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000345bc origin=model_output original=tx_isp_vic_remove */
