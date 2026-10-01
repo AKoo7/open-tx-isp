@@ -8123,39 +8123,42 @@ static int tiziano_bcsh_update(struct isp_tuning_data *tuning)
     return 0;
 }
 
-/* OEM-aligned: set/get RGB offset coefficients for BCSH */
-int tisp_bcsh_s_rgb_coefft(const int32_t *coeff)
+/* OEM-aligned: set/get RGB offset coefficients for BCSH.
+ * OEM 0x2bae0/0x2bb10: the ABI is int16_t[3] (6 bytes). The setter
+ * zero-extends each halfword into the u32 OffsetRGB_now slots, the getter
+ * returns the low halfword of each slot. */
+int tisp_bcsh_s_rgb_coefft(const int16_t *coeff)
 {
     uint32_t *dst;
     if (!coeff)
         return -EINVAL;
     dst = bcsh_OffsetRGB_now;
-    dst[0] = (uint32_t)coeff[0];
-    dst[1] = (uint32_t)coeff[1];
-    dst[2] = (uint32_t)coeff[2];
+    dst[0] = (uint16_t)coeff[0];
+    dst[1] = (uint16_t)coeff[1];
+    dst[2] = (uint16_t)coeff[2];
     return tiziano_bcsh_update(ourISPdev ? ourISPdev->tuning_data : NULL);
 }
 
-int tisp_bcsh_g_rgb_coefft(int32_t *out)
+int tisp_bcsh_g_rgb_coefft(int16_t *out)
 {
     uint32_t *src;
     if (!out)
         return -EINVAL;
     src = bcsh_OffsetRGB_now;
-    out[0] = (int32_t)src[0];
-    out[1] = (int32_t)src[1];
-    out[2] = (int32_t)src[2];
+    out[0] = (int16_t)src[0];
+    out[1] = (int16_t)src[1];
+    out[2] = (int16_t)src[2];
     return out[2];
 }
 
 /* OEM EXACT: tisp_s_rgb_coefft / tisp_g_rgb_coefft — thin wrappers.
  * OEM at 0x6642c / 0x6643c: tail-call to tisp_bcsh_s/g_rgb_coefft. */
-int tisp_s_rgb_coefft(const int32_t *coeff)
+int tisp_s_rgb_coefft(const int16_t *coeff)
 {
     return tisp_bcsh_s_rgb_coefft(coeff);
 }
 
-int tisp_g_rgb_coefft(int32_t *out)
+int tisp_g_rgb_coefft(int16_t *out)
 {
     return tisp_bcsh_g_rgb_coefft(out);
 }
@@ -8872,7 +8875,7 @@ static int apical_isp_core_ops_g_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
         /* ---- OEM g_ctrl commands added for parity ---- */
 
         case 0x8000008: { /* OEM: tisp_g_rgb_coefft — get RGB coefficients (6 bytes) */
-            int32_t rgb_buf[3];
+            int16_t rgb_buf[3];
             tisp_g_rgb_coefft(rgb_buf);
             if (copy_to_user((void __user *)(unsigned long)ctrl->value, rgb_buf, 6))
                 ret = -EFAULT;
@@ -9545,7 +9548,7 @@ static int apical_isp_core_ops_s_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
         /* ---- OEM commands added for parity (previously missing) ---- */
 
         case 0x8000008: { /* OEM: tisp_s_rgb_coefft — set RGB coefficients (6 bytes) */
-            int32_t rgb_buf[3] = { 0 };	/* only 6 of 12 bytes come from user */
+            int16_t rgb_buf[3];	/* OEM ABI: int16_t[3], 6 bytes */
             if (copy_from_user(rgb_buf, (void __user *)(unsigned long)ctrl->value, 6)) {
                 ret = -EFAULT;
                 goto out;
