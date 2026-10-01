@@ -29,6 +29,7 @@
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/string.h>
+#include <linux/seq_file.h>
 #include <linux/math64.h>  /* For div64_s64() and do_div() */
 #include <linux/io.h>
 #include <linux/ioport.h>
@@ -2463,8 +2464,16 @@ static void *tparams_cust = NULL;
 static void *tparams_active = NULL;
 static u32 tisp_ae_backlight_calibrated = 1;
 static u32 tisp_ae_highlight_calibrated = 1;
-static int tisp_ae_backlight_requested;
-static int tisp_ae_highlight_requested;
+/* IMP level [0, 10] once userspace has set it; UNSET keeps the bank value */
+static int tisp_ae_backlight_requested = TX_ISP_T31_AE_SCENE_UNSET;
+static int tisp_ae_highlight_requested = TX_ISP_T31_AE_SCENE_UNSET;
+
+static int tisp_ae_scene_level(int level)
+{
+	/* the control value is unsigned on the wire: clamp, never "unset" */
+	return (u32)level > TX_ISP_T31_AE_SCENE_LEVEL_MAX ?
+	       TX_ISP_T31_AE_SCENE_LEVEL_MAX : level;
+}
 static uint8_t tispPollValue;
 static wait_queue_head_t dumpQueue;  /* OEM: poll wait queue for /dev/isp-m0 day/night events */
 static bool tuning_bin_loaded = false;
@@ -2681,10 +2690,10 @@ static void tisp_sync_active_ae_scene_controls(const void *src)
 	memcpy(&highlight,
 	       (const u8 *)src + TISP_PARAM_AE_SCENE_OFFSET + 6 * sizeof(u32),
 	       sizeof(highlight));
-	tisp_ae_backlight_calibrated =
-		tx_isp_t31_ae_scene_strength(backlight, 0);
-	tisp_ae_highlight_calibrated =
-		tx_isp_t31_ae_scene_strength(highlight, 0);
+	tisp_ae_backlight_calibrated = tx_isp_t31_ae_scene_strength(
+		backlight, TX_ISP_T31_AE_SCENE_UNSET);
+	tisp_ae_highlight_calibrated = tx_isp_t31_ae_scene_strength(
+		highlight, TX_ISP_T31_AE_SCENE_UNSET);
 
 	backlight = tx_isp_t31_ae_scene_strength(
 		tisp_ae_backlight_calibrated, tisp_ae_backlight_requested);
@@ -4236,7 +4245,12 @@ static uint32_t data_a0de4 = 0;    /* AE DN state flag (OEM: data_a0de4) */
 static uint32_t data_a0de8 = 0;    /* AE DN state flag (OEM: data_a0de8) */
 static uint32_t data_a0df0 = 0;    /* AE DN state flag (OEM: data_a0df0) */
 static uint32_t data_a0e08 = 0;    /* AE DN state flag (OEM: data_a0e08) */
-static uint32_t data_a0c08 = 0x80; /* AE compensation target (OEM: data_a0c08) */
+/*
+ * OEM data_a0c08 is ae_comp_param + 8 (ae_comp_param sits at 0xa0c00), the
+ * "AT scale" word ae0_tune2 multiplies the AE target list with.  A separate
+ * static here made SetAeComp a no-op for the AE target.
+ */
+#define data_a0c08 (ae_comp_param.data[2])
 static uint8_t  ae_comp_x = 0x80;  /* AE compensation input (OEM: ae_comp_x) */
 static uint32_t ae_hist_scale_enable = 1; /* Debug gate for AE wmean-driven
                                            * table scaling. Keep this separate
@@ -8976,8 +8990,10 @@ static int apical_isp_core_ops_g_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
         }
 
         case 0x80000e4: { /* OEM: combined hvflip get */
-            uint32_t hf = tuning->hflip ? 2 : 0;
-            uint32_t vf = tuning->vflip ? 1 : 0;
+            /* Stock: bit 0 = mirror (core +0x170), bit 1 = flip (+0x168),
+             * the same order the 0x80000e4 set path decodes. */
+            uint32_t hf = tuning->hflip ? 1 : 0;
+            uint32_t vf = tuning->vflip ? 2 : 0;
             ctrl->value = hf | vf;
             break;
         }
@@ -13869,11 +13885,17 @@ static uint32_t awb_zero_zone_count;
 static uint32_t awb_irq_diag_armed;
 
 /* AWB params_refresh globals */
-static uint8_t  tisp_wb_attr[0x1c];
-static uint32_t wb_mode_gain_gr;       /* OEM data_a5a28 */
-static uint32_t wb_mode_gain_gb;       /* OEM data_a5a2c */
-static uint32_t wb_live_gain_gr_inv;   /* OEM data_a5a38 */
-static uint32_t wb_live_gain_gb_inv;   /* OEM data_a5a3c */
+/*
+ * OEM tisp_wb_attr is a 0x1c-byte block at 0xa5a24 whose words 1/2 are the
+ * mode gains (data_a5a28/data_a5a2c) and words 5/6 the live inverse gains
+ * (data_a5a38/data_a5a3c).  tisp_g_wb_mode copies the whole block, so GetWB
+ * returns the manual gains only when they live inside it: keep that layout.
+ */
+static u32 tisp_wb_attr[7];
+#define wb_mode_gain_gr     (tisp_wb_attr[1])   /* OEM data_a5a28 */
+#define wb_mode_gain_gb     (tisp_wb_attr[2])   /* OEM data_a5a2c */
+#define wb_live_gain_gr_inv (tisp_wb_attr[5])   /* OEM data_a5a38 */
+#define wb_live_gain_gb_inv (tisp_wb_attr[6])   /* OEM data_a5a3c */
 static int      awb_dn_refresh_flag;
 
 /* Tiziano_Awb_Ct_Detect BSS arrays — OEM uses these as globals in .bss */
@@ -15993,8 +16015,9 @@ static int tisp_g_wb_mode(void *out_buf)
 
 	memcpy(out, tisp_wb_attr, sizeof(tisp_wb_attr));
 	if (out[0] == 0) {
-		out[1] = 0x10000u / wb_live_gain_gr_inv;
-		out[2] = 0x10000u / wb_live_gain_gb_inv;
+		/* OEM divides unguarded; AWB has not run yet when inv == 0. */
+		out[1] = wb_live_gain_gr_inv ? 0x10000u / wb_live_gain_gr_inv : 0x100;
+		out[2] = wb_live_gain_gb_inv ? 0x10000u / wb_live_gain_gb_inv : 0x100;
 	}
 
 	return 0;
@@ -16019,6 +16042,19 @@ static int tisp_s_wb_mode(uint32_t mode, uint32_t gain_gr, uint32_t gain_gb)
 		wb_attr[0] = 0;
 		break;
 	case 1:
+		/*
+		 * OEM stores 0 as-is and writes it to the gain bank, which blanks
+		 * that channel; timps defaults wb_rgain/wb_bgain to 0.  Treat a 0
+		 * (unset) manual gain as "hold the current AWB gain" instead (1x
+		 * when AWB has not produced one yet).  Mode 9 is relative
+		 * ((g + 0x40) * awb >> 6), where 0 is a valid value.
+		 */
+		if (!gain_gr)
+			gain_gr = wb_live_gain_gr_inv ?
+				  0x10000u / wb_live_gain_gr_inv : 0x100;
+		if (!gain_gb)
+			gain_gb = wb_live_gain_gb_inv ?
+				  0x10000u / wb_live_gain_gb_inv : 0x100;
 		wb_attr[0] = 1;
 		wb_mode_gain_gr = gain_gr;
 		wb_mode_gain_gb = gain_gb;
@@ -16757,9 +16793,6 @@ static uint32_t *data_d04b8 = &data_b0cfc;
 static uint32_t data_d04bc[6] = {0x0d0b00, 0x040d0b00, 0x080d0b00, 0x0c0d0b00, 0x100d0b00, 0x140d0b00};
 static uint32_t *data_d04c4 = &data_afcd4;
 
-/* Missing data_b0c18 variable */
-static uint32_t data_b0c18 = 0x80;  /* AE compensation default */
-
 /* AE exposure threshold parameters */
 static uint32_t data_b2ea8 = 0x8000;  /* AE exp threshold */
 static uint32_t data_b2e9c = 0x1000;  /* Min exposure */
@@ -17266,8 +17299,8 @@ int tiziano_ae_init(uint32_t height, uint32_t width,
     /* Binary Ninja EXACT: private_spin_lock_init(0) */
     private_spin_lock_init(0);
 
-    /* Binary Ninja EXACT: ae_comp_default = data_b0c18 */
-    ae_comp_default = data_b0c18;
+    /* OEM (0x54540): ae_comp_default = data_a0c08, the tuning bin's AT scale */
+    ae_comp_default = data_a0c08;
 
     /* Binary Ninja EXACT: return 0 */
     pr_info("tiziano_ae_init: AE initialization complete - Binary Ninja EXACT implementation\n");
@@ -33851,12 +33884,18 @@ static int tisp_mdns_reg_trigger(void)
     return 0;
 }
 
-/* OEM tisp_s_BacklightComp (0x63ac4 in the stock T31 module).
+/* OEM tisp_s_BacklightComp (0x63194 in the stock T31 module).
  *
- * Generic streamers initialize both scalar controls to zero.  Treat zero as
- * no user override so it cannot erase sensor-calibrated scene strengths from
- * the active tuning bank.  A nonzero level keeps the OEM level + 1 encoding.
- * Applying either scalar also preserves the other control. */
+ * Stock stores level + 1 (1 = off), so IMP level 0 disables the function
+ * and GetBacklightComp reports 0; the level is clamped to the documented
+ * IMP range [0, 10].  Until userspace sets a level the active tuning bank's
+ * calibrated strength stays in force.  The requested level is re-applied
+ * on every bank load (day/night, custom), which stock does not do.
+ *
+ * Deviation: stock also forces the other scalar (highlight depress) to 1
+ * (off) on every set, so only one of the two can be active.  Here applying
+ * either scalar preserves the other, because streamers persist and replay
+ * both. */
 int tisp_s_BacklightComp(int comp_level)
 {
     struct scene_para scene;
@@ -33868,7 +33907,7 @@ int tisp_s_BacklightComp(int comp_level)
     else
         memcpy(&scene, &_scene_para, sizeof(scene));
 
-    tisp_ae_backlight_requested = comp_level;
+    tisp_ae_backlight_requested = tisp_ae_scene_level(comp_level);
     scene.data[0] = 1;
     scene.data[5] = tx_isp_t31_ae_scene_strength(
         tisp_ae_backlight_calibrated, tisp_ae_backlight_requested);
@@ -33884,7 +33923,8 @@ int tisp_s_BacklightComp(int comp_level)
 }
 EXPORT_SYMBOL(tisp_s_BacklightComp);
 
-/* OEM tisp_s_Hilightdepress (0x63984 in the stock T31 module). */
+/* OEM tisp_s_Hilightdepress (0x63054 in the stock T31 module); see
+ * tisp_s_BacklightComp for the level encoding. */
 int tisp_s_Hilightdepress(int depress_level)
 {
     struct scene_para scene;
@@ -33896,7 +33936,7 @@ int tisp_s_Hilightdepress(int depress_level)
     else
         memcpy(&scene, &_scene_para, sizeof(scene));
 
-    tisp_ae_highlight_requested = depress_level;
+    tisp_ae_highlight_requested = tisp_ae_scene_level(depress_level);
     scene.data[0] = 1;
     scene.data[5] = tx_isp_t31_ae_scene_strength(
         tisp_ae_backlight_calibrated, tisp_ae_backlight_requested);
@@ -34935,7 +34975,7 @@ int tiziano_ae_dn_params_refresh(void)
     tiziano_ae_set_hardware_param(1, _ae_parameter.data, 1);
 
     /* OEM: Reset compensation default and reapply current compensation */
-    ae_comp_default = data_b0c18;
+    ae_comp_default = data_a0c08;
     tisp_ae_s_comp(ae_comp_x);
 
     return 0;
@@ -36139,6 +36179,143 @@ static void tisp_free_stats_pages(void)
     if (af)
         free_pages(af, 2);
 }
+
+/*
+ * OEM isp_info_show.isra.0 (HLIL 0x67198): the /proc/jz/isp/isp-m0 dump.
+ * Userspace parses it by line prefix (timps daynight.c, thingino daynightd,
+ * isp-inspector, ha-state, timps-dn-isp-log), so the labels, their order
+ * and the units follow stock exactly: exposure and limits from
+ * tisp_g_ev_attr (gains in IMP log2 units, 32 = 2x), the EV minimum from
+ * tisp_ae_g_min, WB from the tisp_wb_attr block, BCSH from the live
+ * BCSH state.  The final two "debug" lines carry this driver's counters;
+ * the stock per-IRQ error counters do not exist here and print 0.
+ */
+static const char *tisp_info_raw_pattern(u32 code)
+{
+	static const char *const rgbir[16] = {
+		"RGGB", "RGGB", "RGGB", "BIGR", "GRBI", "GBRI", "IRBG", "IBRG",
+		"RGGI", "BGGI", "GRIG", "GBIG", "GIRG", "SGIBG", "IGGR", "IGGB",
+	};
+
+	switch (code) {
+	case 0x3001: case 0x3007: case 0x3008:	/* SBGGR8/10/12 */
+		return "BGGR";
+	case 0x3002: case 0x300a: case 0x3011:	/* SGRBG8/10/12 */
+		return "GRBG";
+	case 0x3013: case 0x300e: case 0x3010:	/* SGBRG8/10/12 */
+		return "GBRG";
+	case 0x3014: case 0x300f: case 0x3012:	/* SRGGB8/10/12 */
+		return "RGGB";
+	}
+	/* Ingenic RGB-IR codes 0x31xx/0x32xx/0x33xx, low byte 0..0xf */
+	if (code >= 0x3100 && code < 0x3400 && (code & 0xf0) == 0)
+		return rgbir[code & 0xf];
+	return "The format of isp input is RGB or YUV422";
+}
+
+/* module parameters owned by tx_isp_core.c */
+extern int isp_ch0_pre_dequeue_time;
+extern int isp_ch0_pre_dequeue_interrupt_process;
+extern int isp_ch0_pre_dequeue_valid_lines;
+
+int tisp_isp_info_show(struct seq_file *m)
+{
+	struct tx_isp_dev *isp = ourISPdev;
+	struct isp_tuning_data *tuning = isp ? isp->tuning_data : NULL;
+	struct tx_isp_sensor *sensor = isp ? isp->sensor : NULL;
+	uint32_t ev[TISP_EV_ATTR_WORDS];
+	uint32_t ae_min[4] = { 0 };
+	uint32_t awb_start[2] = { 0 };
+	uint32_t ct = 5000;
+	uint32_t af_count = 0;
+	uint32_t *af_lut;
+	uint32_t fps_num, fps_den;
+	uint32_t sharp = 0;
+	const char *name;
+	int af_ret = -1;
+	uint32_t i;
+
+	seq_printf(m, "****************** ISP INFO **********************\n");
+	if (!sensor || !tuning || !tparams_active ||
+	    !tisp_si_width(&sensor_info)) {
+		seq_printf(m, "sensor doesn't work, please enable sensor\n");
+		return 0;
+	}
+
+	af_lut = kzalloc(0x1e0, GFP_KERNEL);
+	if (af_lut)
+		af_ret = tisp_get_antiflicker_step(af_lut, &af_count);
+	tisp_g_ev_attr(ev, tuning);
+	tisp_ae_g_min(ae_min);
+	tisp_g_awb_start(awb_start);
+	tisp_g_wb_ct(&ct);
+	tisp_get_sharpness(&sharp);
+	tisp_sensor_split_raw_fps(tisp_si_fps(&sensor_info), &fps_num, &fps_den);
+
+	name = sensor->info.name[0] ? sensor->info.name :
+	       (sensor->attr.name ? sensor->attr.name : "unknown");
+
+	seq_printf(m, "Software Version : %s\n", "H20221206a");
+	seq_printf(m, "SENSOR NAME : %s\n", name);
+	seq_printf(m, "SENSOR OUTPUT WIDTH : %d\n", tisp_si_width(&sensor_info));
+	seq_printf(m, "SENSOR OUTPUT HEIGHT : %d\n", tisp_si_height(&sensor_info));
+	seq_printf(m, "ISP OUTPUT FPS : %d / %d\n", fps_num, fps_den);
+	seq_printf(m, "SENSOR OUTPUT RAW PATTERN : %s\n",
+		   tisp_info_raw_pattern(sensor->video.mbus.code));
+	seq_printf(m, "ISP Top Value : 0x%x\n", tisp_top_read(0xc));
+	seq_printf(m, "ISP Runing Mode : %s\n",
+		   tisp_day_or_night_g_ctrl() == 1 ? "Night" : "Day");
+	seq_printf(m, "ISP Custom Mode : %s\n",
+		   tisp_cust_mode_g_ctrl() == 1 ? "Enable" : "Disable");
+	seq_printf(m, "ISP WDR Mode : %s\n", data_b2e74 == 1 ? "Enable" : "Disable");
+	seq_printf(m, "SENSOR Integration Time : %d lines\n", ev[0]);
+	seq_printf(m, "SENSOR Max Integration Time : %d lines\n",
+		   *(uint16_t *)((uint8_t *)ev + 0x6e));
+	seq_printf(m, "SENSOR analog gain : %d\n", ev[4]);
+	seq_printf(m, "MAX SENSOR analog gain : %d\n", ev[8]);
+	seq_printf(m, "SENSOR digital gain : %d\n", ev[10]);
+	seq_printf(m, "MAX SENSOR digital gain : %d\n", ev[11]);
+	seq_printf(m, "ISP digital gain : %d\n", ev[5]);
+	seq_printf(m, "MAX ISP digital gain : %d\n", ev[9]);
+	seq_printf(m, "ISP Tgain DB : %d\n", ev[6]);
+	seq_printf(m, "ISP EV value: %d\n", ev[1]);
+	seq_printf(m, "ISP EV value log2: %d\n", ev[3]);
+	seq_printf(m, "ISP EV value us: %d\n", ev[2]);
+	seq_printf(m, "ISP EV min int: %d\n", ae_min[0]);
+	seq_printf(m, "ISP EV min again: %d\n", ae_min[1]);
+	seq_printf(m, "ISP WB weighted rgain: %d\n",
+		   wb_live_gain_gr_inv ? 0x10000u / wb_live_gain_gr_inv : 0);
+	seq_printf(m, "ISP WB weighted bgain: %d\n",
+		   wb_live_gain_gb_inv ? 0x10000u / wb_live_gain_gb_inv : 0);
+	seq_printf(m, "ISP WB color temperature: %d\n", ct);
+	seq_printf(m, "ISP AWB Start rgain %d: bgain %d\n",
+		   awb_start[0], awb_start[1]);
+	seq_printf(m, "Saturation : %d\n", tuning->saturation);
+	seq_printf(m, "Saturation : %d\n", tisp_bcsh_g_saturation());
+	seq_printf(m, "Sharpness : %d\n", sharp);
+	seq_printf(m, "Contrast : %d\n", tisp_bcsh_g_contrast());
+	seq_printf(m, "Brightness : %d\n", tisp_bcsh_g_brightness());
+	seq_printf(m, "Antiflicker : %d\n", tuning->antiflicker);
+	seq_printf(m, "Mirror: %s, Flip: %s\n",
+		   tuning->hflip ? "Enable" : "Disable",
+		   tuning->vflip ? "Enable" : "Disable");
+	if (af_ret == 0) {
+		if (af_count >= 0x1e0 / sizeof(*af_lut))
+			af_count = 0x1e0 / sizeof(*af_lut) - 1;
+		seq_printf(m, "Antiflicker nodes: %d: step : ", af_count + 1);
+		for (i = 0; i <= af_count; i++)
+			seq_printf(m, "%d. ", af_lut[i]);
+		seq_printf(m, "\n");
+	}
+	kfree(af_lut);
+	seq_printf(m, "debug : ch0 done %u,ip done %u,%d,%d,%d,%d,%d,%d\n",
+		   isp->frame_count, isp->frame_count, 0, 0, 0, 0, 0, 0);
+	seq_printf(m, "debug1 : %d,%d,%d\n", isp_ch0_pre_dequeue_time,
+		   isp_ch0_pre_dequeue_interrupt_process,
+		   isp_ch0_pre_dequeue_valid_lines);
+	return 0;
+}
+EXPORT_SYMBOL(tisp_isp_info_show);
 
 /* tisp_deinit - EXACT Binary Ninja implementation */
 int tisp_deinit(void)

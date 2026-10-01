@@ -32,6 +32,10 @@ int tx_isp_t31_sensor_fps_q8(u32 raw_fps, u32 *fps_q8);
 int tx_isp_t31_wdr_buffer_layout(
 	const struct tx_isp_t31_sensor_policy *sensor,
 	u32 *size, u32 *stride, u32 *lines);
+/* Highlight depress / backlight compensation: IMP level range [0, 10]. */
+#define TX_ISP_T31_AE_SCENE_LEVEL_MAX	10
+#define TX_ISP_T31_AE_SCENE_UNSET	(-1)
+
 u32 tx_isp_t31_ae_scene_strength(u32 calibrated_strength,
 				 int requested_level);
 
