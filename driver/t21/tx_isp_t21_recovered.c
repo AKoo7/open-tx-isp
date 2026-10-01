@@ -32275,7 +32275,7 @@ int32_t tiziano_lsc_lut_parameter(void)
 
 	/* Three packed two-lane mesh entries become two 24-bit hardware
 	 * words.  This is the exact T21 lane order at OEM 0x17edc..0x17f24. */
-	for (i = 0; i + 2 < lsc_lut_num; i += 3, lut += 12) {
+	for (i = 0; i < lsc_lut_num; i += 3, lut += 12) {
 		uint32_t index = i / 3;
 		uint32_t reg = (index + 0xc00) << 3;
 		uint32_t word0 = get_unaligned_le16(lut) |
@@ -32323,281 +32323,136 @@ uint32_t jz_isp_lsc_inter_str(int32_t arg1, int32_t arg2, int32_t arg3)
 	return 0xff;
 }
 
-static uint16_t t21_lsc_table_word(const uint8_t *table, uint32_t index)
-{
-	const uint8_t *entry = table + index * sizeof(uint32_t);
+/*
+ * LSC mesh programming, ported from OEM tx-isp-t21.ko jz_isp_lsc_ct @0x17708,
+ * jz_isp_lsc_interpolate @0x17684, jz_isp_lsc_inter_str @0x176e4,
+ * tisp_lsc_gain_update @0x17ce0.
+ *
+ * The previous reconstruction computed the strength scaling as
+ * base + (((lane - base) * strength) >> 12) with an unsigned strength, so
+ * every lane below the unity value (0x80 for mesh_scale 0) wrapped and was
+ * clamped to 0xff, i.e. a 2x gain.  The mesh is per Bayer channel and
+ * bilinearly interpolated by the hardware, which produced large smooth
+ * magenta / yellow / cyan zones.  OEM adds base << 12 before the shift.
+ * It also reprogrammed the mesh on every call; OEM only does so when the
+ * colour-temperature band changes, when the CT moved by >= 300 K inside an
+ * interpolation band, or after a gain change (lsc_change_flag == 0).
+ */
+static uint32_t lsc_state;		/* OEM .bss+0x81d4 */
+static uint32_t lsc_state_last;		/* OEM .bss+0x81d8 */
 
-	return entry[0] | ((uint16_t)entry[1] << 8);
+static uint32_t t21_lsc_entry(const uint8_t *table, uint32_t index)
+{
+	return get_unaligned_le32(table + index * 4);
 }
 
-static uint16_t t21_lsc_blend_word(uint16_t low, uint16_t high,
-				   uint32_t weight)
+/* OEM jz_isp_lsc_interpolate(ct, hi_ct, lo_ct, hi_entry, lo_entry) */
+static uint32_t t21_lsc_interpolate(uint32_t x, uint32_t hi_ct, uint32_t lo_ct,
+				    uint32_t hi_val, uint32_t lo_val)
 {
-	int32_t low0 = low & 0xff;
-	int32_t low1 = low >> 8;
-	int32_t high0 = high & 0xff;
-	int32_t high1 = high >> 8;
-	int32_t out0 = low0 + (((high0 - low0) * (int32_t)weight) >> 12);
-	int32_t out1 = low1 + (((high1 - low1) * (int32_t)weight) >> 12);
+	uint32_t range = hi_ct - lo_ct;
+	uint32_t pos = x - lo_ct;
+	uint32_t lo_hi = lo_val >> 8, lo_lo = lo_val & 0xff;
+	uint32_t h, l;
 
-	out0 = clamp_t(int32_t, out0, 0, 0xff);
-	out1 = clamp_t(int32_t, out1, 0, 0xff);
-	return (uint16_t)out0 | ((uint16_t)out1 << 8);
+	if (!range)
+		return lo_val;
+	h = (lo_hi * range + ((hi_val >> 8) - lo_hi) * pos) / range;
+	l = (lo_lo * range + ((hi_val & 0xff) - lo_lo) * pos) / range;
+	return (h << 8) | l;
 }
 
-static uint16_t t21_lsc_word_for_ct(uint32_t index, uint32_t ct)
+/* OEM jz_isp_lsc_inter_str: unsigned, clamps only above 0xff */
+static uint32_t t21_lsc_inter_str(uint32_t strength, uint32_t base, uint32_t lane)
 {
-	const uint32_t *points = (const uint32_t *)tiziano_lsc_ct_points;
-	uint16_t a = t21_lsc_table_word(a_linear, index);
-	uint16_t t = t21_lsc_table_word(t_linear, index);
-	uint16_t d = t21_lsc_table_word(d_linear, index);
-	uint32_t weight;
+	uint32_t v = ((lane - base) * strength + (base << 12)) >> 12;
 
-	if (ct <= points[0])
-		return a;
-	if (ct < points[1]) {
-		weight = ((ct - points[0]) << 12) / (points[1] - points[0]);
-		return t21_lsc_blend_word(a, t, weight);
-	}
-	if (ct <= points[2])
-		return t;
-	if (ct < points[3]) {
-		weight = ((ct - points[2]) << 12) / (points[3] - points[2]);
-		return t21_lsc_blend_word(t, d, weight);
-	}
-	return d;
+	return v < 0x100 ? v : 0xff;
 }
 
-static uint16_t t21_lsc_scale_word(uint16_t value, uint32_t strength)
+static void t21_lsc_program(uint32_t cur_ct, uint32_t state, uint32_t strength)
 {
-	uint32_t base;
-	int32_t lane0;
-	int32_t lane1;
+	const uint32_t *pts = (const uint32_t *)tiziano_lsc_ct_points;
+	uint32_t base, i, k;
 
 	switch (mesh_scale) {
 	case 0: base = 0x80; break;
 	case 1: base = 0x40; break;
 	case 2: base = 0x20; break;
 	case 3: base = 0x10; break;
-	default: base = 0x80; break;
+	default:
+		isp_printf(2, "mesh scale is failed\n", 0);
+		base = 0;
+		break;
 	}
-	lane0 = base + ((((int32_t)(value & 0xff) - (int32_t)base) *
-			 strength) >> 12);
-	lane1 = base + ((((int32_t)(value >> 8) - (int32_t)base) *
-			 strength) >> 12);
-	lane0 = clamp_t(int32_t, lane0, 0, 0xff);
-	lane1 = clamp_t(int32_t, lane1, 0, 0xff);
-	return (uint16_t)lane0 | ((uint16_t)lane1 << 8);
+
+	for (i = 0; i < lsc_lut_num; i += 3) {
+		uint32_t w[3], lane[6], r0, r1;
+
+		for (k = 0; k < 3; k++) {
+			uint32_t a = t21_lsc_entry(a_linear, i + k);
+			uint32_t t = t21_lsc_entry(t_linear, i + k);
+			uint32_t d = t21_lsc_entry(d_linear, i + k);
+
+			switch (state) {
+			case 0: w[k] = d; break;
+			case 1: w[k] = t21_lsc_interpolate(cur_ct, pts[3], pts[2], d, t); break;
+			case 2: w[k] = t; break;
+			case 3: w[k] = t21_lsc_interpolate(cur_ct, pts[1], pts[0], t, a); break;
+			default: w[k] = a; break;
+			}
+		}
+		/* OEM lane order: w0.b0, w0.b1, w1.b0 | w1.b1, w2.b0, w2.b1 */
+		lane[0] = w[0] & 0xff;
+		lane[1] = (w[0] >> 8) & 0xff;
+		lane[2] = w[1] & 0xff;
+		lane[3] = (w[1] >> 8) & 0xff;
+		lane[4] = w[2] & 0xff;
+		lane[5] = (w[2] >> 8) & 0xff;
+		for (k = 0; k < 6; k++)
+			lane[k] = t21_lsc_inter_str(strength, base, lane[k]);
+		r0 = (lane[2] << 16) | ((lane[1] << 8) & 0xffff) | lane[0];
+		r1 = (lane[5] << 16) | ((lane[4] << 8) & 0xffff) | lane[3];
+		system_reg_write(((i / 3) + 0xc00) << 3, r0);
+		system_reg_write((((i / 3) + 0xc00) << 3) + 4, r1);
+	}
 }
 
-static int32_t t21_lsc_program_ct(uint32_t ct)
+/* WHOLE_DRIVER_CANDIDATE fn_0000000000017fe8 origin=oem_disasm original=jz_isp_lsc_ct */
+int32_t jz_isp_lsc_ct(void)
 {
+	const uint32_t *pts = (const uint32_t *)tiziano_lsc_ct_points;
+	uint32_t cur_ct = get_unaligned_le32(ct);
 	uint32_t strength = 0x1000;
-	uint32_t i;
+	bool program;
 
 	if (lsc_gain_old != ~0U)
 		strength = tisp_simple_intp(lsc_gain_old >> 16,
-					   lsc_gain_old & 0xffff,
-					   mesh_lsc_str);
-	for (i = 0; i + 2 < lsc_lut_num; i += 3) {
-		uint16_t v0 = t21_lsc_scale_word(t21_lsc_word_for_ct(i, ct),
-						 strength);
-		uint16_t v1 = t21_lsc_scale_word(t21_lsc_word_for_ct(i + 1, ct),
-						 strength);
-		uint16_t v2 = t21_lsc_scale_word(t21_lsc_word_for_ct(i + 2, ct),
-						 strength);
-		uint32_t reg = ((i / 3) + 0xc00) << 3;
+					    lsc_gain_old & 0xffff, mesh_lsc_str);
 
-		system_reg_write(reg, v0 | ((uint32_t)(v1 & 0xff) << 16));
-		system_reg_write(reg + 4, (v1 >> 8) | ((uint32_t)v2 << 8));
-	}
-	return 0;
-}
+	if (cur_ct > pts[3])
+		lsc_state = 0;
+	else if (cur_ct > pts[2])
+		lsc_state = 1;
+	else if (cur_ct > pts[1])
+		lsc_state = 2;
+	else if (cur_ct > pts[0])
+		lsc_state = 3;
+	else
+		lsc_state = 4;
 
-/* WHOLE_DRIVER_CANDIDATE fn_0000000000017fe8 origin=model_output original=jz_isp_lsc_ct */
-int32_t jz_isp_lsc_ct(void)
-{
-	return t21_lsc_program_ct(get_unaligned_le32(ct));
-#if 0
-	uint32_t *base = (uint32_t *)((char *)&tiziano_lsc_ct_points + 0x4);
-	uint32_t a0_val = base[1];
-	uint32_t a1_val = base[2];
-	uint32_t v0_val = base[0];
-	uint32_t ct_points = base[4];
-	uint32_t lsc_gain_old = base[8];
-	uint32_t ct = base[12];
-	uint32_t ct_last = base[13];
-	uint32_t *lsc_state = (uint32_t *)((char *)&af_array_fird1 + 0x1f0);
-	uint32_t *lsc_state_last = (uint32_t *)((char *)&af_array_fird1 + 0x1f4);
-	uint32_t *lsc_state_flag = (uint32_t *)((char *)&af_array_fird1 + 0x1f8);
-	uint32_t *lsc_data_a = (uint32_t *)((char *)&af_array_fird1 + 0x1fc);
-	uint32_t *lsc_data_b = (uint32_t *)&a_linear;
-	uint32_t *lsc_data_c = (uint32_t *)&d_linear;
-	uint32_t mesh_scale = data_96e8c;
-	uint32_t *interp_table = (uint32_t *)((char *)&af_array_fird1 + 0x1cc);
-	uint32_t s1_val = 0x1000;
-	uint32_t s3_val = 3;
-	uint32_t s0_val = 0;
-	uint32_t v1_val = 0;
-	uint32_t result = 0;
-
-	if (lsc_gain_old != 0xffffffff) {
-		s1_val = tisp_simple_intp(lsc_gain_old >> 0x10, lsc_gain_old & 0xffff, (uintptr_t)interp_table);
-	}
-
-	if (a0_val >= ct) {
-		*lsc_state = 0;
+	if (lsc_state == 0 || lsc_state == 2 || lsc_state == 4) {
+		program = lsc_state_last != lsc_state || !lsc_change_flag;
 	} else {
-		if (a1_val < ct)
-			*lsc_state = 1;
-		else if (v0_val < ct)
-			*lsc_state = 2;
-		else if (ct_points >= ct)
-			*lsc_state = 4;
-		else
-			*lsc_state = 3;
+		uint32_t last = get_unaligned_le32(ct_last);
+		uint32_t diff = last > cur_ct ? last - cur_ct : cur_ct - last;
+
+		program = diff >= 300 || !lsc_change_flag;
 	}
-
-	if (*lsc_state != 0) {
-		if (*lsc_state != 2 && *lsc_state != 4) {
-			if (*lsc_state != 1 && *lsc_state != 3)
-				goto label_18180;
-			{
-				uint32_t diff = (ct_last >= ct) ? (ct_last - ct) : (ct - ct_last);
-				if (diff >= 0x12c || *lsc_state_flag == 0)
-					goto label_18180;
-			}
-			v1_val = *lsc_state;
-		} else {
-			if (*lsc_state_last != *lsc_state || *lsc_state_flag == 0)
-				goto label_18180;
-			v1_val = *lsc_state;
-		}
-	} else {
-		if (*lsc_state_last == 0 && *lsc_state_flag != 0)
-			v1_val = *lsc_state;
-		else
-			goto label_18180;
-	}
-
-label_18180:
-	{
-		uint32_t *var_58 = lsc_data_a;
-		uint32_t *var_54 = lsc_data_b;
-		uint32_t *var_50 = lsc_data_c;
-		uint32_t s3 = 3;
-		uint32_t s0 = 0;
-
-		while (1) {
-			uint32_t *state = *lsc_state;
-			if ((s3 - 3) >= mesh_scale)
-				break;
-
-			int16_t var_68[3];
-			int32_t var_64 = 0;
-
-			if (state >= 5) {
-				var_64 = 0;
-			} else {
-				switch ((uintptr_t)state) {
-				case 0:
-					{
-						uint32_t idx = 0;
-						while (idx < s3) {
-							((void **)var_68)[idx] = (int16_t)var_50[idx];
-							idx++;
-						}
-					}
-					var_64 = 0;
-					break;
-				case 1:
-					{
-						uint32_t idx = 0;
-						while (idx < s3) {
-							((void **)var_68)[idx] = (int16_t)jz_isp_lsc_interpolate(ct, a0_val, a1_val, var_50[idx], var_58[idx]);
-							idx++;
-						}
-					}
-					var_64 = 0;
-					break;
-				case 2:
-					{
-						uint32_t idx = 0;
-						while (idx < s3) {
-							((void **)var_68)[idx] = (int16_t)var_58[idx];
-							idx++;
-						}
-					}
-					var_64 = 0;
-					break;
-				case 3:
-					{
-						uint32_t idx = 0;
-						while (idx < s3) {
-							((void **)var_68)[idx] = (int16_t)jz_isp_lsc_interpolate(ct, v0_val, ct_points, var_58[idx], var_54[idx]);
-							idx++;
-						}
-					}
-					var_64 = 0;
-					break;
-				case 4:
-					{
-						uint32_t idx = 0;
-						while (idx < s3) {
-							((void **)var_68)[idx] = (int16_t)var_54[idx];
-							idx++;
-						}
-					}
-					var_64 = 0;
-					break;
-				}
-			}
-
-			uint32_t s7 = (var_64 & 0xff) << 0x10 | (uint32_t)(uint16_t)var_68[0];
-			uint32_t v0_26 = (var_64 & 0xff00) >> 8 | (uint32_t)(uint16_t)var_68[1] << 8;
-			uint32_t s2 = s7 & 0xff;
-			uint32_t a2_5;
-
-			if (mesh_scale == 1) {
-				s0 = 0x40;
-				a2_5 = s2;
-			} else if (mesh_scale == 0) {
-				s0 = 0x80;
-				a2_5 = s2;
-			} else if (mesh_scale == 2) {
-				s0 = 0x20;
-				a2_5 = s2;
-			} else if (mesh_scale != 3) {
-				isp_printf(2, "mesh scale is failed\n", 0);
-				a2_5 = s2;
-			} else {
-				s0 = 0x10;
-				a2_5 = s2;
-			}
-
-			uint32_t v0_28 = jz_isp_lsc_inter_str(s1_val, s0, a2_5);
-			uint32_t v0_29 = jz_isp_lsc_inter_str(s1_val, s0, (uint32_t)(uint8_t)((s7 >> 8) & 0xff));
-			uint32_t v0_30 = jz_isp_lsc_inter_str(s1_val, s0, s7 >> 0x10);
-			uint32_t v0_31 = jz_isp_lsc_inter_str(s1_val, s0, v0_26 & 0xff);
-			uint32_t v0_32 = jz_isp_lsc_inter_str(s1_val, s0, (uint32_t)(uint8_t)((v0_26 >> 8) & 0xff));
-			uint32_t lo_1 = (s3 - 3) / 3;
-			uint32_t t2_5 = (uint32_t)(uint16_t)jz_isp_lsc_inter_str(s1_val, s0, v0_26 >> 0x10) << 0x10 |
-				(uint32_t)(uint16_t)((v0_32 << 8) & 0xffff) | (uint32_t)(uint16_t)v0_31;
-			s3 += 3;
-			uint32_t s6_7 = (lo_1 + 0xc00) << 3;
-			system_reg_write(s6_7, (uint32_t)(uint16_t)v0_30 << 0x10 |
-				(uint32_t)(uint16_t)((v0_29 << 8) & 0xffff) | (uint32_t)(uint16_t)v0_28);
-			system_reg_write(s6_7 + 4, t2_5);
-			var_54 = (void *)(uintptr_t)((uintptr_t)var_54 + (3));
-			var_58 = (void *)(uintptr_t)((uintptr_t)var_58 + (3));
-			var_50 = (void *)(uintptr_t)((uintptr_t)var_50 + (3));
-		}
-		v1_val = *lsc_state;
-	}
-
-	*lsc_state_last = v1_val;
+	if (program)
+		t21_lsc_program(cur_ct, lsc_state, strength);
+	lsc_state_last = lsc_state;
 	return 0;
-#endif
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000018578 origin=fragment_seed original=tisp_lsc_ct_update */
@@ -32606,35 +32461,23 @@ int32_t tisp_lsc_ct_update(uint32_t a0, uint32_t a1)
 	(void)a1;
 	put_unaligned_le32(a0, ct);
 	jz_isp_lsc_ct();
-	put_unaligned_le32(a0, ct_last);
+	put_unaligned_le32(get_unaligned_le32(ct), ct_last);
 	return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000185b8 origin=fragment_seed original=jz_isp_lsc_gain */
 int32_t jz_isp_lsc_gain(void)
 {
-    uint32_t ra = 0;
-    uintptr_t *v0 = 0;
-
-    /* fragment 0: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    /* fragment 1: Arithmetic */
-    v0 = 0;
-
-    return 0;
+	return 0;
 }
 
-/* WHOLE_DRIVER_CANDIDATE fn_00000000000185c0 origin=fragment_seed original=tisp_lsc_gain_update */
+/* WHOLE_DRIVER_CANDIDATE fn_00000000000185c0 origin=oem_disasm original=tisp_lsc_gain_update */
 int32_t tisp_lsc_gain_update(uint32_t a0, uint32_t a1)
 {
 	uint32_t delta;
 
 	if (lsc_gain_old == ~0U) {
 		lsc_gain_old = a0;
-		lsc_change_flag = 0;
-		t21_lsc_program_ct(get_unaligned_le32(ct));
-		lsc_change_flag = 1;
 		return 0;
 	}
 	delta = lsc_gain_old > a0 ? lsc_gain_old - a0 : a0 - lsc_gain_old;
@@ -32642,7 +32485,7 @@ int32_t tisp_lsc_gain_update(uint32_t a0, uint32_t a1)
 		return 0;
 	lsc_change_flag = 0;
 	lsc_gain_old = a0;
-	t21_lsc_program_ct(get_unaligned_le32(ct));
+	jz_isp_lsc_ct();
 	lsc_change_flag = 1;
 	return 0;
 }
