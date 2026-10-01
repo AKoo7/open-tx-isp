@@ -187,6 +187,19 @@ int tx_isp_t20_simple_ae_apply(int32_t *total_exposure_log2,
 		LOG2_GAIN_SHIFT);
 	requested_again = clamp_t(int32_t,
 		*total_exposure_log2 - integration_log2, 0, attr->max_again);
+	/*
+	 * stab.global_max_sensor_analog_gain is the user ceiling set through
+	 * SetMaxAgain (and defaulted by init_stab()); the vendor 3.12.0
+	 * firmware applies it as an additional AE gain cap on top of the
+	 * sensor's hardware max_again.  The compact AE used to skip this
+	 * entirely, so SetMaxAgain had no effect.  Units match stab[28]/
+	 * cmos_alloc_sensor_analog_gain: an 8-bit value in the same <<11
+	 * (of LOG2_GAIN_SHIFT=16) fixed-point gain-log2 format; 0 means no
+	 * user cap has been configured.
+	 */
+	if (stab.global_max_sensor_analog_gain)
+		requested_again = clamp_t(int32_t, requested_again, 0,
+			(int32_t)stab.global_max_sensor_analog_gain << 11);
 	applied_again = attr->sensor_ctrl.alloc_again(requested_again,
 		LOG2_GAIN_SHIFT, &again_code);
 
