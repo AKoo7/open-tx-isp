@@ -30185,6 +30185,8 @@ void private_i2c_del_driver(struct i2c_driver *driver)
 {
     regtrace_t23_release_sensor_client(driver, "private-i2c-del-driver");
     i2c_del_driver(driver);
+    /* Drop the registry slot before the sensor module's text and data go. */
+    tx_isp_sinfo_driver_del(driver);
 }
 
 
