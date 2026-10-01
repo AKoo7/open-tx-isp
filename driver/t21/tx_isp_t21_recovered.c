@@ -21859,15 +21859,11 @@ int32_t tisp_deinit(void)
 	}
 
 
-	private_kfree(info->ae_buffer);
+	/* The statistics buffers stay allocated (see t21_tisp_stats). */
 	info->ae_buffer = NULL;
-	private_kfree(info->awb_buffer);
 	info->awb_buffer = NULL;
-	private_kfree(info->af_buffer);
 	info->af_buffer = NULL;
-	private_kfree(info->defog_buffer);
 	info->defog_buffer = NULL;
-	private_kfree(info->mdns_buffer);
 	info->mdns_buffer = NULL;
 
 	return 0;
@@ -22163,6 +22159,41 @@ out_close:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000ebdc origin=model_output original=tisp_init */
+/*
+ * ISP statistics DMA targets (AE, AWB, AF, defog, MDNS).  They live for the
+ * whole module lifetime instead of one tisp_init/tisp_deinit session: the
+ * statistics engines keep their programmed addresses across a stream-off
+ * and clock gating, and resume DMA into them as soon as the next
+ * /dev/tx-isp open ungates the clocks -- before tisp_init programs new
+ * buffers.  With per-session buffers that wrote into freed kmalloc-8192
+ * (and page-backed) objects for about half a second on every timps
+ * restart, corrupting the slab freelist (__kmalloc oops in the next
+ * single_open_size) -- caught by free_watch=1 on the PC420.
+ */
+static void *t21_tisp_stats[5];
+static const size_t t21_tisp_stats_size[5] = {
+	0x6000, 0x4000, 0x2000, 0x4000, 0x4000
+};
+
+static void *t21_tisp_stats_buffer(unsigned int index)
+{
+	if (!t21_tisp_stats[index])
+		t21_tisp_stats[index] =
+			private_kmalloc(t21_tisp_stats_size[index], GFP_KERNEL);
+	return t21_tisp_stats[index];
+}
+
+/* Module exit only: the platform devices and clocks are gone by then. */
+static void t21_tisp_stats_free(void)
+{
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(t21_tisp_stats); i++) {
+		private_kfree(t21_tisp_stats[i]);
+		t21_tisp_stats[i] = NULL;
+	}
+}
+
 int32_t tisp_init(int32_t *arg1)
 {
 	uint32_t sensor_w = *(uint32_t *)(arg1);
@@ -22336,7 +22367,7 @@ int32_t tisp_init(int32_t *arg1)
 	system_reg_write(0xc, loop_acc);
 	system_reg_write(0x1c, 0x200000);
 
-	buf1 = private_kmalloc(0x6000, 0xd0);
+	buf1 = t21_tisp_stats_buffer(0);
 	pr_debug("tx-isp-t21: tisp buf1=%p irq_disabled=%d pid=%d\n",
 		buf1, irqs_disabled(), current->pid);
 	if (!buf1)
@@ -22359,7 +22390,7 @@ int32_t tisp_init(int32_t *arg1)
 	*(uint32_t *)(tispinfo + 0x14) = 4;
 	*(uint32_t *)(tispinfo + 0x1c) = (uint32_t)buf1 - 0x7fffc000;
 
-	buf2 = private_kmalloc(0x4000, 0xd0);
+	buf2 = t21_tisp_stats_buffer(1);
 	pr_debug("tx-isp-t21: tisp buf2=%p irq_disabled=%d pid=%d\n",
 		buf2, irqs_disabled(), current->pid);
 	if (!buf2)
@@ -22374,7 +22405,7 @@ int32_t tisp_init(int32_t *arg1)
 	*(uint32_t *)(tispinfo + 0x20) = 4;
 	*(uint32_t *)(tispinfo + 0x28) = (uint32_t)buf2 - 0x80000000;
 
-	buf3 = private_kmalloc(0x2000, 0xd0);
+	buf3 = t21_tisp_stats_buffer(2);
 	pr_debug("tx-isp-t21: tisp buf3=%p irq_disabled=%d pid=%d\n",
 		buf3, irqs_disabled(), current->pid);
 	if (!buf3)
@@ -22389,7 +22420,7 @@ int32_t tisp_init(int32_t *arg1)
 	*(uint32_t *)(tispinfo + 0x2c) = 4;
 	*(uint32_t *)(tispinfo + 0x34) = (uint32_t)buf3 - 0x80000000;
 
-	buf4 = private_kmalloc(0x4000, 0xd0);
+	buf4 = t21_tisp_stats_buffer(3);
 	pr_debug("tx-isp-t21: tisp buf4=%p irq_disabled=%d pid=%d\n",
 		buf4, irqs_disabled(), current->pid);
 	if (!buf4)
@@ -22404,7 +22435,7 @@ int32_t tisp_init(int32_t *arg1)
 	*(uint32_t *)(tispinfo + 0x38) = 4;
 	*(uint32_t *)(tispinfo + 0x40) = (uint32_t)buf4 - 0x80000000;
 
-	buf5 = private_kmalloc(0x4000, 0xd0);
+	buf5 = t21_tisp_stats_buffer(4);
 	pr_debug("tx-isp-t21: tisp buf5=%p irq_disabled=%d pid=%d\n",
 		buf5, irqs_disabled(), current->pid);
 	if (!buf5)
@@ -53836,6 +53867,7 @@ void cleanup_module(void)
 	tx_isp_sinfo_exit();
 	tx_isp_exit();
 	t21_text_watch_free();
+	t21_tisp_stats_free();
 	t21_free_watch_flush();
 	t21_ramlog_stop();
 }
