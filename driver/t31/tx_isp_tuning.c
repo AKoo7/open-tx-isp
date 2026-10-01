@@ -3530,6 +3530,9 @@ static int tisp_gb_init_reg(void);
 
 /* Event processing thread function */
 int tisp_event_process_thread(void *data);
+int tisp_event_drain(unsigned int timeout_ms);
+void tx_isp_ae_algo_close_internal(void);
+bool tx_isp_ae_algo_is_open(void);
 int tisp_event_process(void);
 
 /* Additional function declarations needed for Binary Ninja reference */
@@ -30532,6 +30535,28 @@ int tisp_event_process(void)
 }
 EXPORT_SYMBOL(tisp_event_process);
 
+/*
+ * Wait until isp_fw_process has dispatched every queued ISP event, for the
+ * last-close teardown of /dev/tx-isp once the ISP core interrupt (the only
+ * producer besides the callbacks themselves) is off. The AE callbacks call
+ * the sensor's gain/exposure helpers and queue sensor_expo_work; after this
+ * no callback derived from the last frames is left to run. The dispatch
+ * runs with local interrupts off and T31 is uniprocessor, so a count of 0
+ * seen here also means no callback is half way through.
+ * Returns 0, or -ETIMEDOUT if events are still queued after @timeout_ms.
+ */
+int tisp_event_drain(unsigned int timeout_ms)
+{
+    unsigned long deadline = jiffies + msecs_to_jiffies(timeout_ms);
+
+    while (ACCESS_ONCE(tisp_event_count) != 0) {
+        if (time_after(jiffies, deadline))
+            return -ETIMEDOUT;
+        msleep(5);
+    }
+    return 0;
+}
+
 /* OEM EXACT: tisp_fw_process — thin wrapper called by the kthread.
  * OEM HLIL (0x150a4): tisp_event_process(); return 0; */
 static int tisp_fw_process(void)
@@ -35507,6 +35532,15 @@ int tx_isp_set_ae_algo_close(void __user *arg)
         return -EFAULT;
     }
 
+    tx_isp_ae_algo_close_internal();
+    return 0;
+}
+EXPORT_SYMBOL(tx_isp_set_ae_algo_close);
+
+/* The kernel side of TX_ISP_SET_AE_ALGO_CLOSE: disable the custom AE and
+ * free its buffers. */
+void tx_isp_ae_algo_close_internal(void)
+{
     /* OEM: disable custom AE */
     tisp_ae_algo_deinit();
     tisp_ae_algo_init(0, NULL);
@@ -35518,10 +35552,19 @@ int tx_isp_set_ae_algo_close(void __user *arg)
     ae_info_mine = NULL;
     ae_statis_mine = NULL;
     mutex_unlock(&ae_algo_mutex);
-
-    return 0;
 }
-EXPORT_SYMBOL(tx_isp_set_ae_algo_close);
+
+/* True while a custom AE (TX_ISP_SET_AE_ALGO_OPEN) is installed, i.e. the
+ * streamer would send TX_ISP_SET_AE_ALGO_CLOSE in IMP_ISP_DisableSensor. */
+bool tx_isp_ae_algo_is_open(void)
+{
+    bool open;
+
+    mutex_lock(&ae_algo_mutex);
+    open = ae_info_mine != NULL;
+    mutex_unlock(&ae_algo_mutex);
+    return open;
+}
 
 /* Sensor control functions - Safe structure-based implementations */
 static void tisp_set_sensor_integration_time(uint32_t time)

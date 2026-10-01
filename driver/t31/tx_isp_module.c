@@ -128,7 +128,18 @@ int tx_isp_sensor_fps_q8(const struct tx_isp_sensor *sensor, u32 *fps_q8)
 }
 EXPORT_SYMBOL_GPL(tx_isp_sensor_fps_q8);
 
-/* Deferred sensor I2C write — runs in workqueue context (process context, no locks) */
+/*
+ * Serialises calls into the attached sensor driver through stored_sensor_ops
+ * from paths that no /dev/tx-isp file keeps alive (sensor_expo_work, the
+ * isp-m0 FPS control, the last-close teardown) against the sensor's remove(),
+ * which detaches it in tx_isp_sensor_subdev_deinit() before kfree()ing it and
+ * before its module text goes away. Outermost lock: taken before
+ * sensor_register_mutex, sensor_prepare_mutex and sensor_list_mutex, never
+ * under them.
+ */
+static DEFINE_MUTEX(sensor_ops_call_mutex);
+
+/* Deferred sensor I2C write — runs in workqueue context (process context) */
 static void sensor_expo_work_func(struct work_struct *work);
 DECLARE_WORK(sensor_expo_work, sensor_expo_work_func);
 EXPORT_SYMBOL(sensor_expo_work);
@@ -160,22 +171,34 @@ static void sensor_expo_work_func(struct work_struct *work)
      * one published after the final xchg queues another invocation.
      */
     while (xchg(&ourISPdev->sensor_update_pending, 0)) {
+        struct tx_isp_subdev_ops *ops;
+        struct tx_isp_subdev *sensor_sd;
+        struct tx_isp_sensor *sensor;
+
         if (pass++ != 0)
             sensor_expo_catchups++;
 
-        if (!stored_sensor_ops.original_ops ||
-            !stored_sensor_ops.original_ops->sensor ||
-            !stored_sensor_ops.original_ops->sensor->ioctl ||
-            !stored_sensor_ops.sensor_sd)
+        /* The sensor may be released (last close, DelSensor) or removed
+         * (rmmod) at any time: read the pointers once, under the mutex
+         * tx_isp_sensor_subdev_deinit() takes before it clears them. */
+        mutex_lock(&sensor_ops_call_mutex);
+        ops = stored_sensor_ops.original_ops;
+        sensor_sd = stored_sensor_ops.sensor_sd;
+        sensor = ourISPdev->sensor;
+        if (!sensor || !ops || !ops->sensor || !ops->sensor->ioctl ||
+            !sensor_sd) {
+            mutex_unlock(&sensor_ops_call_mutex);
             continue;
+        }
 
-        again = ourISPdev->sensor->attr.again;
-        it = ourISPdev->sensor->attr.integration_time;
+        again = sensor->attr.again;
+        it = sensor->attr.integration_time;
         /* The sensor driver's set_again iterates its own LUT with
          * bounds checking against sensor_attr.max_again — no need
          * to clamp here.  The LUT size is sensor-specific (e.g.,
          * 29 for GC2053, 162 for SC2336). */
         if (it == 0) {
+            mutex_unlock(&sensor_ops_call_mutex);
             pr_warn("sensor_expo_work: integration_time=0, skipping write\n");
             continue;
         }
@@ -192,17 +215,19 @@ static void sensor_expo_work_func(struct work_struct *work)
              * cache needs no additional locking.
              */
             if ((u32)packed == sensor_expo_last_packed) {
+                mutex_unlock(&sensor_ops_call_mutex);
                 continue;
             }
             pr_info_ratelimited("sensor_expo_work: again=%u it=%u packed=0x%08x\n", again, it, packed);
-            ret = stored_sensor_ops.original_ops->sensor->ioctl(
-                stored_sensor_ops.sensor_sd, TX_ISP_EVENT_SENSOR_EXPO, &packed);
+            ret = ops->sensor->ioctl(sensor_sd, TX_ISP_EVENT_SENSOR_EXPO,
+                                     &packed);
             if (ret) {
                 pr_err("sensor_expo_work: ioctl returned %d\n", ret);
             } else {
                 sensor_expo_last_packed = (u32)packed;
             }
         }
+        mutex_unlock(&sensor_ops_call_mutex);
     }
 }
 
@@ -1082,6 +1107,35 @@ static void frame_channel_drain_deliverability_queues(struct tx_isp_channel_stat
     wake_up_interruptible(&state->frame_wait);
 }
 
+/*
+ * The frame-channel STREAMOFF, without the deliverability-queue drain the
+ * ioctl does before it validates its argument. Called with
+ * fcd->buffer_mutex held, from the STREAMOFF ioctl and from the last-close
+ * teardown of /dev/tx-isp. A DQBUF, poll or 0x400456bf wait asleep on the
+ * channel returns: DQBUF with -EINVAL, poll with POLLERR, the wait at once.
+ */
+static void frame_channel_streamoff_locked(struct frame_channel_device *fcd,
+                                           const char *why)
+{
+    struct tx_isp_channel_state *state = &fcd->state;
+
+    state->streaming = false;
+    state->capture_active = false;
+    state->state = 3;
+    state->flags &= ~1U;
+    fcd->streaming_flags &= ~1;
+
+    /* Wake any waiters so they can exit cleanly */
+    complete_all(&state->frame_done);
+    wake_up_interruptible(&state->frame_wait);
+
+    /* Stop only the MSCA output channel.  VIC input lifetime is owned by
+     * the sensor pipeline rather than by an individual frame channel. */
+    frame_channel_stop_msca(fcd, why);
+    /* OEM __vb2_queue_cancel: drop the queued MSCA addresses. */
+    frame_channel_fifo_clear(fcd);
+}
+
 static bool frame_channel_copy_tracked_buffer(struct frame_channel_device *fcd,
                                               u32 index,
                                               struct frame_buffer *snapshot)
@@ -1557,6 +1611,9 @@ extern int tx_isp_get_ae_algo_handle(void __user *arg);
 extern int tx_isp_set_ae_algo_open(void __user *arg);
 extern int tx_isp_set_ae_algo_close(void __user *arg);
 extern int tisp_ae_algo_handle(void *attr);
+extern void tx_isp_ae_algo_close_internal(void);
+extern bool tx_isp_ae_algo_is_open(void);
+extern int tisp_event_drain(unsigned int timeout_ms);
 
 /* Forward declarations for initialization functions */
 extern int tx_isp_vic_platform_init(void);
@@ -2256,12 +2313,10 @@ static int sensor_set_wdr_mode(int mode) {
 int sensor_fps_control_packed(u32 packed_fps) {
     u32 fps_num = packed_fps >> 16;
     u32 fps_den = packed_fps & 0xffff;
+    struct tx_isp_subdev_ops *ops;
+    struct tx_isp_subdev *sensor_sd;
+    struct tx_isp_sensor *sensor;
     int ret;
-
-    if (!ourISPdev || !ourISPdev->sensor) {
-        pr_warn("sensor_fps_control: No ISP device or sensor available\n");
-        return -ENODEV;
-    }
 
     if (!fps_num || !fps_den || fps_num > 120 * fps_den) {
         pr_warn("sensor_fps_control: invalid packed rate %u/%u FPS\n",
@@ -2269,10 +2324,22 @@ int sensor_fps_control_packed(u32 packed_fps) {
         return -EINVAL;
     }
 
-    if (!stored_sensor_ops.original_ops ||
-        !stored_sensor_ops.original_ops->sensor ||
-        !stored_sensor_ops.original_ops->sensor->ioctl ||
-        !stored_sensor_ops.sensor_sd) {
+    /* Reached from the isp-m0 tuning fd, which a tuning daemon keeps open
+     * while the streamer comes and goes: the sensor may be released or
+     * removed concurrently. Same pointer snapshot under
+     * sensor_ops_call_mutex as sensor_expo_work. */
+    mutex_lock(&sensor_ops_call_mutex);
+    sensor = ourISPdev ? ourISPdev->sensor : NULL;
+    if (!sensor) {
+        mutex_unlock(&sensor_ops_call_mutex);
+        pr_warn("sensor_fps_control: No ISP device or sensor available\n");
+        return -ENODEV;
+    }
+
+    ops = stored_sensor_ops.original_ops;
+    sensor_sd = stored_sensor_ops.sensor_sd;
+    if (!ops || !ops->sensor || !ops->sensor->ioctl || !sensor_sd) {
+        mutex_unlock(&sensor_ops_call_mutex);
         pr_warn("sensor_fps_control: sensor FPS ioctl is unavailable\n");
         return -ENODEV;
     }
@@ -2280,15 +2347,16 @@ int sensor_fps_control_packed(u32 packed_fps) {
     /* Sensor drivers consume the usual numerator/denominator pair packed into
      * 16 bits each.  Preserve that pair: rounding it to an integer changes the
      * physical frame period and defeats phase-sensitive anti-flicker control. */
-    ret = stored_sensor_ops.original_ops->sensor->ioctl(
-        stored_sensor_ops.sensor_sd, TX_ISP_EVENT_SENSOR_FPS, &packed_fps);
+    ret = ops->sensor->ioctl(sensor_sd, TX_ISP_EVENT_SENSOR_FPS, &packed_fps);
     if (ret) {
+        mutex_unlock(&sensor_ops_call_mutex);
         pr_warn("sensor_fps_control: sensor rejected %u/%u FPS: %d\n",
                 fps_num, fps_den, ret);
         return ret;
     }
 
-    ourISPdev->sensor->video.fps = packed_fps;
+    sensor->video.fps = packed_fps;
+    mutex_unlock(&sensor_ops_call_mutex);
     if (ourISPdev->tuning_data) {
         ourISPdev->tuning_data->fps_num = fps_num;
         ourISPdev->tuning_data->fps_den = fps_den;
@@ -2434,6 +2502,22 @@ static void frame_channel_bootstrap_slot(struct frame_channel_device *fcd,
 
     fcd->channel_num = channel_num;
     fcd->miscdev.minor = minor;
+}
+
+/* Make every lock and wait object of a channel valid; module init, before
+ * any node exists. frame_channel_prepare() re-initialises the same objects
+ * at node creation and first open. */
+static void frame_channel_init_sync(struct frame_channel_device *fcd)
+{
+    mutex_init(&fcd->buffer_mutex);
+    spin_lock_init(&fcd->buffer_queue_lock);
+    spin_lock_init(&fcd->oem_buf_lock);
+    spin_lock_init(&fcd->state.queue_lock);
+    spin_lock_init(&fcd->state.buffer_lock);
+    INIT_LIST_HEAD(&fcd->state.queued_buffers);
+    INIT_LIST_HEAD(&fcd->state.completed_buffers);
+    init_waitqueue_head(&fcd->state.frame_wait);
+    init_completion(&fcd->state.frame_done);
 }
 
 void frame_channel_prepare(struct frame_channel_device *fcd,
@@ -4874,22 +4958,7 @@ static long frame_channel_ioctl_locked(struct file *file, unsigned int cmd,
             return -EINVAL;
         }
 
-        // Stop channel streaming
-        state->streaming = false;
-        state->capture_active = false;
-        state->state = 3;
-        state->flags &= ~1U;
-        fcd->streaming_flags &= ~1;
-
-        /* Wake any waiters so they can exit cleanly */
-        complete_all(&state->frame_done);
-        wake_up_interruptible(&state->frame_wait);
-
-        /* Stop only the MSCA output channel.  VIC input lifetime is owned by
-         * the sensor pipeline rather than by an individual frame channel. */
-        frame_channel_stop_msca(fcd, "STREAMOFF");
-        /* OEM __vb2_queue_cancel: drop the queued MSCA addresses. */
-        frame_channel_fifo_clear(fcd);
+        frame_channel_streamoff_locked(fcd, "STREAMOFF");
 
         pr_info("Channel %d: Streaming stopped\n", channel);
         return 0;
@@ -5013,11 +5082,24 @@ static long frame_channel_ioctl_locked(struct file *file, unsigned int cmd,
          * STREAMON this simply waits; after STREAMOFF the completion is
          * complete_all()ed and it returns at once. */
 
-        /* OEM: private_wait_for_completion_interruptible($s0 + 0x2d4).
-         * Not under buffer_mutex: STREAMOFF must be able to complete_all(). */
-        mutex_unlock(&fcd->buffer_mutex);
-        ret = wait_for_completion_interruptible(&state->frame_done);
-        mutex_lock(&fcd->buffer_mutex);
+        /* O_NONBLOCK (stock ignores it): take a pending completion or fail
+         * with -EAGAIN, never sleep. The completion count is the same one
+         * the blocking wait consumes, so both see the same frames; after
+         * STREAMOFF, the owner's release or the last-close teardown of
+         * /dev/tx-isp it is complete_all()ed and this succeeds at once,
+         * exactly like the blocking wait. */
+        if (file->f_flags & O_NONBLOCK) {
+            if (!try_wait_for_completion(&state->frame_done))
+                return -EAGAIN;
+            ret = 0;
+        } else {
+            /* OEM: private_wait_for_completion_interruptible($s0 + 0x2d4).
+             * Not under buffer_mutex: STREAMOFF, release and the last-close
+             * teardown must be able to complete_all(). */
+            mutex_unlock(&fcd->buffer_mutex);
+            ret = wait_for_completion_interruptible(&state->frame_done);
+            mutex_lock(&fcd->buffer_mutex);
+        }
 
         if (ret >= 0) {
             /* OEM: var_78 = *($s0 + 0x2d4) + 1 — return frame count.
@@ -5171,6 +5253,308 @@ static int tx_isp_sensor_wdr_buffer_layout(struct tx_isp_dev *isp_dev,
     return tx_isp_t31_wdr_buffer_layout(&policy, size, stride, lines);
 }
 
+/* TX_ISP_SENSOR_RELEASE_SENSOR argument (0x40 of the 0x50-byte
+ * tx_isp_sensor_register_info; only the name is used). */
+struct tx_isp_sensor_unreg_info {
+    char name[32];
+    uint32_t reserved[8];
+};
+
+/* TX_ISP_SENSOR_SET_INPUT (0xc0045627); also the deselect (-1) of the
+ * last-close teardown. */
+static int tx_isp_sensor_set_input(struct tx_isp_dev *isp_dev, int *input_index)
+{
+    int i;
+    int ret = 0;
+
+    pr_info("Sensor set input: index=%d\n", *input_index);
+
+    /* Stock subdev_sensor_ops_set_input: deselecting a streaming sensor
+     * fails with "Please, streamoff sensor firstly!". IMP_ISP_DelSensor
+     * deselects (-1) and then frees the MDNS/WDR buffers the ISP is
+     * writing, so it must not pass while frames still flow. */
+    if (*input_index == -1 &&
+        isp_dev->vin_state == TX_ISP_MODULE_RUNNING) {
+        pr_err("Please, streamoff sensor firstly!\n");
+        return -EPERM;
+    }
+
+    /* Binary Ninja: Iterate through subdevs at offset 0x2c (isp_dev->subdevs) */
+    for (i = 0; i < ISP_MAX_SUBDEVS; i++) {
+        struct tx_isp_subdev *subdev = isp_dev->subdevs[i];
+
+        if (!subdev)
+            continue;
+
+        /* Binary Ninja: Check if subdev has sensor ops */
+        if (subdev->ops && subdev->ops->sensor && subdev->ops->sensor->ioctl) {
+            /* Binary Ninja: Call sensor ioctl with input index */
+            ret = subdev->ops->sensor->ioctl(subdev,
+                                             TX_ISP_EVENT_SENSOR_SET_INPUT,
+                                             input_index);
+
+            if (ret == 0) {
+                /* Success - continue to next subdev */
+                continue;
+            } else if (ret != -ENOIOCTLCMD) {
+                /* Error other than "not supported" - return it */
+                return ret;
+            }
+        }
+    }
+
+    return 0;
+}
+
+/* TX_ISP_SENSOR_RELEASE_SENSOR (0x805056c2); also the sensor release of
+ * the last-close teardown. */
+static int tx_isp_sensor_release(struct tx_isp_dev *isp_dev,
+                                 struct tx_isp_sensor_unreg_info *unreg_info)
+{
+    int i;
+    int ret = 0;
+
+    pr_info("Sensor release request: name=%s\n", unreg_info->name);
+
+    /* Stock refuses to release the active sensor ("the sensor is
+     * active, please stop it firstly."). Right after this ioctl
+     * IMP_ISP_DelSensor frees the MDNS (0x7820..) and WDR (0x2004)
+     * buffers the ISP DMA writes, so refuse while the sensor streams
+     * and, once stopped, let the frame in flight finish first. */
+    if (isp_dev->vin_state == TX_ISP_MODULE_RUNNING) {
+        pr_err("the sensor is active, please stop it firstly.\n");
+        return -EINVAL;
+    }
+    {
+        u32 fps_q8 = 0;
+        u32 frame_ms = 100;
+        int quiet;
+
+        if (!tx_isp_sensor_fps_q8(isp_dev->sensor, &fps_q8) && fps_q8)
+            frame_ms = DIV_ROUND_UP(256U * 1000U, fps_q8);
+        quiet = tx_isp_core_wait_quiet(frame_ms);
+        if (quiet < 0)
+            pr_warn("Sensor release: ISP core still raising interrupts after 1 s; DMA buffers may still be in use\n");
+        else
+            pr_info("Sensor release: ISP core quiet after %d ms\n", quiet);
+    }
+
+    /* Binary Ninja: Iterate through subdevs at offset 0x2c (isp_dev->subdevs) */
+    for (i = 0; i < ISP_MAX_SUBDEVS; i++) {
+        struct tx_isp_subdev *subdev = isp_dev->subdevs[i];
+
+        if (!subdev)
+            continue;
+
+        /* Binary Ninja: Check if subdev has sensor ops */
+        if (subdev->ops && subdev->ops->sensor && subdev->ops->sensor->ioctl) {
+            /* Binary Ninja: Call sensor ioctl with release data */
+            ret = subdev->ops->sensor->ioctl(subdev,
+                                             TX_ISP_EVENT_SENSOR_RELEASE,
+                                             unreg_info);
+
+            if (ret == 0) {
+                /* Success - continue to next subdev */
+                pr_info("Sensor released via subdev %d\n", i);
+                continue;
+            } else if (ret != -ENOIOCTLCMD) {
+                /* Error other than "not supported" - but continue anyway */
+                pr_warn("Sensor release error from subdev %d: %d\n", i, ret);
+                continue;
+            }
+        }
+    }
+
+    return 0;
+}
+
+/*
+ * What the userspace of /dev/tx-isp has switched on and a clean
+ * IMP_ISP_DisableSensor would switch off again. The last-close teardown
+ * undoes exactly these, once, so it is a no-op after a clean teardown.
+ * Written by the /dev/tx-isp ioctls and the teardown; no /dev/tx-isp ioctl
+ * can run during the teardown (it runs on the last close, and open waits
+ * for it under tx_isp_open_mutex).
+ */
+static bool tx_isp_uapi_sensor_streaming; /* STREAMON 0x80045612 */
+static bool tx_isp_uapi_links_streaming;  /* ENABLE_LINKS 0x800456d2 */
+
+/* Serialises open, release and the last-close teardown of /dev/tx-isp. */
+static DEFINE_MUTEX(tx_isp_open_mutex);
+
+/*
+ * s_stream(0) on every subdev in the order of the DISABLE_SENSOR ioctl, but
+ * without its rollback: a subdev that fails (the sensor wrapper when the
+ * sensor module is already gone) must not make the walk restart the ones
+ * before it.
+ */
+static void tx_isp_last_close_stream_off(struct tx_isp_dev *isp)
+{
+    int i;
+
+    for (i = 0; i < ISP_MAX_SUBDEVS; i++) {
+        struct tx_isp_subdev *sd = isp->subdevs[i];
+        int ret;
+
+        if (!sd || !sd->ops || !sd->ops->video || !sd->ops->video->s_stream)
+            continue;
+        ret = sd->ops->video->s_stream(sd, 0);
+        if (ret && ret != -ENOIOCTLCMD)
+            pr_warn("tx-isp last close: subdev %d s_stream(0) returned %d\n",
+                    i, ret);
+    }
+}
+
+/*
+ * Last close of /dev/tx-isp (called with tx_isp_open_mutex held, refcnt
+ * already 0). A streamer killed without its IMP teardown leaves the sensor
+ * streaming, the ISP core interrupt and with it AE/AWB, the day/night
+ * worker and sensor_expo_work running, and the sensor attached; a later
+ * rmmod of the sensor then races with the calls into it. Replay what the
+ * clean teardown sends, in its order, each step only if its effect is still
+ * in place, so after a clean teardown nothing is done:
+ *
+ *  1. IMP_FrameSource_DisableChn: frame-channel STREAMOFF of every channel
+ *     still streaming (the fds of a killed streamer may close after this
+ *     one); wake every 0x400456bf waiter.
+ *  2. IMP_ISP_DisableSensor: SET_AE_ALGO_CLOSE (custom AE installed),
+ *     DISABLE_LINKS (core link_stream(0): MSCA channels off, ISP state 4->3,
+ *     core IRQ masked and disabled, day/night work flushed), DESTROY_LINKS,
+ *     then - once the AE events from the last frames are dispatched and
+ *     sensor_expo_work has run - DISABLE_SENSOR (s_stream(0): sensor, VIN,
+ *     VIC, CSI).
+ *  3. IMP_ISP_DelSensor: SET_INPUT(-1) and RELEASE_SENSOR (waits for the
+ *     ISP core to go quiet, detaches the sensor).
+ *  4. IMP_ISP_DisableTuning has no kernel side (/dev/isp-m0 release keeps
+ *     the tuning state, OEM-style), IMP_ISP_Close is this release.
+ *
+ * The result is the state a clean IMP teardown leaves (ISP state 3, VIN
+ * INIT, VIC 3, no links, core IRQ disabled once, no sensor registered),
+ * from which the IMP init path (AddSensor, EnableSensor, FrameSource) is
+ * known to come up again. The ISP is not slaked back to state 1 (as stock's
+ * release does): the open driver's clean teardown does not do that either.
+ */
+static void tx_isp_last_close_teardown(struct tx_isp_dev *isp)
+{
+    struct tx_isp_vin_device *vin;
+    int ch, ret;
+    bool registered;
+    bool did = false;
+
+    /* 1. Frame channels */
+    for (ch = 0; ch < num_channels && ch < ARRAY_SIZE(frame_channels); ch++) {
+        struct frame_channel_device *fcd = &frame_channels[ch];
+        struct tx_isp_channel_state *state = &fcd->state;
+
+        /* Self-check: every channel's wait objects are initialised in
+         * module init (frame_channel_init_sync). A NULL list head here
+         * would oops in __wake_up_common. */
+        if (WARN_ON_ONCE(!state->frame_done.wait.task_list.next ||
+                         !state->frame_wait.task_list.next))
+            continue;
+
+        mutex_lock(&fcd->buffer_mutex);
+        if (state->streaming || state->state == 4 ||
+            (fcd->streaming_flags & 1)) {
+            pr_info("tx-isp last close: channel %d still streaming, STREAMOFF\n",
+                    ch);
+            frame_channel_drain_deliverability_queues(state);
+            frame_channel_streamoff_locked(fcd, "last close");
+            did = true;
+        } else if (fcd->open_count > 0 &&
+                   waitqueue_active(&state->frame_done.wait)) {
+            /* A 0x400456bf caller waiting for a first STREAMON that will
+             * not come from this ISP setup any more. Only an open channel
+             * can have one. */
+            complete_all(&state->frame_done);
+        }
+        mutex_unlock(&fcd->buffer_mutex);
+    }
+
+    /* 2. IMP_ISP_DisableSensor */
+    if (tx_isp_ae_algo_is_open()) {
+        pr_info("tx-isp last close: closing the custom AE algorithm\n");
+        tx_isp_ae_algo_close_internal();
+        did = true;
+    }
+
+    if (tx_isp_uapi_links_streaming) {
+        pr_info("tx-isp last close: DISABLE_LINKS\n");
+        ret = tx_isp_video_link_stream(isp, 0);
+        if (ret)
+            pr_warn("tx-isp last close: DISABLE_LINKS returned %d\n", ret);
+        tx_isp_uapi_links_streaming = false;
+        did = true;
+    }
+
+    if (isp->active_link >= 0 || isp->links_enabled) {
+        pr_info("tx-isp last close: DESTROY_LINKS\n");
+        ret = tx_isp_video_link_destroy_impl(isp);
+        if (ret)
+            pr_warn("tx-isp last close: DESTROY_LINKS returned %d\n", ret);
+        did = true;
+    }
+
+    vin = isp->vin_dev;
+    if (tx_isp_uapi_sensor_streaming ||
+        isp->vin_state == TX_ISP_MODULE_RUNNING ||
+        (vin && vin->state == TX_ISP_MODULE_RUNNING)) {
+        /* With the core IRQ off no new AE event is queued; let the queued
+         * ones (they call into the sensor driver and queue exposure writes)
+         * and the exposure write they queued finish while the sensor still
+         * streams, as they would before a clean DISABLE_SENSOR. */
+        if (isp->fw_thread && tisp_event_drain(500))
+            pr_warn("tx-isp last close: ISP events still queued after 500 ms\n");
+        flush_work(&sensor_expo_work);
+
+        pr_info("tx-isp last close: DISABLE_SENSOR\n");
+        mutex_lock(&sensor_ops_call_mutex);
+        tx_isp_last_close_stream_off(isp);
+        mutex_unlock(&sensor_ops_call_mutex);
+        tx_isp_uapi_sensor_streaming = false;
+        did = true;
+
+        /* The sensor wrapper resets these when it stops a sensor. Without
+         * a sensor (removed while streaming) nothing did, and EnableSensor
+         * would then skip the sensor start ("already streaming") and
+         * DelSensor would be refused. */
+        if (isp->vin_state == TX_ISP_MODULE_RUNNING) {
+            pr_warn("tx-isp last close: no sensor stopped the VIN, resetting its state\n");
+            isp->vin_state = TX_ISP_MODULE_INIT;
+        }
+        if (vin && vin->state == TX_ISP_MODULE_RUNNING)
+            vin->state = TX_ISP_MODULE_INIT;
+    }
+
+    /* 3. IMP_ISP_DelSensor, if AddSensor (REGISTER_SENSOR) attached one */
+    mutex_lock(&sensor_ops_call_mutex);
+    mutex_lock(&sensor_register_mutex);
+    registered = registered_sensor_subdev != NULL;
+    mutex_unlock(&sensor_register_mutex);
+    if (registered || isp->sensor) {
+        struct tx_isp_sensor_unreg_info unreg_info;
+        int input = -1;
+
+        memset(&unreg_info, 0, sizeof(unreg_info));
+        if (isp->sensor)
+            strlcpy(unreg_info.name, isp->sensor->info.name,
+                    sizeof(unreg_info.name));
+        pr_info("tx-isp last close: releasing sensor %s\n", unreg_info.name);
+        ret = tx_isp_sensor_set_input(isp, &input);
+        if (ret)
+            pr_warn("tx-isp last close: SET_INPUT(-1) returned %d\n", ret);
+        ret = tx_isp_sensor_release(isp, &unreg_info);
+        if (ret)
+            pr_warn("tx-isp last close: RELEASE_SENSOR returned %d\n", ret);
+        did = true;
+    }
+    mutex_unlock(&sensor_ops_call_mutex);
+
+    if (did)
+        pr_info("tx-isp last close: streamer teardown done (ISP state=%d vin_state=%d)\n",
+                isp->state, isp->vin_state);
+}
+
 // Basic IOCTL handler matching reference behavior
 static long tx_isp_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
@@ -5319,47 +5703,14 @@ static long tx_isp_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned 
     }
     case 0xc0045627: { // TX_ISP_SENSOR_SET_INPUT - Set active sensor input (EXACT Binary Ninja)
         int input_index;
-        int i;
-        int ret = 0;
+        int ret;
 
         if (copy_from_user(&input_index, argp, sizeof(input_index)))
             return -EFAULT;
 
-        pr_info("Sensor set input: index=%d\n", input_index);
-
-        /* Stock subdev_sensor_ops_set_input: deselecting a streaming sensor
-         * fails with "Please, streamoff sensor firstly!". IMP_ISP_DelSensor
-         * deselects (-1) and then frees the MDNS/WDR buffers the ISP is
-         * writing, so it must not pass while frames still flow. */
-        if (input_index == -1 &&
-            isp_dev->vin_state == TX_ISP_MODULE_RUNNING) {
-            pr_err("Please, streamoff sensor firstly!\n");
-            return -EPERM;
-        }
-
-        /* Binary Ninja: Iterate through subdevs at offset 0x2c (isp_dev->subdevs) */
-        for (i = 0; i < ISP_MAX_SUBDEVS; i++) {
-            struct tx_isp_subdev *subdev = isp_dev->subdevs[i];
-
-            if (!subdev)
-                continue;
-
-            /* Binary Ninja: Check if subdev has sensor ops */
-            if (subdev->ops && subdev->ops->sensor && subdev->ops->sensor->ioctl) {
-                /* Binary Ninja: Call sensor ioctl with input index */
-	                ret = subdev->ops->sensor->ioctl(subdev,
-	                                                 TX_ISP_EVENT_SENSOR_SET_INPUT,
-	                                                 &input_index);
-
-                if (ret == 0) {
-                    /* Success - continue to next subdev */
-                    continue;
-                } else if (ret != -ENOIOCTLCMD) {
-                    /* Error other than "not supported" - return it */
-                    return ret;
-                }
-            }
-        }
+        ret = tx_isp_sensor_set_input(isp_dev, &input_index);
+        if (ret)
+            return ret;
 
         /* Binary Ninja: Copy result back to user */
         if (copy_to_user(argp, &input_index, sizeof(input_index)))
@@ -5368,69 +5719,12 @@ static long tx_isp_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned 
         return 0;
     }
     case 0x805056c2: { // TX_ISP_SENSOR_RELEASE_SENSOR - Release/unregister sensor (EXACT Binary Ninja)
-        struct tx_isp_sensor_register_info {
-            char name[32];
-            // Other fields (0x50 bytes total in reference)
-            uint32_t reserved[8];
-        } unreg_info;
-        int i;
-        int ret = 0;
+        struct tx_isp_sensor_unreg_info unreg_info;
 
         if (copy_from_user(&unreg_info, argp, sizeof(unreg_info)))
             return -EFAULT;
 
-        pr_info("Sensor release request: name=%s\n", unreg_info.name);
-
-        /* Stock refuses to release the active sensor ("the sensor is
-         * active, please stop it firstly."). Right after this ioctl
-         * IMP_ISP_DelSensor frees the MDNS (0x7820..) and WDR (0x2004)
-         * buffers the ISP DMA writes, so refuse while the sensor streams
-         * and, once stopped, let the frame in flight finish first. */
-        if (isp_dev->vin_state == TX_ISP_MODULE_RUNNING) {
-            pr_err("the sensor is active, please stop it firstly.\n");
-            return -EINVAL;
-        }
-        {
-            u32 fps_q8 = 0;
-            u32 frame_ms = 100;
-            int quiet;
-
-            if (!tx_isp_sensor_fps_q8(isp_dev->sensor, &fps_q8) && fps_q8)
-                frame_ms = DIV_ROUND_UP(256U * 1000U, fps_q8);
-            quiet = tx_isp_core_wait_quiet(frame_ms);
-            if (quiet < 0)
-                pr_warn("Sensor release: ISP core still raising interrupts after 1 s; DMA buffers may still be in use\n");
-            else
-                pr_info("Sensor release: ISP core quiet after %d ms\n", quiet);
-        }
-
-        /* Binary Ninja: Iterate through subdevs at offset 0x2c (isp_dev->subdevs) */
-        for (i = 0; i < ISP_MAX_SUBDEVS; i++) {
-            struct tx_isp_subdev *subdev = isp_dev->subdevs[i];
-
-            if (!subdev)
-                continue;
-
-            /* Binary Ninja: Check if subdev has sensor ops */
-            if (subdev->ops && subdev->ops->sensor && subdev->ops->sensor->ioctl) {
-                /* Binary Ninja: Call sensor ioctl with release data */
-	                ret = subdev->ops->sensor->ioctl(subdev,
-	                                                 TX_ISP_EVENT_SENSOR_RELEASE,
-	                                                 &unreg_info);
-
-                if (ret == 0) {
-                    /* Success - continue to next subdev */
-                    pr_info("Sensor released via subdev %d\n", i);
-                    continue;
-                } else if (ret != -ENOIOCTLCMD) {
-                    /* Error other than "not supported" - but continue anyway */
-                    pr_warn("Sensor release error from subdev %d: %d\n", i, ret);
-                    continue;
-                }
-            }
-        }
-
-        return 0;
+        return tx_isp_sensor_release(isp_dev, &unreg_info);
     }
     case 0x8038564f:   // TX_ISP_SENSOR_S_REGISTER
     case 0xc0385650: { // TX_ISP_SENSOR_G_REGISTER
@@ -5751,16 +6045,28 @@ static long tx_isp_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned 
         return tx_isp_video_link_destroy_impl(isp_dev);
     }
     case 0x800456d2: { // TX_ISP_VIDEO_LINK_STREAM_ON - Enable video link streaming
-        return tx_isp_video_link_stream(isp_dev, 1);
+        ret = tx_isp_video_link_stream(isp_dev, 1);
+        if (!ret)
+            tx_isp_uapi_links_streaming = true;
+        return ret;
     }
     case 0x800456d3: { // TX_ISP_VIDEO_LINK_STREAM_OFF - Disable video link streaming
-        return tx_isp_video_link_stream(isp_dev, 0);
+        ret = tx_isp_video_link_stream(isp_dev, 0);
+        if (!ret)
+            tx_isp_uapi_links_streaming = false;
+        return ret;
     }
     case TX_ISP_FRAME_IOCTL_LEGACY_STREAM_ON: { // VIDIOC_STREAMON - Start video streaming
-        return tx_isp_video_s_stream(isp_dev, 1);
+        ret = tx_isp_video_s_stream(isp_dev, 1);
+        if (!ret)
+            tx_isp_uapi_sensor_streaming = true;
+        return ret;
     }
     case TX_ISP_FRAME_IOCTL_LEGACY_STREAM_OFF: { // VIDIOC_STREAMOFF - Stop video streaming
-        return tx_isp_video_s_stream(isp_dev, 0);
+        ret = tx_isp_video_s_stream(isp_dev, 0);
+        if (!ret)
+            tx_isp_uapi_sensor_streaming = false;
+        return ret;
     }
     case 0x40045626: {  // VIDIOC_GET_SENSOR_INFO - Simple success response (USERSPACE EXPECTS THIS!)
         /* CRITICAL: Userspace (libimp/prudynt) expects this to return 1 for success
@@ -5869,11 +6175,16 @@ int tx_isp_open(struct inode *inode, struct file *file)
         return -ENODEV;
     }
 
+    /* Waits for a last-close teardown that is still running. */
+    if (mutex_lock_interruptible(&tx_isp_open_mutex))
+        return -ERESTARTSYS;
+
     /* Check if already opened */
     if (isp->refcnt) {
         isp->refcnt++;
         file->private_data = isp;
         pr_info("ISP opened (refcnt=%d)\n", isp->refcnt);
+        mutex_unlock(&tx_isp_open_mutex);
         return 0;
     }
 
@@ -5881,12 +6192,22 @@ int tx_isp_open(struct inode *inode, struct file *file)
     isp->refcnt = 1;
     isp->is_open = true;
     file->private_data = isp;
+    mutex_unlock(&tx_isp_open_mutex);
 
     pr_info("ISP opened successfully (refcnt=1)\n");
     return ret;
 }
 
-// Simple release handler
+/*
+ * Every user of the ISP holds /dev/tx-isp open (libimp's IMP_ISP_Open), so
+ * the last close is the point where nobody can still issue the clean
+ * teardown: tear down what is left. Only the last close: other openers
+ * (a second streamer instance, a tool, a tuning daemon using libimp) keep
+ * the ISP as it is. /dev/isp-m0 (tuning) and /dev/framechanN are not
+ * counted: a tuning daemon keeps isp-m0 open across streamer restarts, and
+ * the teardown stops the frame channels itself, whichever of a killed
+ * streamer's fds is closed first.
+ */
 static int tx_isp_release(struct inode *inode, struct file *file)
 {
     struct tx_isp_dev *isp = file->private_data;
@@ -5894,15 +6215,18 @@ static int tx_isp_release(struct inode *inode, struct file *file)
     if (!isp)
         return 0;
 
+    mutex_lock(&tx_isp_open_mutex);
     /* Handle refcount */
     if (isp->refcnt > 0) {
         isp->refcnt--;
         if (isp->refcnt == 0) {
             isp->is_open = false;
+            tx_isp_last_close_teardown(isp);
         }
     }
 
     pr_info("ISP released (refcnt=%d)\n", isp->refcnt);
+    mutex_unlock(&tx_isp_open_mutex);
     return 0;
 }
 
@@ -5979,12 +6303,20 @@ static int tx_isp_init(void)
     }
 
     /* The frame-channel mutex must be usable before any channel node is
-     * registered, whichever path registers it. */
+     * registered, whichever path registers it. So must the wait objects
+     * and locks that code outside open/ioctl reaches on every channel
+     * (the last-close teardown of /dev/tx-isp, the ISP frame-done paths):
+     * frame_channel_prepare() only runs at node creation in
+     * tx_isp_create_framechan_devices(), which stops at the first channel
+     * whose node another path already registered, and at the first open.
+     * Until then a zeroed wait queue has a NULL list head, which
+     * waitqueue_active() reports as non-empty and __wake_up_common()
+     * dereferences. */
     {
         int fc;
 
         for (fc = 0; fc < ARRAY_SIZE(frame_channels); fc++)
-            mutex_init(&frame_channels[fc].buffer_mutex);
+            frame_channel_init_sync(&frame_channels[fc]);
     }
 
     /* Allocate ISP device structure */
@@ -6464,6 +6796,11 @@ static void tx_isp_exit(void)
             kthread_stop(ourISPdev->fw_thread);
             ourISPdev->fw_thread = NULL;
         }
+
+        /* Queued by the AE callbacks (isp_fw_process) and the isp-m0
+         * exposure controls; neither can queue it any more. Its text goes
+         * away with this module. */
+        cancel_work_sync(&sensor_expo_work);
 
         tisp_deinit_free();
 
@@ -8091,6 +8428,11 @@ void tx_isp_sensor_subdev_deinit(struct tx_isp_subdev *sd)
         return;
 
     pr_info("*** SENSOR DEINIT: detaching sensor subdev %p still attached to the ISP ***\n", sd);
+
+    /* Waits for a sensor call that sensor_expo_work, the FPS control or
+     * the last-close teardown is making through stored_sensor_ops; those
+     * see the cleared pointers afterwards and skip the sensor. */
+    mutex_lock(&sensor_ops_call_mutex);
     tx_isp_unregister_sensor_subdev(sd);
 
     if (stored_sensor_ops.sensor_sd == sd) {
@@ -8099,6 +8441,7 @@ void tx_isp_sensor_subdev_deinit(struct tx_isp_subdev *sd)
         stored_sensor_ops.original_ops = NULL;
         stored_sensor_ops.sensor_sd = NULL;
     }
+    mutex_unlock(&sensor_ops_call_mutex);
 }
 
 /* Compatibility wrapper for old function name to resolve linking errors */
