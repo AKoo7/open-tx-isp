@@ -64,6 +64,9 @@ int isp_frame_done_wait_ex(int timeout_ms, u32 out[2])
     if (!out)
         return -EINVAL;
 
+    /* OEM isp_frame_done_wait (0x79dc) clears the flag first, so the call
+     * waits for the next frame instead of returning on an old one. */
+    frame_done_cond = 0;
     ret = wait_event_timeout(frame_done_wait, frame_done_cond, msecs_to_jiffies(timeout_ms));
     frame_done_cond = 0;
 

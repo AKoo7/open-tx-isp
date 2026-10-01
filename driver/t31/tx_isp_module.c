@@ -1620,6 +1620,7 @@ void tx_vic_disable_irq(struct tx_isp_vic_device *vic_dev);
 static void tx_vic_seed_irq_slots(struct tx_isp_vic_device *vic_dev, int irq);
 static int ispvic_frame_channel_qbuf(struct tx_isp_vic_device *vic_dev, void *buffer);
 static irqreturn_t isp_vic_interrupt_service_routine(int irq, void *dev_id);
+extern void isp_frame_done_wakeup(void);
 int private_reset_tx_isp_module(int arg);
 int system_irq_func_set(int index, irqreturn_t (*handler)(int irq, void *dev_id));
 
@@ -3461,6 +3462,12 @@ static irqreturn_t isp_vic_interrupt_service_routine(int irq, void *dev_id)
             /* OEM HLIL: *($s0 + 0x160) += 1 */
             vic_dev->frame_count++;
             isp_dev->frame_count++;
+            /* One frame-done tick per captured frame for IMP WaitFrame
+             * (tuning 0x8000162).  The OEM raises it as tuning event
+             * 0x4000002 after the core's channel 0 drain; here the MSCA
+             * FIFO is mostly drained elsewhere, the VIC frame done is the
+             * reliable per-frame point. */
+            isp_frame_done_wakeup();
 
             /* OEM HLIL: vic_framedone_irq_function($s0)
              * OEM does NOT deliver frames here — only updates DMA

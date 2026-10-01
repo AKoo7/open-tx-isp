@@ -1672,11 +1672,6 @@ irqreturn_t ispcore_interrupt_service_routine(int irq, void *dev_id)
         first_into = 0;
     }
 
-    /* OEM EXACT: Per-frame tuning event — calls isp_frame_done_wakeup(). */
-    if (interrupt_status & 1) {
-        extern void isp_frame_done_wakeup(void);
-        isp_frame_done_wakeup();
-    }
 
     /* *** CHANNEL 0/1/2 FRAME COMPLETION PROCESSING ***
      * Pass FIFO pop Y address via event data so frame_chan_event can
@@ -1701,6 +1696,7 @@ irqreturn_t ispcore_interrupt_service_routine(int irq, void *dev_id)
 
         if (drain_count > 0 && isp_dev)
             isp_dev->frame_count += drain_count;
+
         /* CH1 drain */
         drain_count = 0;
         while (drain_count < 8 && (readl(isp_regs + 0x9a7c) & 1) == 0) {
