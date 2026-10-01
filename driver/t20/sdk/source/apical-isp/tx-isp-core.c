@@ -2420,6 +2420,162 @@ static const struct file_operations isp_info_proc_fops ={
 	.llseek = seq_lseek,
 	.release = single_release,
 };
+
+/*
+ * /proc/jz/isp/isp-m0: the T31-format "ISP INFO" block.
+ *
+ * The T20 OEM SDK only has isp_info (above, kept unchanged).  Every
+ * day/night consumer reads isp-m0 and its labels/units:
+ *   timps daynight.c (column-0 prefix, first match): ISP Runing Mode,
+ *     SENSOR [Max] Integration Time, [MAX] SENSOR analog gain, SENSOR
+ *     digital gain, [MAX] ISP digital gain, Brightness
+ *   timps / thingino dn-isp-log ("^label", first match): same lines
+ *   thingino daynightd (strstr, LAST match wins): the exposure and gain
+ *     lines, ISP EV value[ log2| us], the ISP WB lines
+ *   thingino isp-inspector ("^label"): SENSOR NAME .. Mirror/Flip
+ *   thingino-devscripts daylightsample: ISP EV value us, SENSOR gains,
+ *     ISP WB weighted r/bgain, ISP Runing Mode
+ * so the labels, their order and their units follow T31's
+ * tisp_isp_info_show.  Gains are log2 with 5 fractional bits (32 = 2x),
+ * which is the unit of the apical system table (stab) the AE publishes.
+ * Integration times are lines.  "ISP EV value log2" is log2(lines x
+ * gain) with 16 fractional bits, "ISP EV value" its linear value and
+ * "ISP EV value us" the integration time in microseconds.
+ *
+ * The maxima are the limits the running AE actually clamps to.  The
+ * compact AE (t20_simple_ae, default) partitions exposure between
+ * integration time and sensor analog gain only, up to the sensor
+ * attribute limits, and never applies sensor or ISP digital gain, so
+ * those maxima read 0 there; otherwise they are the stab limits the OEM
+ * cmos allocators clamp to.
+ */
+extern bool tx_isp_t20_compact_ae_enabled(void);
+extern uint32_t tx_isp_t20_ae_max_integration_time(void);
+
+static unsigned int isp_m0_get(unsigned int type, unsigned int id)
+{
+	unsigned char status;
+	int reason = 0;
+
+	status = apical_command(type, id, 0, COMMAND_GET, &reason);
+	return status == ISP_SUCCESS ? (unsigned int)reason : 0;
+}
+
+static int isp_m0_show(struct seq_file *m, void *v)
+{
+	struct tx_isp_core_device *core = m->private;
+	struct tx_isp_video_in *vin = &core->vin;
+	struct tx_isp_sensor_attribute *attr = vin->attr;
+	struct v4l2_mbus_framefmt *mbus = &core->vin.mbus;
+	struct apical_isp_contrl *contrl = &core->contrl;
+	const char *colorspace;
+	bool compact = tx_isp_t20_compact_ae_enabled();
+	unsigned int max_it, again, max_again, dgain, max_dgain;
+	unsigned int isp_dgain, max_isp_dgain;
+	unsigned int ev_log2, ev, ev_us;
+	unsigned int g00, g01, g10, g11, rgain, bgain;
+
+	seq_printf(m, "****************** ISP INFO **********************\n");
+	if (atomic_read(&core->state) < TX_ISP_STATE_RUN || !attr) {
+		seq_printf(m, "sensor doesn't work, please enable sensor\n");
+		return 0;
+	}
+
+	switch (contrl->pattern) {
+	case APICAL_ISP_TOP_RGGB_START_R_GR_GB_B:
+		colorspace = "RGGB";
+		break;
+	case APICAL_ISP_TOP_RGGB_START_GR_R_B_GB:
+		colorspace = "GRBG";
+		break;
+	case APICAL_ISP_TOP_RGGB_START_GB_B_R_GR:
+		colorspace = "GBRG";
+		break;
+	case APICAL_ISP_TOP_RGGB_START_B_GB_GR_R:
+		colorspace = "BGGR";
+		break;
+	default:
+		colorspace = "The format of isp input is RGB or YUV422";
+		break;
+	}
+
+	again = isp_m0_get(TSYSTEM, SYSTEM_SENSOR_ANALOG_GAIN);
+	dgain = isp_m0_get(TSYSTEM, SYSTEM_SENSOR_DIGITAL_GAIN);
+	isp_dgain = isp_m0_get(TSYSTEM, SYSTEM_ISP_DIGITAL_GAIN);
+	if (compact) {
+		max_it = tx_isp_t20_ae_max_integration_time();
+		max_again = attr->max_again >> 11;
+		max_dgain = 0;
+		max_isp_dgain = 0;
+	} else {
+		max_it = stab.global_max_integration_time;
+		max_again = isp_m0_get(TSYSTEM, SYSTEM_MAX_SENSOR_ANALOG_GAIN);
+		max_dgain = isp_m0_get(TSYSTEM, SYSTEM_MAX_SENSOR_DIGITAL_GAIN);
+		max_isp_dgain = isp_m0_get(TSYSTEM, SYSTEM_MAX_ISP_DIGITAL_GAIN);
+	}
+	if (!max_it)
+		max_it = attr->max_integration_time;
+	ev_log2 = isp_m0_get(CALIBRATION, EXPOSURE_LOG2_ID);
+	ev = math_exp2(ev_log2, 16, 0);
+	ev_us = isp_m0_get(TALGORITHMS, AE_EXPOSURE_ID);
+
+	g00 = apical_isp_white_balance_gain_00_read();
+	g01 = apical_isp_white_balance_gain_01_read();
+	g10 = apical_isp_white_balance_gain_10_read();
+	g11 = apical_isp_white_balance_gain_11_read();
+	/* R/G and B/G in 1/256 units, like T31's weighted gains */
+	rgain = (g01 + g10) ? (g00 * 512) / (g01 + g10) : 0;
+	bgain = (g01 + g10) ? (g11 * 512) / (g01 + g10) : 0;
+
+	seq_printf(m, "Software Version : %s\n", SOFT_VERSION);
+	seq_printf(m, "SENSOR NAME : %s\n", attr->name);
+	seq_printf(m, "SENSOR OUTPUT WIDTH : %d\n", mbus->width);
+	seq_printf(m, "SENSOR OUTPUT HEIGHT : %d\n", mbus->height);
+	seq_printf(m, "ISP OUTPUT FPS : %d / %d\n", vin->fps >> 16, vin->fps & 0xffff);
+	seq_printf(m, "SENSOR OUTPUT RAW PATTERN : %s\n", colorspace);
+	seq_printf(m, "ISP Top Value : 0x%x\n", APICAL_READ_32(0x40));
+	seq_printf(m, "ISP Runing Mode : %s\n",
+		   apical_isp_ds1_cs_conv_clip_min_uv_read() == 512 ? "Night" : "Day");
+	seq_printf(m, "ISP Custom Mode : %s\n", "Disable");
+	seq_printf(m, "ISP WDR Mode : %s\n",
+		   isp_m0_get(TIMAGE, WDR_MODE_ID) ? "Enable" : "Disable");
+	seq_printf(m, "SENSOR Integration Time : %d lines\n", stab.global_integration_time);
+	seq_printf(m, "SENSOR Max Integration Time : %d lines\n", max_it);
+	seq_printf(m, "SENSOR analog gain : %d\n", again);
+	seq_printf(m, "MAX SENSOR analog gain : %d\n", max_again);
+	seq_printf(m, "SENSOR digital gain : %d\n", dgain);
+	seq_printf(m, "MAX SENSOR digital gain : %d\n", max_dgain);
+	seq_printf(m, "ISP digital gain : %d\n", isp_dgain);
+	seq_printf(m, "MAX ISP digital gain : %d\n", max_isp_dgain);
+	seq_printf(m, "ISP EV value: %d\n", ev);
+	seq_printf(m, "ISP EV value log2: %d\n", ev_log2);
+	seq_printf(m, "ISP EV value us: %d\n", ev_us);
+	seq_printf(m, "ISP WB weighted rgain: %d\n", rgain);
+	seq_printf(m, "ISP WB weighted bgain: %d\n", bgain);
+	seq_printf(m, "ISP WB color temperature: %d\n",
+		   isp_m0_get(TALGORITHMS, AWB_TEMPERATURE_ID) * 100);
+	seq_printf(m, "Saturation : %d\n", isp_m0_get(TSCENE_MODES, SATURATION_STRENGTH_ID));
+	seq_printf(m, "Sharpness : %d\n", isp_m0_get(TSCENE_MODES, SHARPENING_STRENGTH_ID));
+	seq_printf(m, "Contrast : %d\n", isp_m0_get(TSCENE_MODES, CONTRAST_STRENGTH_ID));
+	seq_printf(m, "Brightness : %d\n", isp_m0_get(TSCENE_MODES, BRIGHTNESS_STRENGTH_ID));
+	seq_printf(m, "Antiflicker : %d\n", isp_m0_get(TALGORITHMS, ANTIFLICKER_MODE_ID));
+	seq_printf(m, "Mirror: %s, Flip: %s\n",
+		   isp_m0_get(TIMAGE, ORIENTATION_HFLIP_ID) ? "Enable" : "Disable",
+		   isp_m0_get(TIMAGE, ORIENTATION_VFLIP_ID) ? "Enable" : "Disable");
+	return 0;
+}
+
+static int isp_m0_open(struct inode *inode, struct file *file)
+{
+	return single_open_size(file, isp_m0_show, PDE_DATA(inode), 4096);
+}
+
+static const struct file_operations isp_m0_proc_fops = {
+	.read = seq_read,
+	.open = isp_m0_open,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
 /* gamma info */
 static int isp_gamma_show(struct seq_file *m, void *v)
 {
@@ -2878,6 +3034,7 @@ int register_tx_isp_core_device(struct platform_device *pdev, struct v4l2_device
 		printk("################## %s %d ############################\n",__func__,__LINE__);
 	}
 	proc_create_data("isp_info", S_IRUGO, proc, &isp_info_proc_fops, (void *)core_dev);
+	proc_create_data("isp-m0", S_IRUGO, proc, &isp_m0_proc_fops, (void *)core_dev);
 	proc_create_data("isp_gamma", S_IRUGO, proc, &isp_gamma_proc_fops, (void *)core_dev);
 	proc_create_data("isp_de_hilight", S_IRUGO, proc, &isp_de_hilight_fops, (void *)core_dev);
 

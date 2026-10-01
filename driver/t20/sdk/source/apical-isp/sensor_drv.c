@@ -31,6 +31,40 @@ EXPORT_SYMBOL(math_exp2);
 
 static struct tx_isp_core_device *ispcore = NULL;
 
+/* Integration-time window (lines) the compact AE clamps to. */
+static void t20_ae_integration_limits(const struct tx_isp_sensor_attribute *attr,
+		uint32_t *min_integration, uint32_t *max_integration)
+{
+	uint32_t max;
+
+	*min_integration = max_t(uint32_t, attr->min_integration_time,
+				 attr->min_integration_time_native);
+	max = attr->integration_time_limit;
+	if (!max || (attr->max_integration_time_native &&
+	    attr->max_integration_time_native < max))
+		max = attr->max_integration_time_native;
+	if (!max || (attr->max_integration_time &&
+	    attr->max_integration_time < max))
+		max = attr->max_integration_time;
+	*max_integration = max;
+}
+
+/* The compact AE's integration-time ceiling, for /proc/jz/isp/isp-m0;
+ * 0 when no sensor is attached. */
+uint32_t tx_isp_t20_ae_max_integration_time(void)
+{
+	struct tx_isp_sensor_attribute *attr;
+	uint32_t min_integration, max_integration;
+
+	if (!ispcore)
+		return 0;
+	attr = ispcore->vin.attr;
+	if (!attr)
+		return 0;
+	t20_ae_integration_limits(attr, &min_integration, &max_integration);
+	return max_integration;
+}
+
 /*
  * Compact AE bridge used while the recovered OEM AE state graph is being
  * retired.  Keep sensor limits and gain-code conversion in the SDK adapter:
@@ -64,15 +98,7 @@ int tx_isp_t20_simple_ae_apply(int32_t *total_exposure_log2,
 	if (!attr || !attr->sensor_ctrl.alloc_again)
 		return -ENODEV;
 
-	min_integration = max_t(uint32_t, attr->min_integration_time,
-				attr->min_integration_time_native);
-	max_integration = attr->integration_time_limit;
-	if (!max_integration || (attr->max_integration_time_native &&
-	    attr->max_integration_time_native < max_integration))
-		max_integration = attr->max_integration_time_native;
-	if (!max_integration || (attr->max_integration_time &&
-	    attr->max_integration_time < max_integration))
-		max_integration = attr->max_integration_time;
+	t20_ae_integration_limits(attr, &min_integration, &max_integration);
 	if (!min_integration || max_integration < min_integration)
 		return -ERANGE;
 

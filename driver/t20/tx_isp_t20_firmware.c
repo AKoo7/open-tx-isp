@@ -698,6 +698,13 @@ static bool t20_simple_ae = true;
 module_param(t20_simple_ae, bool, 0644);
 MODULE_PARM_DESC(t20_simple_ae,
 	"use bounded histogram AE instead of the recovered OEM AE state graph");
+
+/* isp-m0 reports the limits of whichever AE owns the sensor. */
+bool tx_isp_t20_compact_ae_enabled(void)
+{
+	return t20_simple_ae;
+}
+
 static bool t20_simple_nr = true;
 module_param(t20_simple_nr, bool, 0644);
 MODULE_PARM_DESC(t20_simple_nr,
@@ -9518,16 +9525,19 @@ int32_t system_manual_saturation(int32_t arg1, char arg2, char arg3, int32_t *ar
 int32_t system_manual_exposure_time(int32_t arg1, int32_t arg2, char arg3, int32_t *arg4)
 {
     uint32_t v = (uint32_t)(uint8_t)arg3;
+
+    /* OEM system_manual_exposure_time (0xa54): GET reads, SET (0) stores,
+     * anything else is rejected.  The recovered body had SET and the
+     * reject path swapped. */
+    *arg4 = 0;
     if (v == 1) {
-        *arg4 = 0;
-        *arg4 = (*(int32_t *)(stab + 16));
+        *arg4 = *(int32_t *)(stab + 16);
         return 0;
     }
-    if (v == 0) {
-        return 0;
-    }
-    (*(int32_t *)(stab + 16)) = arg2;
-    return 2;
+    if (v != 0)
+        return 2;
+    *(int32_t *)(stab + 16) = arg2;
+    return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000019ba0 origin=model_output original=system_exposure_dark_target */
@@ -11316,58 +11326,40 @@ int32_t ae_gain(void *arg1, int32_t arg2, char arg3, int32_t *arg4)
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001b658 origin=model_output original=ae_exposure */
 int32_t ae_exposure(void *arg1, int32_t arg2, char arg3, int32_t *arg4)
 {
-	int32_t result;
 	uint32_t mode = (uint32_t)(uint8_t)arg3;
-	int32_t lines;
-	int32_t hi_part;
-	int32_t lo_part;
-	int32_t div_result;
-	u64 dividend;
-	u32 rem;
+	uint16_t *integration_time = (uint16_t *)(stab + 24);
+	uint32_t lines;
+	u64 product;
 
+	/*
+	 * OEM libt20-firmware 3.12.0 apical_command_api_impl.c.o ae_exposure
+	 * (0x2548): the AE exposure in microseconds is
+	 * stab.global_integration_time (stab + 24, u16) * 1e6 / lines per
+	 * second.  The recovered body read and wrote "(u16)stab", the low half
+	 * of the table's ADDRESS, so GetEVAttr's expr_us was a constant and a
+	 * SET overwrote stab bytes 0..1.
+	 */
 	*arg4 = 0;
 
-	if (mode != 0) {
-		result = 2;
-		if (mode == 1) {
-			lines = cmos_get_lines_per_second((char *)arg1 + 0x100);
-			if (lines == 0) {
-				*arg4 = 0;
-			} else {
-				dividend = (u64)(u16)stab * 0xf4240ULL;
-				rem = do_div(dividend, (u32)lines);
-				(void)rem;
-				*arg4 = (int32_t)dividend;
-			}
-			return 0;
-		}
-		return result;
+	if (mode == 1) {
+		lines = (uint32_t)cmos_get_lines_per_second((int32_t *)((char *)arg1 + 0x100));
+		if (lines)
+			*arg4 = (int32_t)div64_u64((u64)*integration_time * 1000000ULL,
+						   lines);
+		return 0;
 	}
-
-	result = 3;
-	if ((u16)stab == 0)
-		return result;
-
-	if (*(u8 *)&stab == 0)
-		return result;
-
-	lines = cmos_get_lines_per_second((char *)arg1 + 0x100);
-	dividend = (u64)(u32)lines * (u32)arg2;
-	lo_part = (int32_t)(dividend & 0xFFFFFFFF);
-	hi_part = (int32_t)(dividend >> 32);
-	hi_part += (int32_t)(((int32_t)lines >> 31) * arg2);
-
-	dividend = ((u64)(u32)hi_part << 32) | (u32)lo_part;
-	rem = do_div(dividend, 0xf4240);
-	div_result = (int32_t)dividend;
-
-	if ((u32)hi_part >= 0xf4240)
+	if (mode != 0)
 		return 2;
 
-	if ((u32)hi_part == 0xf423f && (u32)lo_part >= 0xfff0bdc1)
+	/* OEM: only with manual integration time (stab[3]) and a non-zero
+	 * current value; the product must leave a 32-bit quotient. */
+	if (*integration_time == 0 || stab[3] == 0)
+		return 3;
+	lines = (uint32_t)cmos_get_lines_per_second((int32_t *)((char *)arg1 + 0x100));
+	product = div64_u64((u64)lines * (u32)arg2, 1000000ULL);
+	if (product > 0xffffffffULL)
 		return 2;
-
-	*(u16 *)&stab = (u16)div_result;
+	*integration_time = (uint16_t)product;
 	return 0;
 }
 

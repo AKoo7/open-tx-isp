@@ -2100,7 +2100,13 @@ static int32_t regtrace_t23_csc_current[15] = {
 static uint16_t *tiziano_gamma_lut_now;
 static uint16_t tiziano_gamma_lut[129] __attribute__((aligned(4)));
 static uint16_t tiziano_gamma_lut_wdr[129] __attribute__((aligned(4)));
-static unsigned char dumpQueue[8];
+/*
+ * Wait queue of the OEM tuning poll node.  The day/night, custom-mode and
+ * bin switches wake it.  The OEM object is a wait_queue_head_t that
+ * tisp_code_create_tuning_node() initialises; this driver never runs that
+ * function on the live path, so the head is initialised statically here.
+ */
+static DECLARE_WAIT_QUEUE_HEAD(dumpQueue);
 static uintptr_t tispPollValue;
 static unsigned char tisp_ae_ctrls[176];
 static unsigned char data_6d610[16384];
@@ -9243,6 +9249,37 @@ uint32_t tisp_set_fps(uint32_t unused, uint32_t fps);
 static uint32_t regtrace_t23_sensor_fps_request;
 static int regtrace_t23_sensor_fps_stream_on(const char *reason);
 static uint32_t regtrace_t23_sensor_fps_report(void);
+
+/*
+ * Live AE read-back in the units of the OEM tisp_g_ev_attr() block, which
+ * feeds GetExpr (0x8000025), GetEVAttr (0x8000026), GetTotalGain (0x8000027)
+ * and the isp-m0 "ISP INFO" dump.  Gains marked log2 are in IMP units, 32
+ * per doubling (tisp_log2_fixed_to_fixed(gain_q10, 10, 5)).
+ */
+struct regtrace_t23_ev_info {
+    bool sensor_ok;         /* a sensor is bound and initialized */
+    bool valid;             /* an exposure has been programmed */
+    uint32_t manual;        /* AE not running: forced or disabled */
+    uint32_t it;            /* integration time, lines */
+    uint32_t it_min;        /* AE integration-time window, lines */
+    uint32_t it_max;
+    uint32_t line_us;       /* one line, us (truncated, as stock) */
+    uint32_t expr_us;       /* integration time, us */
+    uint32_t vts;
+    uint32_t fps;           /* num << 16 | den */
+    uint32_t again;         /* sensor analog gain, log2 */
+    uint32_t max_again;
+    uint32_t sensor_dgain;  /* sensor digital gain, log2 */
+    uint32_t max_sensor_dgain;
+    uint32_t isp_dgain;     /* ISP digital gain, log2 */
+    uint32_t max_isp_dgain;
+    uint32_t tgain_log2;    /* integer log2 of the total gain */
+    uint32_t total_gain;    /* [24.8] linear, 256 = 1x */
+    uint32_t ev;            /* integration lines x total gain */
+    uint32_t ev_log2;       /* log2(ev), Q16 */
+};
+
+static void regtrace_t23_ev_info_get(struct regtrace_t23_ev_info *info);
 static void regtrace_t23_install_sensor_notify(uintptr_t sd);
 static int regtrace_t23_ensure_sensor_client(struct i2c_driver *drv,
                                              unsigned short addr,
@@ -9642,7 +9679,6 @@ static int regtrace_t23_sensor_registered;
 #define REGTRACE_TISP_CTRL_SINTER TX_ISP_TUNING_CMD_SINTER
 #define REGTRACE_TISP_CTRL_RUNNING_MODE TX_ISP_TUNING_CMD_T31_RUNNING_MODE
 #define REGTRACE_TISP_TOTAL_GAIN_1X (1U << 8)
-#define REGTRACE_TISP_AE_LUMA_DAY 80U
 #define REGTRACE_TISP_WB_GAIN_NEUTRAL 256U
 #define REGTRACE_T23_VIDIOC_STREAMON TX_ISP_FRAME_IOCTL_LEGACY_STREAM_ON
 #define REGTRACE_T23_VIDIOC_STREAMOFF TX_ISP_FRAME_IOCTL_LEGACY_STREAM_OFF
@@ -11098,9 +11134,12 @@ static int regtrace_t23_call_sensor_ioctl(uint32_t event, uint32_t *value)
     return ret;
 }
 
+static void regtrace_t23_expo_note(uint32_t packed);
+
 static int regtrace_t23_call_sensor_exposure(uint32_t packed,
                                              const char *reason)
 {
+    const uint32_t requested = packed;
     uint32_t integration = packed & 0xffffU;
     uint32_t again = packed >> 16;
     int ret;
@@ -11116,6 +11155,8 @@ static int regtrace_t23_call_sensor_exposure(uint32_t packed,
             ret = regtrace_t23_call_sensor_ioctl(
                 REGTRACE_TX_ISP_EVENT_SENSOR_AGAIN, &again);
     }
+    if (!ret)
+        regtrace_t23_expo_note(requested);
     printk(KERN_WARNING
            "tx_isp_t23_recovered: sensor exposure packed=0x%08x again=0x%x int=%u ret=%d reason=%s\n",
            packed, packed >> 16, packed & 0xffffU, ret,
@@ -12526,6 +12567,80 @@ static int regtrace_t23_source_lsc_initialize_tables(void)
     return 0;
 }
 
+/*
+ * Temper (3DNR) strength, IMAGE_TUNING_CID_TEMPER_STRENGTH (0..255, 128
+ * neutral), the OEM tisp_s_mdns_ratio: five MDNS Y threshold lists of the
+ * active bank are scaled into the working arrays the *_now pointers name.
+ * Up to 128 the value scales linearly, above it moves towards 200.
+ */
+int32_t tisp_mdns_all_reg_refresh(int32_t arg1);
+int32_t tisp_mdns_reg_trigger(void);
+
+static uint32_t regtrace_t23_mdns_ratio = 0x80U;
+
+static int regtrace_t23_mdns_ratio_scale(void)
+{
+    static const struct {
+        uint32_t offset;
+        unsigned char *now;
+    } lists[] = {
+        { 0x070U, mdns_y_sad_ave_thres_array_now },
+        { 0x148U, mdns_y_sta_ave_thres_array_now },
+        { 0x0dcU, mdns_y_sad_ass_thres_array_now },
+        { 0x190U, mdns_y_sta_ass_thres_array_now },
+        { 0x354U, mdns_y_ref_wei_b_min_array_now },
+    };
+    uint32_t s = regtrace_t23_mdns_ratio;
+    uint32_t src[9];
+    unsigned int l;
+    unsigned int i;
+    int ret;
+
+    for (l = 0; l < ARRAY_SIZE(lists); ++l) {
+        uint32_t *dst = (uint32_t *)(uintptr_t)
+            regtrace_t23_get_le32(lists[l].now);
+
+        if (!regtrace_t23_valid_ptr((uintptr_t)dst))
+            return -ENODEV;
+        ret = regtrace_t23_read_tuning_data(
+            REGTRACE_T23_MDNS_TUNING_OFFSET + lists[l].offset,
+            src, sizeof(src));
+        if (ret)
+            return ret;
+        for (i = 0; i < 9U; ++i) {
+            uint32_t v = src[i];
+
+            if (s <= 0x80U)
+                v = (v * s) >> 7;
+            else
+                v += ((v < 200U ? 200U - v : 0U) * (s - 0x80U)) >> 7;
+            dst[i] = v;
+        }
+    }
+    return 0;
+}
+
+static int regtrace_t23_s_temper_strength(uint32_t ratio)
+{
+    uint32_t gain;
+    int ret;
+
+    if (ratio > 0xffU)
+        return -EINVAL;
+    regtrace_t23_mdns_ratio = ratio;
+    if (!regtrace_t23_source_mdns_initialized)
+        return 0;   /* the MDNS tuning load applies it at init */
+    ret = regtrace_t23_mdns_ratio_scale();
+    if (ret)
+        return ret;
+    gain = regtrace_t23_source_mdns_gain_old;
+    if (gain == 0xffffffffU)
+        gain = 0x10000U;
+    tisp_mdns_all_reg_refresh(gain);
+    tisp_mdns_reg_trigger();
+    return 0;
+}
+
 static int regtrace_t23_source_mdns_load_tuning(void)
 {
     unsigned char *params;
@@ -12551,6 +12666,8 @@ static int regtrace_t23_source_mdns_load_tuning(void)
 #undef REGTRACE_T23_MDNS_COPY_FIELD
 
     private_vfree(params);
+    if (regtrace_t23_mdns_ratio != 0x80U)
+        (void)regtrace_t23_mdns_ratio_scale();
     printk(KERN_WARNING
            "tx_isp_t23_recovered: MDNS tuning loaded ctrl=%x/%x/%x uv=%x/%x/%x memopt=%u\n",
            (uint32_t)mdns_y_filter_en_array,
@@ -13384,6 +13501,10 @@ static int regtrace_t23_source_ccm_commit(uint32_t ct, uint32_t ev_q10)
     return 0;
 }
 
+static void regtrace_t23_ccm_user_apply(void);
+static void regtrace_t23_adr_strength_apply(void);
+static void regtrace_t23_defog_strength_apply(void);
+
 static int regtrace_t23_source_ccm_write_tuning_startup(void)
 {
     uint32_t dp_step;
@@ -13393,6 +13514,7 @@ static int regtrace_t23_source_ccm_write_tuning_startup(void)
     ret = regtrace_t23_source_ccm_load_tuning();
     if (ret)
         return ret;
+    regtrace_t23_ccm_user_apply();
     ret = regtrace_t23_source_ccm_commit(
         regtrace_t23_source_ccm_runtime_ct,
         regtrace_t23_source_ae_hlil_ev);
@@ -13420,6 +13542,46 @@ static int regtrace_t23_source_ccm_write_tuning_startup(void)
     return 0;
 }
 
+/*
+ * IMAGE_TUNING_CID_CCM_ATTR (OEM tisp_s_ccm_attr/tisp_ccm_set_attr): the
+ * 40-byte kernel attribute of the T23 1.3.0 libimp, manual_en, sat_en and
+ * nine 14-bit two's-complement Q10 coefficients.  With manual_en == 1 the
+ * matrix replaces every colour-temperature profile, and sat_en == 0 also
+ * flattens the EV saturation list to unity (256); with manual_en == 0 the
+ * profiles come from the active bank again.  The manual matrix survives a
+ * bank switch (applied after every CCM profile load).
+ */
+struct regtrace_t23_ccm_user_attr {
+    int8_t manual_en;
+    int8_t sat_en;
+    uint8_t reserved[2];
+    uint32_t coef[9];
+};
+
+static struct regtrace_t23_ccm_user_attr regtrace_t23_ccm_user = {
+    .manual_en = 0,
+    .sat_en = 1,
+};
+
+static void regtrace_t23_ccm_user_apply(void)
+{
+    unsigned int i;
+
+    if (regtrace_t23_ccm_user.manual_en != 1 ||
+        !regtrace_t23_ccm_profile_loaded)
+        return;
+    for (i = 0; i < 9U; ++i) {
+        uint32_t value = regtrace_t23_ccm_user.coef[i] & 0x3fffU;
+
+        regtrace_t23_ccm_profile_a[i] = value;
+        regtrace_t23_ccm_profile_t[i] = value;
+        regtrace_t23_ccm_profile_d[i] = value;
+        regtrace_t23_ccm_profile_d2[i] = value;
+        if (!regtrace_t23_ccm_user.sat_en)
+            regtrace_t23_ccm_profile_sat[i] = 0x100U;
+    }
+}
+
 static int regtrace_t23_source_ccm_select_bank(const void *bank)
 {
     const unsigned char *previous = regtrace_t23_source_active_bank;
@@ -13433,6 +13595,8 @@ static int regtrace_t23_source_ccm_select_bank(const void *bank)
         goto restore;
     regtrace_t23_ccm_profile_loaded = false;
     ret = regtrace_t23_source_ccm_load_tuning();
+    if (!ret)
+        regtrace_t23_ccm_user_apply();
     if (!ret && regtrace_t23_source_ccm_tuning_init)
         ret = regtrace_t23_source_ccm_commit(
             regtrace_t23_source_ccm_runtime_ct,
@@ -13449,6 +13613,72 @@ restore:
     return ret;
 }
 
+/*
+ * Register 0xc block bypass bits this driver decides itself instead of
+ * taking them from the IQ bank flags.  Startup applies them after reading
+ * the bank mask; a day/night, custom-mode or bin switch rebuilds 0xc from
+ * the new bank (as the OEM does) and must apply them again, or blocks the
+ * driver parks (ADR, defog, an unloaded MDNS/SDNS) follow the raw bank
+ * flags and run with parameters that were never loaded.
+ *
+ * forced_on:  blocks that stay bypassed whatever the bank says.
+ * forced_off: blocks this driver initialises and runs whatever the bank
+ *             says (the startup overrides of the recovered tisp_init).
+ */
+static uint32_t regtrace_t23_source_bypass_forced_on(void)
+{
+    uint32_t mask = 0;
+
+    if (regtrace_t23_source_park_uninitialized_mdns ||
+        !regtrace_t23_source_mdns_tuning_init)
+        mask |= BIT(16);
+    if (!regtrace_t23_source_sdns_tuning_init ||
+        !regtrace_t23_source_sdns_internal_enable)
+        mask |= BIT(15);
+    if (!regtrace_t23_source_adr_tuning_init ||
+        !regtrace_t23_source_adr_internal_enable)
+        mask |= BIT(7);
+    if (!regtrace_t23_source_defog_tuning_init ||
+        !regtrace_t23_source_defog_internal_enable)
+        mask |= BIT(11);
+    return mask;
+}
+
+static uint32_t regtrace_t23_source_bypass_forced_off(void)
+{
+    uint32_t mask = 0;
+
+    if (!regtrace_t23_source_park_uninitialized_mdns &&
+        regtrace_t23_source_mdns_tuning_init)
+        mask |= BIT(16);
+    if (regtrace_t23_source_sdns_tuning_init &&
+        regtrace_t23_source_sdns_internal_enable)
+        mask |= BIT(15);
+    if (regtrace_t23_source_adr_tuning_init &&
+        regtrace_t23_source_adr_internal_enable)
+        mask |= BIT(7);
+    if (regtrace_t23_source_awb_stats_init)
+        mask |= BIT(25);
+    if (regtrace_t23_source_dpc_tuning_init)
+        mask |= BIT(2);
+    if (regtrace_t23_source_sharpen_tuning_init)
+        mask |= BIT(14);
+    if (regtrace_t23_source_ydns_tuning_init)
+        mask |= BIT(17);
+    if (regtrace_t23_source_defog_tuning_init &&
+        regtrace_t23_source_defog_internal_enable)
+        mask |= BIT(11);
+    if (regtrace_t23_source_ccm_tuning_init)
+        mask |= BIT(9);
+    return mask;
+}
+
+static uint32_t regtrace_t23_source_bypass_overrides(uint32_t bypass)
+{
+    return (bypass & ~regtrace_t23_source_bypass_forced_off()) |
+           regtrace_t23_source_bypass_forced_on();
+}
+
 static void regtrace_t23_source_mode_flags_apply(const uint32_t *flags)
 {
     uint32_t bypass = 0;
@@ -13457,7 +13687,9 @@ static void regtrace_t23_source_mode_flags_apply(const uint32_t *flags)
     for (i = 0; i < 32U; ++i)
         if (flags[i])
             bypass |= 1U << i;
-    system_reg_write(12U, (bypass & 0xb577fffdU) | 0x34000009U);
+    /* OEM tisp_day_or_night_s_ctrl mask, then this driver's overrides. */
+    bypass = (bypass & 0xb577fffdU) | 0x34000009U;
+    system_reg_write(12U, regtrace_t23_source_bypass_overrides(bypass));
 }
 
 static int regtrace_t23_source_dmsc_write_tuning_startup(void)
@@ -14053,36 +14285,7 @@ static int regtrace_t23_source_core_set_stream(int enable,
             return ret;
         }
     }
-    if (regtrace_t23_source_park_uninitialized_mdns ||
-        !regtrace_t23_source_mdns_tuning_init)
-        bypass |= 1U << 16;
-    else
-        bypass &= ~BIT(16);
-    if (!regtrace_t23_source_sdns_tuning_init ||
-        !regtrace_t23_source_sdns_internal_enable)
-        bypass |= BIT(15);
-    else
-        bypass &= ~BIT(15);
-    if (!regtrace_t23_source_adr_tuning_init ||
-        !regtrace_t23_source_adr_internal_enable)
-        bypass |= BIT(7);
-    else
-        bypass &= ~BIT(7);
-    if (regtrace_t23_source_awb_stats_init)
-        bypass &= ~BIT(25);
-    if (regtrace_t23_source_dpc_tuning_init)
-        bypass &= ~BIT(2);
-    if (regtrace_t23_source_sharpen_tuning_init)
-        bypass &= ~BIT(14);
-    if (regtrace_t23_source_ydns_tuning_init)
-        bypass &= ~BIT(17);
-    if (regtrace_t23_source_defog_tuning_init &&
-        regtrace_t23_source_defog_internal_enable)
-        bypass &= ~BIT(11);
-    else
-        bypass |= BIT(11);
-    if (regtrace_t23_source_ccm_tuning_init)
-        bypass &= ~BIT(9);
+    bypass = regtrace_t23_source_bypass_overrides(bypass);
     /* Recovered T23 tisp_init order and parameter-derived top bypass. */
     system_reg_write(0x800U, 0);
     system_reg_write(0x4U,
@@ -14130,6 +14333,8 @@ static int regtrace_t23_source_core_set_stream(int enable,
             return ret;
         }
     }
+    if (regtrace_t23_source_defog_tuning_init)
+        regtrace_t23_defog_strength_apply();
     if (regtrace_t23_source_ccm_tuning_init) {
         ret = regtrace_t23_source_ccm_write_tuning_startup();
         if (ret)
@@ -14150,6 +14355,8 @@ static int regtrace_t23_source_core_set_stream(int enable,
             return ret;
         }
     }
+    if (regtrace_t23_source_adr_tuning_init)
+        regtrace_t23_adr_strength_apply();
     ret = regtrace_t23_source_apply_total_gain();
     if (ret)
         return ret;
@@ -14461,6 +14668,8 @@ static bool regtrace_isp_m0_is_image_control(u32 id)
     }
 }
 
+static long regtrace_t23_tuning_cid(bool get, uint32_t id, uint32_t *value);
+
 static long regtrace_isp_m0_control(unsigned int cmd, unsigned long arg)
 {
     struct tx_isp_tuning_control ctrl;
@@ -14483,8 +14692,17 @@ static long regtrace_isp_m0_control(unsigned int cmd, unsigned long arg)
             return -EFAULT;
         return ret;
     }
-    if (!regtrace_isp_m0_is_image_control(ctrl.id))
-        return 0;
+    if (!regtrace_isp_m0_is_image_control(ctrl.id)) {
+        /* Unknown controls fail (OEM -1) instead of reporting success. */
+        ret = regtrace_t23_tuning_cid(cmd != REGTRACE_ISP_M0_SET_CONTROL,
+                                      ctrl.id, &ctrl.value_or_ptr);
+        if (ret == -ENOIOCTLCMD)
+            return -EINVAL;
+        if (!ret && cmd != REGTRACE_ISP_M0_SET_CONTROL &&
+            copy_to_user((void __user *)arg, &ctrl, sizeof(ctrl)))
+            return -EFAULT;
+        return ret;
+    }
 
     if (cmd == REGTRACE_ISP_M0_SET_CONTROL) {
         ret = apical_isp_core_ops_s_ctrl(0, (uintptr_t)&ctrl, 0);
@@ -14602,8 +14820,6 @@ static long regtrace_isp_m0_ext_control(unsigned long arg)
           TX_ISP_TUNING_PAYLOAD_INLINE },
         { REGTRACE_TISP_CTRL_TOTAL_GAIN, 4, TX_ISP_TUNING_DIR_GET,
           TX_ISP_TUNING_PAYLOAD_INLINE },
-        { REGTRACE_TISP_CTRL_WB_STATIS, 4, TX_ISP_TUNING_DIR_GET,
-          TX_ISP_TUNING_PAYLOAD_INLINE },
         { REGTRACE_TISP_CTRL_GET_EXPR, 12, TX_ISP_TUNING_DIR_GET,
           TX_ISP_TUNING_PAYLOAD_USER_PTR },
         { REGTRACE_TISP_CTRL_GET_EV_ATTR, 24, TX_ISP_TUNING_DIR_GET,
@@ -14638,11 +14854,25 @@ static long regtrace_isp_m0_ext_control(unsigned long arg)
         goto copy_out;
     }
 
+    if (ctrl.count > 1)
+        return -EINVAL;
+    /* One sensor: other sensor numbers end as unrouted (-EINVAL). */
+    ret = ctrl.sensor != 0 ? -ENOIOCTLCMD :
+        regtrace_t23_tuning_cid(ctrl.count == 1, ctrl.id,
+                                &ctrl.value_or_ptr);
+    if (ret != -ENOIOCTLCMD) {
+        if (ret)
+            return ret;
+        goto copy_out;
+    }
+    ret = 0;
+
     route = tx_isp_tuning_cmd_find(routes, ARRAY_SIZE(routes), ctrl.id,
                                    ctrl.count == 0 ? TX_ISP_TUNING_DIR_SET :
                                                      TX_ISP_TUNING_DIR_GET);
+    /* Unrouted controls fail (OEM -1) instead of reporting success. */
     if (!route)
-        goto copy_out;
+        return -EINVAL;
 
     if (route->id == TX_ISP_TUNING_CMD_T31_SENSOR_FPS) {
         if (ctrl.count == 0) {
@@ -14658,30 +14888,43 @@ static long regtrace_isp_m0_ext_control(unsigned long arg)
     }
 
     switch (ctrl.id) {
-    case REGTRACE_TISP_CTRL_TOTAL_GAIN:
-        ctrl.value_or_ptr = REGTRACE_TISP_TOTAL_GAIN_1X;
+    case REGTRACE_TISP_CTRL_TOTAL_GAIN: {
+        struct regtrace_t23_ev_info info;
+
+        regtrace_t23_ev_info_get(&info);
+        ctrl.value_or_ptr = info.total_gain;
         break;
-    case REGTRACE_TISP_CTRL_WB_STATIS:
-        ctrl.value_or_ptr = (REGTRACE_TISP_WB_GAIN_NEUTRAL << 16) |
-                            REGTRACE_TISP_WB_GAIN_NEUTRAL;
-        break;
+    }
     case REGTRACE_TISP_CTRL_GET_EXPR:
+        /* OEM apical_isp_expr_g_ctrl: IMPISPExpr.g_attr, 12 bytes. */
         if (ctrl.value_or_ptr) {
+            struct regtrace_t23_ev_info info;
             struct tx_isp_tuning_expr expr;
 
-            tx_isp_tuning_expr_pack(&expr, 0, 1000, 1, 1125, 30);
+            regtrace_t23_ev_info_get(&info);
+            tx_isp_tuning_expr_pack(&expr, info.manual, info.it,
+                                    info.it_min, info.it_max,
+                                    info.line_us);
             if (copy_to_user((void __user *)(uintptr_t)ctrl.value_or_ptr,
                              &expr, sizeof(expr)))
                 return -EFAULT;
         }
         break;
     case REGTRACE_TISP_CTRL_GET_EV_ATTR:
+        /*
+         * OEM apical_isp_ev_g_attr: IMPISPEVAttr, 24 bytes, taken from
+         * tisp_g_ev_attr words 2, 4, 6, 7, 8 and 9: EV, exposure in us,
+         * EV log2 (Q16), sensor analog gain and ISP digital gain (log2,
+         * 32 per doubling) and the integer log2 of the total gain.
+         */
         if (ctrl.value_or_ptr) {
+            struct regtrace_t23_ev_info info;
             struct tx_isp_tuning_ev_attr ev;
 
-            tx_isp_tuning_ev_pack(&ev, REGTRACE_TISP_AE_LUMA_DAY, 30000,
-                                  0, REGTRACE_TISP_TOTAL_GAIN_1X,
-                                  REGTRACE_TISP_TOTAL_GAIN_1X, 0);
+            regtrace_t23_ev_info_get(&info);
+            tx_isp_tuning_ev_pack(&ev, info.ev, info.expr_us,
+                                  info.ev_log2, info.again,
+                                  info.isp_dgain, info.tgain_log2);
             if (copy_to_user((void __user *)(uintptr_t)ctrl.value_or_ptr,
                              &ev, sizeof(ev)))
                 return -EFAULT;
@@ -46384,7 +46627,7 @@ tisp_code_create_tuning_node0x74:
 
     /* fragment 12: CallSetup */
     *(uint8_t *)((char *)((char *)&tispPollValue)) = 0;
-    __init_waitqueue_head((void *)(uintptr_t)&dumpQueue, (const char *)(uintptr_t)&LC12, (void *)(uintptr_t)0); /* jalr target resolved by relocation */
+    init_waitqueue_head(&dumpQueue);
 
     /* fragment 13: Epilogue */
     /* function epilogue: restore registers and return */
@@ -57684,6 +57927,80 @@ tisp_s_dpc_str_internal0x11c:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000029574 origin=fragment_seed original=tiziano_dpc_params_refresh */
+/*
+ * DPC strength (IMAGE_TUNING_CID_DPC_STRENGTH, 0..255, 128 neutral), the
+ * OEM tisp_s_dpc_str_internal: the m1/m3 detection thresholds of the
+ * active bank are scaled into the working arrays.  Up to 128 the "f"
+ * thresholds scale linearly (at least 5) and the "d" thresholds move
+ * towards 1000; above 128 the "f" thresholds move towards 1200 and the "d"
+ * thresholds towards 0.
+ */
+static uint32_t regtrace_t23_dpc_ratio = 0x80U;
+
+static int regtrace_t23_dpc_ratio_scale(void)
+{
+    static const struct {
+        uint32_t offset;
+        unsigned char *array;
+        bool detect;
+    } lists[] = {
+        { 0x094U, dpc_d_m1_fthres_array, false },
+        { 0x0b8U, dpc_d_m1_dthres_array, true },
+        { 0x288U, dpc_d_m3_fthres_array, false },
+        { 0x2acU, dpc_d_m3_dthres_array, true },
+    };
+    uint32_t s = regtrace_t23_dpc_ratio;
+    uint32_t src[9];
+    uint32_t out[9];
+    unsigned int l;
+    unsigned int i;
+    int ret;
+
+    for (l = 0; l < ARRAY_SIZE(lists); ++l) {
+        ret = regtrace_t23_read_tuning_data(
+            REGTRACE_T23_DPC_TUNING_OFFSET + lists[l].offset,
+            src, sizeof(src));
+        if (ret)
+            return ret;
+        for (i = 0; i < 9U; ++i) {
+            uint32_t v = src[i];
+
+            if (!lists[l].detect) {
+                if (s <= 0x80U) {
+                    v = (v * s) >> 7;
+                    if (v < 5U)
+                        v = 5U;
+                } else {
+                    v += ((1200U - v) * (s - 0x80U)) >> 7;
+                }
+            } else if (s <= 0x80U) {
+                v = ((v - 1000U) * s + 128000U) >> 7;
+            } else {
+                v = ((0x100U - s) * v + 5U * (s - 0x80U)) >> 7;
+            }
+            out[i] = v;
+        }
+        memcpy(lists[l].array, out, sizeof(out));
+    }
+    return 0;
+}
+
+static int regtrace_t23_s_dpc_strength(uint32_t ratio)
+{
+    int ret;
+
+    if (ratio > 0xffU)
+        return -EINVAL;
+    regtrace_t23_dpc_ratio = ratio;
+    if (!regtrace_t23_source_dpc_tuning_init ||
+        regtrace_t23_dpc_gain_old == 0xffffffffU)
+        return 0;   /* tiziano_dpc_params_refresh applies it at init */
+    ret = regtrace_t23_dpc_ratio_scale();
+    if (ret)
+        return ret;
+    return tisp_dpc_all_reg_refresh(regtrace_t23_dpc_gain_old);
+}
+
 int32_t tiziano_dpc_params_refresh(void)
 {
     unsigned char file_params[REGTRACE_T23_DPC_TUNING_SIZE];
@@ -57799,6 +58116,8 @@ int32_t tiziano_dpc_params_refresh(void)
     /* fragment 31: CallSetup */
     v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&ctr_con_par_array, params + 0x42c, 28); /* jalr target resolved by relocation */
 
+    if (regtrace_t23_dpc_ratio != 0x80U)
+        return regtrace_t23_dpc_ratio_scale();
     return 0;
 }
 
@@ -91494,6 +91813,179 @@ uint32_t tisp_get_tuning(void)
     return (uint32_t)v0;
 }
 
+/*
+ * Sensor flip as last requested through the sensor-flip controls (bit 0
+ * mirror, bit 1 flip), or -1 while the sensor still runs as it was loaded,
+ * in which case source_lsc_initial_flip/mirror describe it.  The LSC mesh
+ * has to follow the sensor orientation.
+ */
+static int regtrace_t23_sensor_flip_mode = -1;
+
+static int regtrace_t23_lsc_follow_sensor_flip(void)
+{
+    uint32_t flip;
+    uint32_t mirror;
+
+    if (regtrace_t23_sensor_flip_mode < 0) {
+        flip = regtrace_t23_source_lsc_initial_flip ? 1U : 0U;
+        mirror = regtrace_t23_source_lsc_initial_mirror ? 1U : 0U;
+    } else {
+        flip = ((uint32_t)regtrace_t23_sensor_flip_mode >> 1) & 1U;
+        mirror = (uint32_t)regtrace_t23_sensor_flip_mode & 1U;
+    }
+    if (!regtrace_t23_source_lsc_tuning_init ||
+        !regtrace_t23_source_lsc_tables_initialized)
+        return 0;
+    if ((uint32_t)last_status_flip_en == flip &&
+        (uint32_t)last_status_mirror_en == mirror)
+        return 0;
+    return tisp_lsc_mirror_flip(0, regtrace_t23_source_sensor_width,
+                                regtrace_t23_source_sensor_height,
+                                flip, mirror);
+}
+
+/*
+ * Keep the AE and AWB work off the shared tuning arrays while a bank
+ * switch reloads them.  New captures are refused while paused; queued work
+ * is dropped and running work is waited for.
+ */
+static void regtrace_t23_source_algo_pause(void)
+{
+    unsigned long flags;
+
+    spin_lock_irqsave(&regtrace_t23_ae_hlil_lock, flags);
+    regtrace_t23_ae_hlil_paused = true;
+    spin_unlock_irqrestore(&regtrace_t23_ae_hlil_lock, flags);
+    cancel_work_sync(&regtrace_t23_source_ae_hlil_work_item);
+
+    spin_lock_irqsave(&regtrace_t23_awb_hlil_lock, flags);
+    regtrace_t23_awb_hlil_paused = true;
+    spin_unlock_irqrestore(&regtrace_t23_awb_hlil_lock, flags);
+    cancel_work_sync(&regtrace_t23_source_awb_hlil_work_item);
+}
+
+static void regtrace_t23_source_algo_resume(void)
+{
+    unsigned long flags;
+
+    spin_lock_irqsave(&regtrace_t23_awb_hlil_lock, flags);
+    regtrace_t23_awb_hlil_pending = false;
+    regtrace_t23_awb_hlil_paused = false;
+    spin_unlock_irqrestore(&regtrace_t23_awb_hlil_lock, flags);
+
+    spin_lock_irqsave(&regtrace_t23_ae_hlil_lock, flags);
+    regtrace_t23_ae_hlil_pending = false;
+    regtrace_t23_ae_hlil_paused = false;
+    spin_unlock_irqrestore(&regtrace_t23_ae_hlil_lock, flags);
+}
+
+/*
+ * Per-block parameter reload after the active bank changed, the source-path
+ * equivalent of the OEM *_dn_params_refresh plan in tisp_day_or_night_s_ctrl
+ * (defog, AE, AWB, DMSC, sharpen, MDNS, SDNS, GIB, LSC, CCM, CLM, gamma,
+ * ADR, DPC, AF, BCSH, YDNS).  Every block this driver initialised from the
+ * IQ bank is read again from the new active bank and rewritten; user
+ * settings (BCSH values, sinter/temper/DPC/DRC/defog strengths, the sensor
+ * flip of the LSC mesh) are applied on top again.  CCM and the AWB colour
+ * bias are reloaded by regtrace_t23_source_ccm_select_bank().  AE and AWB
+ * keep their HLIL state; sharpen and AF are not initialised by this
+ * driver.  The gain-driven blocks are then rewritten at the gain in use.
+ *
+ * Only while the core runs: a stream start loads every block from the
+ * active bank anyway.
+ */
+static void regtrace_t23_source_dn_params_refresh(const char *reason)
+{
+    uint32_t gain = regtrace_t23_dmsc_gain_q16 ?
+        regtrace_t23_dmsc_gain_q16 : 0x10000U;
+    uint32_t failed = 0;
+    int ret;
+
+    if (!regtrace_t23_source_core_start || !regtrace_t23_core_started)
+        return;
+
+    if (regtrace_t23_source_gib_tuning_init &&
+        regtrace_t23_source_gib_write_tuning_startup())
+        failed |= BIT(0);
+    if (regtrace_t23_source_gamma_tuning_init &&
+        tiziano_gamma_dn_params_refresh())
+        failed |= BIT(1);
+    if (regtrace_t23_source_lsc_tuning_init) {
+        if (tiziano_lsc_dn_params_refresh()) {
+            failed |= BIT(2);
+        } else {
+            (void)regtrace_t23_lsc_follow_sensor_flip();
+            regtrace_t23_source_lsc_update_pending = true;
+            (void)tisp_lsc_write_lut_datas();
+        }
+    }
+    if (regtrace_t23_source_dpc_tuning_init &&
+        tiziano_dpc_params_refresh())
+        failed |= BIT(3);
+    if (regtrace_t23_source_ydns_tuning_init &&
+        tiziano_ydns_params_refresh())
+        failed |= BIT(4);
+    if (regtrace_t23_source_dmsc_tuning_init &&
+        tiziano_dmsc_params_refresh())
+        failed |= BIT(5);
+    if (regtrace_t23_source_bcsh_tuning_init) {
+        tiziano_bcsh_params_refresh();
+        if (!regtrace_t23_source_bcsh_tuning_status) {
+            tiziano_bcsh_Tccm_Comp2Orig();
+            BCSH_real = 1;
+            tiziano_bcsh_update();
+        } else {
+            failed |= BIT(6);
+        }
+    }
+    if (regtrace_t23_source_clm_tuning_init) {
+        if (!regtrace_t23_source_clm_load_tuning()) {
+            clm_ct_value_old = 0xffffU;
+            clm_ct_part_old = 0xffU;
+            if (tisp_clm_interp_by_ct(0, regtrace_t23_source_clm_runtime_ct,
+                                      1U) > 0)
+                tiziano_set_parameter_clm();
+        } else {
+            failed |= BIT(7);
+        }
+    }
+    if (regtrace_t23_source_mdns_initialized &&
+        regtrace_t23_source_mdns_load_tuning())
+        failed |= BIT(8);
+    if (regtrace_t23_source_sdns_initialized &&
+        regtrace_t23_source_sdns_load_tuning())
+        failed |= BIT(9);
+    if (regtrace_t23_source_adr_initialized) {
+        if (!regtrace_t23_source_adr_load_tuning()) {
+            tiziano_adr_params_init();
+            regtrace_t23_adr_strength_apply();
+        } else {
+            failed |= BIT(10);
+        }
+    }
+    if (regtrace_t23_source_defog_initialized) {
+        if (!regtrace_t23_source_defog_load_tuning())
+            regtrace_t23_defog_strength_apply();
+        else
+            failed |= BIT(11);
+    }
+
+    /* Rewrite the gain-interpolated blocks once at the gain in use. */
+    regtrace_t23_dpc_gain_old = 0xffffffffU;
+    ydns_gain_old = 0xffffffffU;
+    regtrace_t23_dmsc_gain_old = 0xffffffffU;
+    if (regtrace_t23_source_mdns_initialized)
+        regtrace_t23_source_mdns_gain_old = 0xffffffffU;
+    if (regtrace_t23_source_sdns_initialized)
+        regtrace_t23_source_sdns_gain_old = 0xffffffffU;
+    ret = regtrace_t23_source_apply_total_gain_value(gain, 0, true, true);
+
+    printk(KERN_WARNING
+           "tx_isp_t23_recovered: bank switch block refresh reason=%s gain=0x%x failed=0x%x ret=%d r0c=0x%08x\n",
+           reason ? reason : "?", gain, failed, ret,
+           system_reg_read(0x0cU));
+}
+
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000064c48 origin=fragment_seed original=tisp_day_or_night_s_ctrl */
 int64_t tisp_day_or_night_s_ctrl(uintptr_t a0, uint32_t a1)
 {
@@ -91512,24 +92004,30 @@ int64_t tisp_day_or_night_s_ctrl(uintptr_t a0, uint32_t a1)
     if (!selected)
         return -ENODEV;
 
+    regtrace_t23_source_algo_pause();
     ret = regtrace_t23_source_ccm_select_bank(selected);
-    if (ret)
+    if (ret) {
+        regtrace_t23_source_algo_resume();
         return ret;
+    }
 
     memcpy(active, selected, T23_TPARAMS_BANK_SIZE);
     *(uint32_t *)(void *)(tisp_par_info + a0 * 156U + 124U) = a1;
     *(uint32_t *)(void *)(day_night + a0 * sizeof(uint32_t)) = 0;
 
-    if (regtrace_t23_source_core_start)
+    if (regtrace_t23_source_core_start) {
         regtrace_t23_source_mode_flags_apply(active);
-    else
+        regtrace_t23_source_dn_params_refresh(a1 ? "night" : "day");
+    } else {
         tx_isp_t23_mode_profile_apply(active);
+    }
+    regtrace_t23_source_algo_resume();
 
     cust_mode = 0;
     *(uint8_t *)(void *)&tispPollValue = 1;
     *((uint8_t *)(void *)&tispPollValue + 2) =
         day_night[a0 * sizeof(uint32_t)];
-    __wake_up(&dumpQueue, 1, 1, 0);
+    wake_up_interruptible(&dumpQueue);
 
     return 0;
 }
@@ -91562,16 +92060,23 @@ int32_t tisp_cust_mode_s_ctrl(uint32_t arg1, uint32_t arg2)
     if (!selected)
         return 0;
 
+    regtrace_t23_source_algo_pause();
     ret = regtrace_t23_source_ccm_select_bank(selected);
-    if (ret)
+    if (ret) {
+        regtrace_t23_source_algo_resume();
         return ret;
+    }
     memcpy(active, selected, T23_TPARAMS_BANK_SIZE);
     cust_mode = arg2 == 1;
 
-    if (regtrace_t23_source_core_start)
+    if (regtrace_t23_source_core_start) {
         regtrace_t23_source_mode_flags_apply(active);
-    else
+        regtrace_t23_source_dn_params_refresh(arg2 == 1 ? "custom" :
+                                              "custom-off");
+    } else {
         tx_isp_t23_mode_profile_apply(active);
+    }
+    regtrace_t23_source_algo_resume();
     return 0;
 }
 
@@ -91603,22 +92108,28 @@ uint32_t tisp_switch_bin(uint32_t a0)
         selected = (const void *)tparams_day;
     else if (mode == 1)
         selected = (const void *)tparams_night;
+    regtrace_t23_source_algo_pause();
     if (selected) {
         result = regtrace_t23_source_ccm_select_bank(selected);
-        if (result)
+        if (result) {
+            regtrace_t23_source_algo_resume();
             return (uint32_t)result;
+        }
         memcpy(active, selected, T23_TPARAMS_BANK_SIZE);
         *(uint32_t *)(void *)(tisp_par_info + 124U) = mode;
     }
 
-    if (regtrace_t23_source_core_start)
+    if (regtrace_t23_source_core_start) {
         regtrace_t23_source_mode_flags_apply(active);
-    else
+        regtrace_t23_source_dn_params_refresh("switch-bin");
+    } else {
         tx_isp_t23_mode_profile_apply(active);
+    }
+    regtrace_t23_source_algo_resume();
 
     *(uint8_t *)(void *)&tispPollValue = 1;
     *((uint8_t *)(void *)&tispPollValue + 3) = 1;
-    __wake_up(&dumpQueue, 1, 1, 0);
+    wake_up_interruptible(&dumpQueue);
 
     return (uint32_t)result;
 }
@@ -91821,26 +92332,209 @@ static uint32_t regtrace_t23_sensor_fps_report(void)
     return fps ? fps : 0x00190001U;
 }
 
+/* tisp_log2_fixed_to_fixed(gain_q10, 10, 5): IMP log2 gain, 32 per 2x. */
+static uint32_t regtrace_t23_gain_q16_to_imp_log2(uint32_t gain_q16)
+{
+    uint32_t gain_q10 = gain_q16 >> 6;
+
+    if (gain_q10 <= 0x400U)
+        return 0;
+    return (uint32_t)tisp_log2_fixed_to_fixed(gain_q10, 10U, 5U);
+}
+
+/*
+ * Fill *info from the AE state this driver runs (see tx_isp_t23_ae_runtime.inc
+ * regtrace_t23_expo_note()).  Mirrors the OEM tisp_g_ev_attr() block:
+ *
+ *   word 0      integration time, lines        ctrls+0x0c
+ *   words 2/3   EV (64-bit, Q10 >> 10)         ctrls+0x28/0x2c
+ *   word 4      exposure us = it*1e6*den/(num*VTS)
+ *   word 6      log2(EV) Q16                   log2(ctrls+0x28, 10, 16)
+ *   word 7      sensor again, log2 /32         ctrls+0x04
+ *   word 8      ISP dgain, log2 /32            ctrls+0x10
+ *   word 9      total gain, integer log2       ctrls+0x32 (u16)
+ *   word 10     total gain [24.8] = again * ISP dgain (the 0x8000027 value)
+ *   words 11-14 max again, max ISP dgain, sensor dgain, max sensor dgain
+ *   0x78/0x7a   AE integration-time window min/max (u16)
+ *   0x88        one line, us (u16)
+ *
+ * This driver's AE steps the sensor integration time and analog gain only;
+ * sensor digital gain and ISP digital gain stay at unity, so they and their
+ * AE limits read 0.  Process context only (takes the FPS mutex); touches no
+ * hardware.
+ */
+static void regtrace_t23_ev_info_get(struct regtrace_t23_ev_info *info)
+{
+    struct regtrace_t23_expo_live live;
+    unsigned char *attr = regtrace_t23_sensor_owned_attr();
+    uint32_t num;
+    uint32_t den;
+    uint64_t ev_q10;
+    uint32_t max_again_q10;
+
+    memset(info, 0, sizeof(*info));
+    regtrace_t23_expo_get_live(&live);
+
+    info->sensor_ok = attr && regtrace_t23_sensor_initialized;
+    info->valid = live.valid;
+    info->manual = (regtrace_t23_source_ae_force_packed ||
+                    !regtrace_t23_source_ae_hlil) ? 1U : 0U;
+    info->fps = regtrace_t23_sensor_fps_report();
+    num = info->fps >> 16;
+    den = info->fps & 0xffffU;
+
+    info->it_min = regtrace_t23_source_sensor_min_it;
+    info->it_max = regtrace_t23_source_sensor_max_it;
+    if (attr) {
+        info->vts = regtrace_t23_get_le16(attr +
+                                          REGTRACE_T23_ATTR_TOTAL_HEIGHT);
+        if (!info->it_min)
+            info->it_min = regtrace_t23_get_le16(attr +
+                                                 REGTRACE_T23_ATTR_MIN_IT);
+        if (!info->it_max)
+            info->it_max = regtrace_t23_get_le16(attr +
+                                                 REGTRACE_T23_ATTR_MAX_IT);
+    }
+    if (!info->vts)
+        info->vts = regtrace_t23_source_sensor_height;
+    if (num && den && info->vts) {
+        uint64_t frame_lines = (uint64_t)num * info->vts;
+
+        info->line_us = (uint32_t)div64_u64((uint64_t)den * 1000000U,
+                                            frame_lines) & 0xffffU;
+        info->expr_us = (uint32_t)div64_u64(
+            (uint64_t)live.it * den * 1000000U, frame_lines);
+    }
+
+    info->it = live.valid ? live.it : 0U;
+    if (regtrace_t23_source_sensor_max_again) {
+        max_again_q10 = tisp_math_exp2(regtrace_t23_source_sensor_max_again,
+                                       16U, 10U);
+        info->max_again = (uint32_t)tisp_log2_fixed_to_fixed(
+            max_again_q10 + 4U, 10U, 5U);
+    }
+
+    if (!live.valid) {
+        info->total_gain = REGTRACE_TISP_TOTAL_GAIN_1X;
+        return;
+    }
+    info->again = regtrace_t23_gain_q16_to_imp_log2(live.gain_q16);
+    info->total_gain = live.gain_q16 >> 8;
+    if (live.gain_q16 > 0x10000U)
+        info->tgain_log2 = (uint32_t)tisp_log2_fixed_to_fixed(
+            live.gain_q16, 16U, 16U) >> 16;
+    ev_q10 = ((uint64_t)live.it * live.gain_q16) >> 6;
+    if (ev_q10 > 0xffffffffULL)
+        ev_q10 = 0xffffffffULL;
+    info->ev = (uint32_t)(ev_q10 >> 10);
+    if (ev_q10 > 0x400U)
+        info->ev_log2 = (uint32_t)tisp_log2_fixed_to_fixed(
+            (uint32_t)ev_q10, 10U, 16U);
+}
+
+static const char *regtrace_t23_raw_pattern(uint32_t mbus_code)
+{
+    static const char *const names[] = { "RGGB", "BGGR", "GRBG", "GBRG" };
+    uint32_t bayer;
+
+    if (regtrace_t23_bayer_from_mbus(mbus_code, &bayer) || bayer > 3U)
+        return "The format of isp input is RGB or YUV422";
+    return names[bayer];
+}
+
+/*
+ * /proc/jz/isp/isp-m0: the OEM isp_info_show() "ISP INFO" block (labels,
+ * order and units of the stock T23 1.3.0 tx-isp-t23.ko), followed by this
+ * driver's own state.  Lines the stock module prints from hardware or from
+ * state this driver does not keep (ISP Top Value, Antiflicker, Mirror/Flip,
+ * AWB Start, debug counters) are left out.  The extra lines below the
+ * separator must not repeat a stock label: readers match labels by prefix
+ * or substring and take the first or the last match.
+ */
 static int regtrace_t23_isp_m0_proc_show(struct seq_file *seq, void *unused)
 {
-    unsigned char *attr = regtrace_t23_sensor_owned_attr();
-    uint32_t fps = regtrace_t23_sensor_fps_report();
+    struct regtrace_t23_ev_info info;
+    char name[32];
+    uint32_t rgain = regtrace_t23_source_awb_last_rgain;
+    uint32_t bgain = regtrace_t23_source_awb_last_bgain;
+    unsigned char *attr;
+    int32_t mode;
 
     (void)unused;
-    seq_printf(seq, "ISP OUTPUT FPS : %u / %u\n", fps >> 16, fps & 0xffffU);
-    seq_printf(seq, "SENSOR FPS REQUEST : %u / %u\n",
+    regtrace_t23_ev_info_get(&info);
+
+    seq_printf(seq, "****************** ISP INFO **********************\n");
+    if (!info.sensor_ok) {
+        seq_printf(seq, "sensor doesn't work, please enable sensor\n");
+    } else {
+        if (tx_isp_sinfo_get_driver(0, name, sizeof(name), NULL))
+            strlcpy(name, "unknown", sizeof(name));
+        mode = tisp_day_or_night_g_ctrl(0);
+
+        seq_printf(seq, "Software Version : %s\n", "open-tx-isp-t23");
+        seq_printf(seq, "SENSOR NAME : %s\n", name);
+        seq_printf(seq, "SENSOR OUTPUT WIDTH : %u\n",
+                   regtrace_t23_source_sensor_width);
+        seq_printf(seq, "SENSOR OUTPUT HEIGHT : %u\n",
+                   regtrace_t23_source_sensor_height);
+        seq_printf(seq, "ISP OUTPUT FPS : %u / %u\n",
+                   info.fps >> 16, info.fps & 0xffffU);
+        seq_printf(seq, "SENSOR OUTPUT RAW PATTERN : %s\n",
+                   regtrace_t23_raw_pattern(
+                       regtrace_t23_source_sensor_mbus_code));
+        seq_printf(seq, "ISP Runing Mode : %s\n",
+                   mode == 1 ? "Night" : "Day");
+        seq_printf(seq, "ISP WDR Mode : %s\n", "Disable");
+        seq_printf(seq, "SENSOR Integration Time : %u lines\n", info.it);
+        seq_printf(seq, "SENSOR Max Integration Time : %u lines\n",
+                   info.it_max);
+        seq_printf(seq, "SENSOR analog gain : %u\n", info.again);
+        seq_printf(seq, "MAX SENSOR analog gain : %u\n", info.max_again);
+        seq_printf(seq, "SENSOR digital gain : %u\n", info.sensor_dgain);
+        seq_printf(seq, "MAX SENSOR digital gain : %u\n",
+                   info.max_sensor_dgain);
+        seq_printf(seq, "ISP digital gain : %u\n", info.isp_dgain);
+        seq_printf(seq, "MAX ISP digital gain : %u\n", info.max_isp_dgain);
+        seq_printf(seq, "ISP Tgain DB : %u\n", info.tgain_log2);
+        seq_printf(seq, "ISP EV value: %u\n", info.ev);
+        seq_printf(seq, "ISP EV value log2: %u\n", info.ev_log2);
+        seq_printf(seq, "ISP EV value us: %u\n", info.expr_us);
+        seq_printf(seq, "ISP EV min int: %u\n", info.it_min);
+        seq_printf(seq, "ISP EV min again: %u\n", 0U);
+        /* AWB gains are Q10 here; the stock dump prints them Q8. */
+        seq_printf(seq, "ISP WB weighted rgain: %u\n", rgain >> 2);
+        seq_printf(seq, "ISP WB weighted bgain: %u\n", bgain >> 2);
+        seq_printf(seq, "ISP WB color temperature: %u\n",
+                   regtrace_t23_source_awb_hlil_ct);
+        seq_printf(seq, "Saturation : %u\n", tisp_bcsh_g_saturation());
+        seq_printf(seq, "Sharpness : %u\n", tisp_get_sharpness());
+        seq_printf(seq, "Contrast : %u\n", tisp_bcsh_g_contrast());
+        seq_printf(seq, "Brightness : %u\n", tisp_bcsh_g_brightness());
+    }
+
+    /* Driver state; keep these labels distinct from the stock ones. */
+    attr = regtrace_t23_sensor_owned_attr();
+    seq_printf(seq, "---------------- open-tx-isp t23 -----------------\n");
+    seq_printf(seq, "drv sensor fps request : %u / %u\n",
                regtrace_t23_sensor_fps_request >> 16,
                regtrace_t23_sensor_fps_request & 0xffffU);
     if (attr) {
-        seq_printf(seq, "SENSOR VTS : %u\n",
-                   regtrace_t23_get_le16(attr +
-                                         REGTRACE_T23_ATTR_TOTAL_HEIGHT));
-        seq_printf(seq, "SENSOR MAX INTEGRATION TIME : %u\n",
+        seq_printf(seq, "drv sensor vts : %u\n", info.vts);
+        seq_printf(seq, "drv sensor attr max it : %u\n",
                    regtrace_t23_get_le16(attr + REGTRACE_T23_ATTR_MAX_IT));
     }
-    seq_printf(seq, "AE MAX INTEGRATION TIME : %u\n",
-               regtrace_t23_source_sensor_max_it);
-    seq_printf(seq, "SENSOR STATE : %s\n",
+    seq_printf(seq, "drv ae it window : %u .. %u lines, %u us/line\n",
+               info.it_min, info.it_max, info.line_us);
+    seq_printf(seq, "drv ae total gain : %u (x256), %s\n", info.total_gain,
+               info.manual ? "manual" : "auto");
+    seq_printf(seq, "drv ae luma : %u target %u\n",
+               regtrace_t23_source_ae_hlil_luma,
+               regtrace_t23_source_ae_hlil_target);
+    seq_printf(seq, "drv ae state : %u of %u updates %u\n",
+               regtrace_t23_source_ae_hlil_state,
+               regtrace_t23_ae_hlil_state_count,
+               regtrace_t23_source_ae_hlil_updates);
+    seq_printf(seq, "drv sensor state : %s\n",
                regtrace_t23_sensor_streaming ? "streaming" :
                regtrace_t23_sensor_initialized ? "initialized" : "idle");
     return 0;
@@ -100865,3 +101559,383 @@ int tx_isp_core_remove(struct platform_device *pdev)
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("tx isp driver");
 MODULE_AUTHOR("Ingenic xhshen");
+
+/* ---------------------------------------------------------------------
+ * Tuning controls of the T23 1.3.0 libimp served on /dev/isp-m0 beyond
+ * the image/value controls above (OEM apical_isp_core_ops_s_ctrl/g_ctrl).
+ * --------------------------------------------------------------------- */
+
+#define REGTRACE_TISP_CTRL_HFLIP 0x00980914U
+#define REGTRACE_TISP_CTRL_VFLIP 0x00980915U
+#define REGTRACE_TISP_CTRL_POWER_LINE 0x00980918U
+#define REGTRACE_TISP_CTRL_WB_ATTR 0x08000004U
+#define REGTRACE_TISP_CTRL_AWB_WEIGHT 0x08000006U
+#define REGTRACE_TISP_CTRL_AWB_HIST 0x08000007U
+#define REGTRACE_TISP_CTRL_WB_GOL_STATIS 0x08000009U
+#define REGTRACE_TISP_CTRL_MOVESTATE 0x0800002cU
+#define REGTRACE_TISP_CTRL_DEFOG_STRENGTH 0x08000039U
+#define REGTRACE_TISP_CTRL_DPC_STRENGTH 0x08000062U
+#define REGTRACE_TISP_CTRL_TEMPER 0x08000085U
+#define REGTRACE_TISP_CTRL_DRC_STRENGTH 0x080000a2U
+#define REGTRACE_TISP_CTRL_CSC_ATTR 0x080000a6U
+#define REGTRACE_TISP_CTRL_MODULE_CONTROL 0x080000e2U
+#define REGTRACE_TISP_CTRL_HV_FLIP 0x080000e4U
+#define REGTRACE_TISP_CTRL_CCM_ATTR 0x08000100U
+#define REGTRACE_TISP_CTRL_ISP_PROCESS 0x08000164U
+#define REGTRACE_TISP_CTRL_FW_FREEZE 0x08000165U
+#define REGTRACE_TISP_CTRL_SHADING 0x08000166U
+#define REGTRACE_TISP_CTRL_SENSOR_HFLIP 0x08000186U
+#define REGTRACE_TISP_CTRL_SENSOR_VFLIP 0x08000187U
+#define REGTRACE_TX_ISP_EVENT_SENSOR_VFLIP 0x02000010U
+
+/*
+ * DRC strength (OEM tisp_s_adr_str_internal, linear lists): the four ADR
+ * map lists of the active bank scale linearly up to 128 and towards
+ * 400/500/600/600 above, never below histSub_4096_diff[k]; then the ADR
+ * registers are rewritten.  Applied only while ADR runs.
+ */
+static uint32_t regtrace_t23_adr_ratio = 0x80U;
+
+static void regtrace_t23_adr_strength_apply(void)
+{
+    static const uint32_t offsets[4] = { 0x918U, 0x93cU, 0x960U, 0x984U };
+    static const uint32_t ceil[4] = { 400U, 500U, 600U, 600U };
+    unsigned char *lists[4] = {
+        adr_mapb1_list, adr_mapb2_list, adr_mapb3_list, adr_mapb4_list,
+    };
+    uint32_t s = regtrace_t23_adr_ratio;
+    uint32_t v[9];
+    unsigned int k;
+    unsigned int i;
+
+    if (s == 0x80U || !regtrace_t23_source_adr_initialized)
+        return;
+    for (k = 0; k < 4U; ++k) {
+        uint32_t floor = regtrace_t23_get_le32(histSub_4096_diff + k * 4U);
+
+        if (regtrace_t23_read_tuning_data(
+                REGTRACE_T23_ADR_TUNING_OFFSET + offsets[k], v, sizeof(v)))
+            return;
+        for (i = 0; i < 9U; ++i) {
+            if (s <= 0x80U)
+                v[i] = (v[i] * s) >> 7;
+            else
+                v[i] += ((v[i] < ceil[k] ? ceil[k] - v[i] : 0U) *
+                         (s - 0x80U)) >> 7;
+            if (v[i] < floor)
+                v[i] = floor;
+        }
+        memcpy(lists[k], v, sizeof(v));
+    }
+    tiziano_adr_params_init();
+}
+
+/*
+ * Defog strength (OEM tisp_s_defog_str_internal/defog_itp, linear lists):
+ * the five trsy lists of the active bank, capped by main_para[0] <= 31.
+ * Applied only while defog runs.
+ */
+static uint32_t regtrace_t23_defog_ratio = 0x80U;
+
+static int32_t regtrace_t23_defog_itp(int32_t s, int32_t cap, int32_t v)
+{
+    if (s < 128)
+        return (v * s + (128 - s) * 100) >> 7;
+    return ((384 - s) * v + (cap * 100 / 255) * (s - 128)) >> 8;
+}
+
+static void regtrace_t23_defog_strength_apply(void)
+{
+    unsigned char *now[5] = {
+        defog_trsy0_list_now, defog_trsy1_list_now, defog_trsy2_list_now,
+        defog_trsy3_list_now, defog_trsy4_list_now,
+    };
+    const unsigned char *main_para = (const unsigned char *)(uintptr_t)
+        regtrace_t23_get_le32(param_defog_main_para_array_now);
+    int32_t cap;
+    int32_t v[9];
+    unsigned int k;
+    unsigned int i;
+
+    if (regtrace_t23_defog_ratio == 0x80U ||
+        !regtrace_t23_source_defog_initialized ||
+        !regtrace_t23_valid_ptr((uintptr_t)main_para))
+        return;
+    cap = (int32_t)regtrace_t23_get_le32(main_para);
+    if (cap > 31)
+        cap = 31;
+    for (k = 0; k < 5U; ++k) {
+        int32_t *dst = (int32_t *)(uintptr_t)regtrace_t23_get_le32(now[k]);
+
+        if (!regtrace_t23_valid_ptr((uintptr_t)dst) ||
+            regtrace_t23_read_tuning_data(
+                REGTRACE_T23_DEFOG_TUNING_OFFSET + 0x3b8U + k * 0x24U,
+                v, sizeof(v)))
+            return;
+        for (i = 0; i < 9U; ++i)
+            dst[i] = regtrace_t23_defog_itp(
+                (int32_t)regtrace_t23_defog_ratio, cap, v[i]);
+    }
+}
+
+/* ISP mirror/flip on the MSCA outputs (OEM tisp_hv_flip_enable ->
+ * tisp_msca_api_set_mirr_flip, all three channels alike). */
+static uint32_t regtrace_t23_isp_flip_mode;     /* bit 0 mirror, bit 1 flip */
+
+static void regtrace_t23_isp_flip_apply(uint32_t mode)
+{
+    uint32_t m = mode & 1U;
+    uint32_t f = (mode >> 1) & 1U;
+    uint32_t bits = (m * 7U) << 16 | (f * 7U) << 19 |
+                    (m * 7U) << 24 | (f * 7U) << 27;
+    uint32_t value = (system_reg_read(0xd050U) & 0xc00001ffU) | bits;
+
+    if (regtrace_t23_get_le32(dpc_s_con_par_array) == 1U)
+        value |= 0x11U;
+    regtrace_t23_isp_flip_mode = mode & 3U;
+    system_reg_write(0xd050U, value);
+    system_reg_write(0xd010U, 1U);
+}
+
+/* Sensor mirror/flip: TX_ISP_EVENT_SENSOR_VFLIP (bit 0 mirror, bit 1
+ * flip), then the LSC mesh follows the new orientation. */
+static int regtrace_t23_sensor_flip_set(uint32_t mode)
+{
+    uint32_t value = mode & 3U;
+    int ret;
+
+    ret = regtrace_t23_call_sensor_ioctl(REGTRACE_TX_ISP_EVENT_SENSOR_VFLIP,
+                                         &value);
+    if (ret)
+        return ret;
+    regtrace_t23_sensor_flip_mode = (int)(mode & 3U);
+    if (regtrace_t23_core_started)
+        (void)regtrace_t23_lsc_follow_sensor_flip();
+    return 0;
+}
+
+static uint32_t regtrace_t23_sensor_flip_get(void)
+{
+    if (regtrace_t23_sensor_flip_mode >= 0)
+        return (uint32_t)regtrace_t23_sensor_flip_mode;
+    return (regtrace_t23_source_lsc_initial_mirror ? 1U : 0U) |
+           (regtrace_t23_source_lsc_initial_flip ? 2U : 0U);
+}
+
+static long regtrace_t23_copy_in(void *dst, uint32_t uptr, size_t size)
+{
+    if (!uptr)
+        return -EINVAL;
+    return copy_from_user(dst, (const void __user *)(uintptr_t)uptr, size) ?
+        -EFAULT : 0;
+}
+
+static long regtrace_t23_copy_out(uint32_t uptr, const void *src, size_t size)
+{
+    if (!uptr)
+        return -EINVAL;
+    return copy_to_user((void __user *)(uintptr_t)uptr, src, size) ?
+        -EFAULT : 0;
+}
+
+/*
+ * One control, get or set.  *value is the inline value or the user pointer
+ * of the request.  Returns -ENOIOCTLCMD for ids not served here; the
+ * callers turn that into -EINVAL.
+ */
+static long regtrace_t23_tuning_cid(bool get, uint32_t id, uint32_t *value)
+{
+    uint32_t v = *value;
+    long ret = 0;
+
+    switch (id) {
+    case REGTRACE_TISP_CTRL_WB_ATTR: {
+        struct { uint32_t mode; uint16_t rgain; uint16_t bgain; } wb;
+        uint32_t attr[7];
+
+        if (get) {
+            tisp_g_wb_mode(attr);
+            wb.mode = attr[0];
+            wb.rgain = (uint16_t)attr[1];
+            wb.bgain = (uint16_t)attr[2];
+            return regtrace_t23_copy_out(v, &wb, sizeof(wb));
+        }
+        ret = regtrace_t23_copy_in(&wb, v, sizeof(wb));
+        if (ret)
+            return ret;
+        if (wb.mode >= 10U)
+            return -EINVAL;
+        return tisp_s_wb_mode(wb.mode, wb.rgain, wb.bgain);
+    }
+    case REGTRACE_TISP_CTRL_WB_STATIS:
+    case REGTRACE_TISP_CTRL_WB_GOL_STATIS: {
+        unsigned int i = id == REGTRACE_TISP_CTRL_WB_STATIS ? 2U : 0U;
+        uint32_t r = ACCESS_ONCE(regtrace_t23_awb_statis[i]);
+        uint32_t b = ACCESS_ONCE(regtrace_t23_awb_statis[i + 1U]);
+
+        if (!get)
+            return -EINVAL;
+        *value = ((r ? r : REGTRACE_TISP_WB_GAIN_NEUTRAL) << 16) |
+                 ((b ? b : REGTRACE_TISP_WB_GAIN_NEUTRAL) & 0xffffU);
+        return 0;
+    }
+    case REGTRACE_TISP_CTRL_AWB_WEIGHT:
+    case REGTRACE_TISP_CTRL_AWB_HIST:
+    case REGTRACE_TISP_CTRL_MOVESTATE:
+        return 0;   /* OEM T23 no-ops (both directions return 0) */
+    case REGTRACE_TISP_CTRL_FW_FREEZE:
+    case REGTRACE_TISP_CTRL_SHADING:
+        return get ? -EINVAL : 0;   /* OEM set no-op, get rejected */
+    case REGTRACE_TISP_CTRL_ISP_PROCESS:
+        /* Only full processing (1) exists in this driver. */
+        return (!get && v == 1U) ? 0 : -EINVAL;
+    case REGTRACE_TISP_CTRL_CCM_ATTR: {
+        struct regtrace_t23_ccm_user_attr attr;
+
+        if (get) {
+            attr = regtrace_t23_ccm_user;
+            if (attr.manual_en != 1 && regtrace_t23_ccm_profile_loaded) {
+                int32_t matrix[9];
+                unsigned int i;
+
+                regtrace_t23_ccm_interpolate(
+                    regtrace_t23_source_ccm_runtime_ct, matrix);
+                for (i = 0; i < 9U; ++i)
+                    attr.coef[i] = (uint32_t)matrix[i] & 0x3fffU;
+            }
+            return regtrace_t23_copy_out(v, &attr, sizeof(attr));
+        }
+        ret = regtrace_t23_copy_in(&attr, v, sizeof(attr));
+        if (ret)
+            return ret;
+        regtrace_t23_ccm_user = attr;
+        if (!regtrace_t23_ccm_profile_loaded)
+            return 0;   /* applied when the profile loads */
+        if (attr.manual_en == 1) {
+            regtrace_t23_ccm_user_apply();
+        } else {
+            regtrace_t23_ccm_profile_loaded = false;
+            ret = regtrace_t23_source_ccm_load_tuning();
+            if (ret)
+                return ret;
+        }
+        if (regtrace_t23_source_ccm_tuning_init && regtrace_t23_core_started)
+            ret = regtrace_t23_source_ccm_commit(
+                regtrace_t23_source_ccm_runtime_ct,
+                regtrace_t23_source_ae_hlil_ev);
+        return ret;
+    }
+    case REGTRACE_TISP_CTRL_TEMPER:
+        return get ? -EINVAL : regtrace_t23_s_temper_strength(v);
+    case REGTRACE_TISP_CTRL_DPC_STRENGTH:
+        if (get) {
+            *value = regtrace_t23_dpc_ratio;
+            return 0;
+        }
+        return regtrace_t23_s_dpc_strength(v);
+    case REGTRACE_TISP_CTRL_DRC_STRENGTH:
+        if (get) {
+            *value = regtrace_t23_adr_ratio;
+            return 0;
+        }
+        if (v > 0xffU)
+            return -EINVAL;
+        regtrace_t23_adr_ratio = v;
+        regtrace_t23_adr_strength_apply();
+        return 0;
+    case REGTRACE_TISP_CTRL_DEFOG_STRENGTH: {
+        uint8_t strength;
+
+        if (get) {
+            strength = (uint8_t)regtrace_t23_defog_ratio;
+            return regtrace_t23_copy_out(v, &strength, 1);
+        }
+        ret = regtrace_t23_copy_in(&strength, v, 1);
+        if (ret)
+            return ret;
+        regtrace_t23_defog_ratio = strength;
+        regtrace_t23_defog_strength_apply();
+        return 0;
+    }
+    case REGTRACE_TISP_CTRL_CSC_ATTR: {
+        int32_t attr[16];
+
+        if (get) {
+            tisp_get_current_csc(0, (uint32_t *)&attr[0], &attr[1]);
+            return regtrace_t23_copy_out(v, attr, sizeof(attr));
+        }
+        ret = regtrace_t23_copy_in(attr, v, sizeof(attr));
+        if (ret)
+            return ret;
+        if ((uint32_t)attr[0] < 4U)
+            tisp_set_csc_version(0, (uint32_t)attr[0]);
+        else if (attr[0] == 4)
+            tisp_set_user_csc(0, (uint32_t)(uintptr_t)&attr[1]);
+        else
+            return -EINVAL;
+        return 0;
+    }
+    case REGTRACE_TISP_CTRL_MODULE_CONTROL: {
+        int32_t control;
+
+        if (get) {
+            tisp_g_module_control(0, &control);
+            return regtrace_t23_copy_out(v, &control, sizeof(control));
+        }
+        ret = regtrace_t23_copy_in(&control, v, sizeof(control));
+        if (ret)
+            return ret;
+        /* Blocks this driver never loads stay bypassed. */
+        control |= (int32_t)(regtrace_t23_source_bypass_forced_on() &
+                             0x7ffffU);
+        tisp_s_module_control(0, control);
+        return 0;
+    }
+    case REGTRACE_TISP_CTRL_HFLIP:
+    case REGTRACE_TISP_CTRL_VFLIP: {
+        uint32_t bit = id == REGTRACE_TISP_CTRL_HFLIP ? 1U : 2U;
+
+        if (get) {
+            *value = (regtrace_t23_isp_flip_mode & bit) ? 1U : 0U;
+            return 0;
+        }
+        regtrace_t23_isp_flip_apply(v ? (regtrace_t23_isp_flip_mode | bit) :
+                                        (regtrace_t23_isp_flip_mode & ~bit));
+        return 0;
+    }
+    case REGTRACE_TISP_CTRL_HV_FLIP:
+        if (get) {
+            *value = regtrace_t23_isp_flip_mode;
+            return 0;
+        }
+        if (v > 3U)
+            return -EINVAL;
+        regtrace_t23_isp_flip_apply(v);
+        return 0;
+    case REGTRACE_TISP_CTRL_SENSOR_HFLIP:
+    case REGTRACE_TISP_CTRL_SENSOR_VFLIP: {
+        uint32_t bit = id == REGTRACE_TISP_CTRL_SENSOR_HFLIP ? 1U : 2U;
+        uint32_t mode = regtrace_t23_sensor_flip_get();
+
+        if (get) {
+            *value = (mode & bit) ? 1U : 0U;
+            return 0;
+        }
+        return regtrace_t23_sensor_flip_set((v & 0xffU) ? (mode | bit) :
+                                                          (mode & ~bit));
+    }
+    case REGTRACE_TISP_CTRL_POWER_LINE:
+        if (get) {
+            *value = regtrace_t23_ae_flicker_mode;
+            return 0;
+        }
+        if (v > 2U)
+            return -EINVAL;
+        mutex_lock(&regtrace_t23_sensor_fps_lock);
+        ret = regtrace_t23_ae_set_antiflicker(v);
+        mutex_unlock(&regtrace_t23_sensor_fps_lock);
+        return ret;
+    default:
+        return -ENOIOCTLCMD;
+    }
+}
