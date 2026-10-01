@@ -186,6 +186,15 @@ static long subdev_core_ops_release_all_sensor(struct tx_isp_video_in_device *vi
 	while(!list_empty(&vi->sensors)){
 		sensor = list_first_entry(&vi->sensors, struct tx_isp_sensor, list);
 		list_del(&sensor->list);
+		/*
+		 * i2c_unregister_device() below runs the sensor driver's
+		 * remove(), which frees this sensor.  Withdraw it from the
+		 * sinfo registry first, as release_sensor does; otherwise the
+		 * next read of /proc/jz/sensor/sensorN/ dereferences the freed
+		 * sensor with the registry lock held (timps stop/restart oops,
+		 * after which the next timps blocks on that lock in D state).
+		 */
+		tx_isp_sinfo_sensor_unbind(sensor, THIS_MODULE);
 		sd = &sensor->sd;
 		if(sensor->info.cbus_type == TX_SENSOR_CONTROL_INTERFACE_I2C){
 			struct i2c_client *client = v4l2_get_subdevdata(sd);
