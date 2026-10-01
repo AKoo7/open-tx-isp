@@ -1566,7 +1566,11 @@ static unsigned char __attribute__((aligned(4))) apical_downscaler_lut[8196] = {
     0xf8, 0xa3, 0x01, 0x00, 0xfd, 0x03, 0x0c, 0x13, 0xfc, 0xa3, 0x01, 0x00, 0x13, 0x0c, 0x02, 0x00,
     0x00, 0x00, 0x00, 0x00,
 };
-static uintptr_t (*data_4290a)();
+/* OEM symbol at this address is stab.global_max_integration_time (u16 at
+ * stab+26); the recovered firmware had mis-decoded it as a dangling function
+ * pointer, so every scene_mode() write below was discarded instead of
+ * updating the canonical system table. */
+#define data_4290a (*(uint16_t *)(stab + 26))
 #ifdef REGTRACE_KERNEL_TREE_BUILD
 static void isp_core_device_platform_release(struct device *dev) { (void)dev; }
 static u64 isp_core_device_dma_mask = ~(u64)0;
@@ -12645,7 +12649,7 @@ int32_t scene_mode(void *arg1, int32_t arg2, char arg3, int32_t *arg4)
     }
 
 label_1d418:
-    data_4290a = (uintptr_t (*)())(uintptr_t)v0_6;
+    data_4290a = v0_6;
     goto label_1d3e0;
 
 label_1d5ac:
