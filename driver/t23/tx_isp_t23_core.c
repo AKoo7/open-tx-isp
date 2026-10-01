@@ -40105,43 +40105,13 @@ int tisp_deinit(int arg1)
 
 	tisp_lsc_deinit();
 
-	s0 = (uintptr_t *)&tisp_init;
-	a0 = *(int *)((char *)s0 + 12);
-	if (a0 != 0) {
-		a0 = *(int *)((char *)s0 + 36);
-		private_kfree((void *)a0);
-		*(int *)((char *)s0 + 12) = 0;
-	}
-	a0 = *(int *)((char *)s0 + 36);
-	if (a0 != 0) {
-		a0 = *(int *)((char *)s0 + 60);
-		private_kfree((void *)a0);
-		*(int *)((char *)s0 + 36) = 0;
-	}
-	a0 = *(int *)((char *)s0 + 60);
-	if (a0 != 0) {
-		a0 = *(int *)((char *)s0 + 72);
-		private_kfree((void *)a0);
-		*(int *)((char *)s0 + 60) = 0;
-	}
-	a0 = *(int *)((char *)s0 + 72);
-	if (a0 != 0) {
-		a0 = *(int *)((char *)s0 + 84);
-		private_kfree((void *)a0);
-		*(int *)((char *)s0 + 72) = 0;
-	}
-	a0 = *(int *)((char *)s0 + 84);
-	if (a0 != 0) {
-		a0 = *(int *)((char *)s0 + 96);
-		private_kfree((void *)a0);
-		*(int *)((char *)s0 + 84) = 0;
-	}
-	a0 = *(int *)((char *)s0 + 96);
-	if (a0 != 0) {
-		a0 = *(int *)((char *)s0 + 96);
-		private_kfree((void *)a0);
-		*(int *)((char *)s0 + 96) = 0;
-	}
+	/*
+	 * The OEM frees the statistics buffers it keeps in tispinfo here.
+	 * The recovered code read them from &tisp_init, i.e. from this
+	 * module's text, kfree()d instruction words and zeroed instructions.
+	 * This driver keeps its statistics buffers in
+	 * regtrace_t23_core_dma_bufs, freed by cleanup_module().
+	 */
 
 	s0 = (uintptr_t *)&tparams_day;
 	a0 = *(int *)((char *)s0 + 0);
@@ -78351,7 +78321,11 @@ int tiziano_deflicker_expt(uint32_t flicker_t, uint32_t param2, uint32_t param3,
     s1_saved = *(uint32_t *)(s8 + 28);
     s0_saved = *(uint32_t *)(s8 + 24);
 
-    *(uint32_t *)((char *)&get_clk_name + 17108) = 1;
+    /*
+     * OEM: sw 1 to .data+0x342d4, which is IspAeFlag + 0x18. The recovered
+     * &get_clk_name + 17108 wrote into this module's text instead.
+     */
+    ((uint32_t *)(void *)IspAeFlag)[6] = 1;
 
     *(uint32_t *)(s8 + 60) = ra_saved;
     *(uint32_t *)(s8 + 56) = s8_saved;
@@ -91125,8 +91099,14 @@ int32_t tiziano_mdns_init(uint32_t arg1, uint32_t arg2)
     *(uint32_t *)((char *)((char *)&mdns_c_fiir_fus_wei7_array_now)) = (uint32_t)&mdns_c_fiir_fus_wei7_array;
     *(uint32_t *)((char *)((char *)&mdns_c_fiir_fus_wei8_array_now)) = (uint32_t)&mdns_c_fiir_fus_wei8_array;
     regtrace_t23_source_mdns_gain_old = 0xffffffffU;
-    *(uint32_t *)((char *)&get_clk_name + 19064) = arg1;
-    *(uint32_t *)((char *)&get_clk_name + 19060) = arg2;
+    /*
+     * The OEM stores arg1/arg2 into its static vin_width/vin_height
+     * (.data+0x34a78/0x34a74), already kept above in
+     * regtrace_t23_mdns_frame_width/height. The recovered stores went to
+     * &get_clk_name + 0x4a78/0x4a74, which is this module's own text
+     * (text+0x4e90/0x4e94): every ISP stream start overwrote two
+     * instructions with the frame height and width.
+     */
     ret = tiziano_mdns_params_refresh();
     if (ret)
         return ret;
@@ -93421,8 +93401,18 @@ int tisp_s_adr_enable(int arg1, int arg2)
     s1 = v0;
 
     if (s0 == 1) {
-        tiziano_adr_init(s2, *(int *)((char *)&sensor_init + 0),
-                         *(int *)((char *)&sensor_init + 4));
+        /*
+         * OEM: sensor_info width and height. The recovered code read two
+         * instruction words of sensor_init() instead.
+         */
+        uint32_t width = regtrace_t23_get_le32(sensor_info + 0);
+        uint32_t height = regtrace_t23_get_le32(sensor_info + 4);
+
+        if (!width || !height) {
+            width = regtrace_t23_source_sensor_width;
+            height = regtrace_t23_source_sensor_height;
+        }
+        tiziano_adr_init(s2, width, height);
         a1_val = (uintptr_t)s1 & 0xffffff7f;
     } else {
         a1_val = (uintptr_t)s1 | 0x80;
