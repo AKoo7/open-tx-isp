@@ -4520,6 +4520,24 @@ module_param(ae_dbg_ret, int, 0444);
 static uint ae_dbg_zone[5];
 static int ae_dbg_zone_n = 5;
 module_param_array(ae_dbg_zone, uint, &ae_dbg_zone_n, 0444);
+
+/*
+ * ISP TOP bypass bit 4 is the ADR (local tone mapping) block: the bit order
+ * follows the pipeline (2 LSC, 3 WB, 4 ADR, 5 DMSC, 6 CCM; night bypasses
+ * 2/3/6).  On the PC420, setting it alone takes the day picture from Y 231
+ * (blown out) to Y 97 with normal AE: the AE statistics are taken before
+ * ADR, and the reconstructed dynamic ADR (Tiziano_adr_fpga) is not the
+ * stock algorithm, so its curves add ~2.4x gain the AE never sees.  Until
+ * the stock ADR is ported, keep ADR bypassed by default.
+ */
+static int adr_bypass = 1;
+module_param(adr_bypass, int, 0644);
+MODULE_PARM_DESC(adr_bypass, "T21: force TOP bypass bit 4 (ADR) (default 1 until the stock ADR is ported)");
+
+static inline uint32_t t21_top_bypass_fix(uint32_t v)
+{
+	return adr_bypass ? (v | BIT(4)) : v;
+}
 static uint32_t t21_ae_scene_cfg[11];
 static uint32_t nodes_num;
 static unsigned char af_array_fird0[900];
@@ -21585,7 +21603,7 @@ int32_t tisp_param_operate_process(void *payload, int payload_len)
 			*(int32_t *)((char *)tisp_ae_ctrls + 56) = ae_buf[14];
 			*(int32_t *)((char *)tisp_ae_ctrls + 60) = ae_buf[15];
 		} else if (msg_id == 1) {
-			system_reg_write(0xc, arg[2]);
+			system_reg_write(0xc, t21_top_bypass_fix(arg[2]));
 		} else if (msg_id == 2) {
 			system_reg_write(arg[2] & 0x1ffff, arg[3]);
 		} else if (msg_id == 3) {
@@ -22354,7 +22372,7 @@ int32_t tisp_init(int32_t *arg1)
 		uint32_t val = *(uint32_t *)((char *)&tparams + (i << 2) + 0x6640) << (i & 0x1f);
 		loop_acc = (loop_acc & mask) + val;
 	}
-	system_reg_write(0xc, loop_acc);
+	system_reg_write(0xc, t21_top_bypass_fix(loop_acc));
 	system_reg_write(0x1c, 0x200000);
 
 	buf1 = t21_tisp_stats_buffer(0);
@@ -48056,7 +48074,7 @@ int32_t tisp_day_or_night_s_ctrl(uint32_t mode)
         reg_val += field_val << (i & 0x1f);
     }
 
-    system_reg_write(0xc, reg_val);
+    system_reg_write(0xc, t21_top_bypass_fix(reg_val));
 #define T21_DN_REFRESH(fn) do { \
 	pr_debug("tx-isp-t21: day/night refresh enter %s\n", #fn); \
 	fn(); \
@@ -49322,7 +49340,7 @@ uint8_t tisp_g_wb_frz(uint8_t *arg1)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000031824 origin=model_output original=tisp_s_module_control */
 int32_t tisp_s_module_control(int16_t arg1)
 {
-	return system_reg_write(0xc, (uint32_t)(uint16_t)arg1 | 0x80000000u);
+	return system_reg_write(0xc, t21_top_bypass_fix((uint32_t)(uint16_t)arg1 | 0x80000000u));
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000031840 origin=fragment_seed original=tisp_g_module_control */
