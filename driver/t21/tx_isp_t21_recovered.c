@@ -36,6 +36,9 @@
 #include <linux/i2c.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
+#include <linux/console.h>
+#include <asm/addrspace.h>
+#include <asm/cacheflush.h>
 #include <linux/firmware.h>
 #include <linux/io.h>
 #include <linux/interrupt.h>
@@ -53708,15 +53711,93 @@ int32_t system_irq_func_set(unsigned int index, t21_irq_callback_t callback)
 	return 0;
 }
 
+/*
+ * ramlog=1: poor man's pstore.  A console that copies every printk record
+ * (oops, soft-lockup panic included) through the uncached KSEG1 alias into
+ * 64 KiB of ordinary RAM whose physical address is logged at load.  After
+ * the panic=2 reboot the buffer is usually still intact until the new
+ * kernel reuses those pages; read it with
+ *   dd if=/dev/mem bs=4096 skip=$((PHYS >> 12)) count=16
+ * Layout: u32 magic "RAML", u32 size, u32 head, u32 wraps, then the ring.
+ */
+#define T21_RAMLOG_ORDER 4
+#define T21_RAMLOG_MAGIC 0x4c4d4152u
+static bool t21_ramlog;
+module_param_named(ramlog, t21_ramlog, bool, 0444);
+static unsigned long t21_ramlog_pages;
+static volatile u32 *t21_ramlog_hdr;
+static volatile u8 *t21_ramlog_ring;
+
+static void t21_ramlog_write(struct console *con, const char *text,
+			     unsigned int len)
+{
+	u32 size = t21_ramlog_hdr[1];
+	u32 head = t21_ramlog_hdr[2];
+
+	(void)con;
+	while (len--) {
+		t21_ramlog_ring[head] = *text++;
+		if (++head == size) {
+			head = 0;
+			t21_ramlog_hdr[3]++;
+		}
+	}
+	t21_ramlog_hdr[2] = head;
+}
+
+static struct console t21_ramlog_console = {
+	.name = "t21ram",
+	.write = t21_ramlog_write,
+	.flags = CON_ENABLED | CON_PRINTBUFFER,
+	.index = -1,
+};
+
+static void t21_ramlog_start(void)
+{
+	size_t bytes = PAGE_SIZE << T21_RAMLOG_ORDER;
+	unsigned long phys;
+
+	if (!t21_ramlog)
+		return;
+	t21_ramlog_pages = __get_free_pages(GFP_KERNEL, T21_RAMLOG_ORDER);
+	if (!t21_ramlog_pages)
+		return;
+	memset((void *)t21_ramlog_pages, 0, bytes);
+	dma_cache_wback_inv(t21_ramlog_pages, bytes);
+	phys = virt_to_phys((void *)t21_ramlog_pages);
+	t21_ramlog_hdr = (volatile u32 *)CKSEG1ADDR(phys);
+	t21_ramlog_ring = (volatile u8 *)t21_ramlog_hdr + 16;
+	t21_ramlog_hdr[1] = bytes - 16;
+	t21_ramlog_hdr[2] = 0;
+	t21_ramlog_hdr[3] = 0;
+	t21_ramlog_hdr[0] = T21_RAMLOG_MAGIC;
+	register_console(&t21_ramlog_console);
+	printk(KERN_ERR "tx-isp-t21: ramlog at phys 0x%08lx size 0x%zx\n",
+	       phys, bytes);
+}
+
+static void t21_ramlog_stop(void)
+{
+	if (!t21_ramlog_pages)
+		return;
+	unregister_console(&t21_ramlog_console);
+	t21_ramlog_hdr[0] = 0;
+	free_pages(t21_ramlog_pages, T21_RAMLOG_ORDER);
+	t21_ramlog_pages = 0;
+}
+
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000034540 origin=model_output original=init_module */
 int32_t init_module(void)
 {
 	int32_t result;
 
+	t21_ramlog_start();
 	regtrace_patch_relocated_data();
 	result = tx_isp_init();
-	if (result)
+	if (result) {
+		t21_ramlog_stop();
 		return result;
+	}
 	result = tx_isp_sinfo_init();
 	if (result)
 		goto fail_isp;
@@ -53729,6 +53810,7 @@ fail_sinfo:
 	tx_isp_sinfo_exit();
 fail_isp:
 	tx_isp_exit();
+	t21_ramlog_stop();
 	return result;
 }
 
@@ -53740,6 +53822,7 @@ void cleanup_module(void)
 	tx_isp_exit();
 	t21_text_watch_free();
 	t21_free_watch_flush();
+	t21_ramlog_stop();
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000345bc origin=model_output original=tx_isp_vic_remove */
