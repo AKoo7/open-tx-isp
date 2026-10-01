@@ -371,19 +371,16 @@ static const TX_ISP_PROC_OPS tx_isp_proc_fs_fops = {
 };
 
 /* ISP-M0 file operations - CRITICAL MISSING PIECE */
+int tisp_isp_info_show(struct seq_file *m);
+
 static int tx_isp_proc_m0_show(struct seq_file *m, void *v)
 {
-    struct tx_isp_dev *isp = m->private;
-
-    if (!isp) {
-        seq_printf(m, "0");
-        return 0;
-    }
-
-    /* M0 proc entry for main ISP core status */
-    seq_printf(m, "%u", isp->frame_count);
-
-    return 0;
+    /*
+     * Stock isp-m0 is the OEM "ISP INFO" key/value dump (isp_info_show)
+     * that userspace parses by line prefix (timps daynight, daynightd,
+     * isp-inspector).  It printed only the frame counter here.
+     */
+    return tisp_isp_info_show(m);
 }
 
 static ssize_t tx_isp_proc_m0_write(struct file *file, const char __user *buffer,

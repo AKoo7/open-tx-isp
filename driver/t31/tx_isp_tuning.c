@@ -29,6 +29,7 @@
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/string.h>
+#include <linux/seq_file.h>
 #include <linux/math64.h>  /* For div64_s64() and do_div() */
 #include <linux/io.h>
 #include <linux/ioport.h>
@@ -36133,6 +36134,143 @@ static void tisp_free_stats_pages(void)
     if (af)
         free_pages(af, 2);
 }
+
+/*
+ * OEM isp_info_show.isra.0 (HLIL 0x67198): the /proc/jz/isp/isp-m0 dump.
+ * Userspace parses it by line prefix (timps daynight.c, thingino daynightd,
+ * isp-inspector, ha-state, timps-dn-isp-log), so the labels, their order
+ * and the units follow stock exactly: exposure and limits from
+ * tisp_g_ev_attr (gains in IMP log2 units, 32 = 2x), the EV minimum from
+ * tisp_ae_g_min, WB from the tisp_wb_attr block, BCSH from the live
+ * BCSH state.  The final two "debug" lines carry this driver's counters;
+ * the stock per-IRQ error counters do not exist here and print 0.
+ */
+static const char *tisp_info_raw_pattern(u32 code)
+{
+	static const char *const rgbir[16] = {
+		"RGGB", "RGGB", "RGGB", "BIGR", "GRBI", "GBRI", "IRBG", "IBRG",
+		"RGGI", "BGGI", "GRIG", "GBIG", "GIRG", "SGIBG", "IGGR", "IGGB",
+	};
+
+	switch (code) {
+	case 0x3001: case 0x3007: case 0x3008:	/* SBGGR8/10/12 */
+		return "BGGR";
+	case 0x3002: case 0x300a: case 0x3011:	/* SGRBG8/10/12 */
+		return "GRBG";
+	case 0x3013: case 0x300e: case 0x3010:	/* SGBRG8/10/12 */
+		return "GBRG";
+	case 0x3014: case 0x300f: case 0x3012:	/* SRGGB8/10/12 */
+		return "RGGB";
+	}
+	/* Ingenic RGB-IR codes 0x31xx/0x32xx/0x33xx, low byte 0..0xf */
+	if (code >= 0x3100 && code < 0x3400 && (code & 0xf0) == 0)
+		return rgbir[code & 0xf];
+	return "The format of isp input is RGB or YUV422";
+}
+
+/* module parameters owned by tx_isp_core.c */
+extern int isp_ch0_pre_dequeue_time;
+extern int isp_ch0_pre_dequeue_interrupt_process;
+extern int isp_ch0_pre_dequeue_valid_lines;
+
+int tisp_isp_info_show(struct seq_file *m)
+{
+	struct tx_isp_dev *isp = ourISPdev;
+	struct isp_tuning_data *tuning = isp ? isp->tuning_data : NULL;
+	struct tx_isp_sensor *sensor = isp ? isp->sensor : NULL;
+	uint32_t ev[TISP_EV_ATTR_WORDS];
+	uint32_t ae_min[4] = { 0 };
+	uint32_t awb_start[2] = { 0 };
+	uint32_t ct = 5000;
+	uint32_t af_count = 0;
+	uint32_t *af_lut;
+	uint32_t fps_num, fps_den;
+	uint32_t sharp = 0;
+	const char *name;
+	int af_ret = -1;
+	uint32_t i;
+
+	seq_printf(m, "****************** ISP INFO **********************\n");
+	if (!sensor || !tuning || !tparams_active ||
+	    !tisp_si_width(&sensor_info)) {
+		seq_printf(m, "sensor doesn't work, please enable sensor\n");
+		return 0;
+	}
+
+	af_lut = kzalloc(0x1e0, GFP_KERNEL);
+	if (af_lut)
+		af_ret = tisp_get_antiflicker_step(af_lut, &af_count);
+	tisp_g_ev_attr(ev, tuning);
+	tisp_ae_g_min(ae_min);
+	tisp_g_awb_start(awb_start);
+	tisp_g_wb_ct(&ct);
+	tisp_get_sharpness(&sharp);
+	tisp_sensor_split_raw_fps(tisp_si_fps(&sensor_info), &fps_num, &fps_den);
+
+	name = sensor->info.name[0] ? sensor->info.name :
+	       (sensor->attr.name ? sensor->attr.name : "unknown");
+
+	seq_printf(m, "Software Version : %s\n", "H20221206a");
+	seq_printf(m, "SENSOR NAME : %s\n", name);
+	seq_printf(m, "SENSOR OUTPUT WIDTH : %d\n", tisp_si_width(&sensor_info));
+	seq_printf(m, "SENSOR OUTPUT HEIGHT : %d\n", tisp_si_height(&sensor_info));
+	seq_printf(m, "ISP OUTPUT FPS : %d / %d\n", fps_num, fps_den);
+	seq_printf(m, "SENSOR OUTPUT RAW PATTERN : %s\n",
+		   tisp_info_raw_pattern(sensor->video.mbus.code));
+	seq_printf(m, "ISP Top Value : 0x%x\n", tisp_top_read(0xc));
+	seq_printf(m, "ISP Runing Mode : %s\n",
+		   tisp_day_or_night_g_ctrl() == 1 ? "Night" : "Day");
+	seq_printf(m, "ISP Custom Mode : %s\n",
+		   tisp_cust_mode_g_ctrl() == 1 ? "Enable" : "Disable");
+	seq_printf(m, "ISP WDR Mode : %s\n", data_b2e74 == 1 ? "Enable" : "Disable");
+	seq_printf(m, "SENSOR Integration Time : %d lines\n", ev[0]);
+	seq_printf(m, "SENSOR Max Integration Time : %d lines\n",
+		   *(uint16_t *)((uint8_t *)ev + 0x6e));
+	seq_printf(m, "SENSOR analog gain : %d\n", ev[4]);
+	seq_printf(m, "MAX SENSOR analog gain : %d\n", ev[8]);
+	seq_printf(m, "SENSOR digital gain : %d\n", ev[10]);
+	seq_printf(m, "MAX SENSOR digital gain : %d\n", ev[11]);
+	seq_printf(m, "ISP digital gain : %d\n", ev[5]);
+	seq_printf(m, "MAX ISP digital gain : %d\n", ev[9]);
+	seq_printf(m, "ISP Tgain DB : %d\n", ev[6]);
+	seq_printf(m, "ISP EV value: %d\n", ev[1]);
+	seq_printf(m, "ISP EV value log2: %d\n", ev[3]);
+	seq_printf(m, "ISP EV value us: %d\n", ev[2]);
+	seq_printf(m, "ISP EV min int: %d\n", ae_min[0]);
+	seq_printf(m, "ISP EV min again: %d\n", ae_min[1]);
+	seq_printf(m, "ISP WB weighted rgain: %d\n",
+		   wb_live_gain_gr_inv ? 0x10000u / wb_live_gain_gr_inv : 0);
+	seq_printf(m, "ISP WB weighted bgain: %d\n",
+		   wb_live_gain_gb_inv ? 0x10000u / wb_live_gain_gb_inv : 0);
+	seq_printf(m, "ISP WB color temperature: %d\n", ct);
+	seq_printf(m, "ISP AWB Start rgain %d: bgain %d\n",
+		   awb_start[0], awb_start[1]);
+	seq_printf(m, "Saturation : %d\n", tuning->saturation);
+	seq_printf(m, "Saturation : %d\n", tisp_bcsh_g_saturation());
+	seq_printf(m, "Sharpness : %d\n", sharp);
+	seq_printf(m, "Contrast : %d\n", tisp_bcsh_g_contrast());
+	seq_printf(m, "Brightness : %d\n", tisp_bcsh_g_brightness());
+	seq_printf(m, "Antiflicker : %d\n", tuning->antiflicker);
+	seq_printf(m, "Mirror: %s, Flip: %s\n",
+		   tuning->hflip ? "Enable" : "Disable",
+		   tuning->vflip ? "Enable" : "Disable");
+	if (af_ret == 0) {
+		if (af_count >= 0x1e0 / sizeof(*af_lut))
+			af_count = 0x1e0 / sizeof(*af_lut) - 1;
+		seq_printf(m, "Antiflicker nodes: %d: step : ", af_count + 1);
+		for (i = 0; i <= af_count; i++)
+			seq_printf(m, "%d. ", af_lut[i]);
+		seq_printf(m, "\n");
+	}
+	kfree(af_lut);
+	seq_printf(m, "debug : ch0 done %u,ip done %u,%d,%d,%d,%d,%d,%d\n",
+		   isp->frame_count, isp->frame_count, 0, 0, 0, 0, 0, 0);
+	seq_printf(m, "debug1 : %d,%d,%d\n", isp_ch0_pre_dequeue_time,
+		   isp_ch0_pre_dequeue_interrupt_process,
+		   isp_ch0_pre_dequeue_valid_lines);
+	return 0;
+}
+EXPORT_SYMBOL(tisp_isp_info_show);
 
 /* tisp_deinit - EXACT Binary Ninja implementation */
 int tisp_deinit(void)
