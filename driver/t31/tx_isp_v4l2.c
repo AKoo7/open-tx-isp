@@ -21,6 +21,7 @@
 #include "include/tx_isp.h"
 #include "include/tx_isp_device.h"
 #include "../include/tx_isp/tx_isp_frame_channel.h"
+#include "include/tx_isp_debug.h"
 
 #ifndef CONFIG_DMA_SHARED_BUFFER
 #error "CONFIG_TX_ISP_T31_V4L2 requires CONFIG_DMA_SHARED_BUFFER"
@@ -71,7 +72,14 @@ extern long frame_channel_unlocked_ioctl(struct file *file,
 					 unsigned int command,
 					 unsigned long argument);
 
-static long tx_isp_v4l2_legacy_ioctl(unsigned int command, void *argument)
+/*
+ * Forward a request to the private frame channel through a stack struct file.
+ * The channel code only looks at private_data and f_flags; copy O_NONBLOCK
+ * from the caller's file (NULL for internal callers, which never block) so a
+ * non-blocking DQBUF on /dev/videoN returns -EAGAIN instead of sleeping.
+ */
+static long tx_isp_v4l2_legacy_ioctl(struct file *file, unsigned int command,
+				     void *argument)
 {
 	struct file legacy_file;
 	mm_segment_t old_fs;
@@ -79,6 +87,8 @@ static long tx_isp_v4l2_legacy_ioctl(unsigned int command, void *argument)
 
 	memset(&legacy_file, 0, sizeof(legacy_file));
 	legacy_file.private_data = &frame_channels[TX_ISP_V4L2_CHANNEL];
+	if (file)
+		legacy_file.f_flags = file->f_flags & O_NONBLOCK;
 	old_fs = get_fs();
 	set_fs(KERNEL_DS);
 	ret = frame_channel_unlocked_ioctl(&legacy_file, command,
@@ -249,8 +259,8 @@ static void tx_isp_v4l2_deactivate_buffers(struct tx_isp_v4l2_device *video,
 		memset(&request, 0, sizeof(request));
 		request.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 		request.memory = V4L2_MEMORY_USERPTR;
-		tx_isp_v4l2_legacy_ioctl(TX_ISP_FRAME_IOCTL_LEGACY_REQBUFS,
-					  &request);
+		tx_isp_v4l2_legacy_ioctl(NULL, TX_ISP_FRAME_IOCTL_LEGACY_REQBUFS,
+					 &request);
 	}
 	video->buffer_count = 0;
 }
@@ -368,7 +378,7 @@ static int tx_isp_v4l2_set_format(struct file *file, void *private,
 	legacy_format.pix.sizeimage = format->fmt.pix.sizeimage;
 	legacy_format.pix.colorspace = format->fmt.pix.colorspace;
 	legacy_format.pix.priv = format->fmt.pix.priv;
-	ret = tx_isp_v4l2_legacy_ioctl(TX_ISP_FRAME_IOCTL_LEGACY_SET_FORMAT,
+	ret = tx_isp_v4l2_legacy_ioctl(file, TX_ISP_FRAME_IOCTL_LEGACY_SET_FORMAT,
 					       &legacy_format);
 	if (ret)
 		return ret;
@@ -459,7 +469,7 @@ static int tx_isp_v4l2_request_buffers(struct file *file, void *private,
 	legacy_request.count = count;
 	legacy_request.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 	legacy_request.memory = V4L2_MEMORY_USERPTR;
-	ret = tx_isp_v4l2_legacy_ioctl(TX_ISP_FRAME_IOCTL_LEGACY_REQBUFS,
+	ret = tx_isp_v4l2_legacy_ioctl(file, TX_ISP_FRAME_IOCTL_LEGACY_REQBUFS,
 					       &legacy_request);
 	if (ret) {
 		tx_isp_v4l2_deactivate_buffers(video, false);
@@ -543,7 +553,7 @@ static int tx_isp_v4l2_queue_buffer(struct file *file, void *private,
 	legacy_buffer.memory = V4L2_MEMORY_USERPTR;
 	legacy_buffer.dma = (u32)capture->dma_address;
 	legacy_buffer.length = capture->size;
-	ret = tx_isp_v4l2_legacy_ioctl(TX_ISP_FRAME_IOCTL_LEGACY_QBUF,
+	ret = tx_isp_v4l2_legacy_ioctl(file, TX_ISP_FRAME_IOCTL_LEGACY_QBUF,
 					       &legacy_buffer);
 	if (!ret)
 		buffer->flags |= V4L2_BUF_FLAG_QUEUED;
@@ -563,12 +573,22 @@ static int tx_isp_v4l2_dequeue_buffer(struct file *file, void *private,
 	memset(&legacy_buffer, 0, sizeof(legacy_buffer));
 	legacy_buffer.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 	legacy_buffer.memory = V4L2_MEMORY_USERPTR;
-	ret = tx_isp_v4l2_legacy_ioctl(TX_ISP_FRAME_IOCTL_LEGACY_DQBUF,
-					       &legacy_buffer);
+	/*
+	 * VIDIOC_DQBUF is excluded from the core's vdev->lock (see
+	 * tx_isp_v4l2_init()), so a blocking wait here does not hold off
+	 * STREAMOFF on the same node. The channel serialises itself with its
+	 * buffer_mutex; take our lock only for the adapter state afterwards.
+	 */
+	ret = tx_isp_v4l2_legacy_ioctl(file, TX_ISP_FRAME_IOCTL_LEGACY_DQBUF,
+				       &legacy_buffer);
 	if (ret)
 		return ret;
-	if (legacy_buffer.index >= video->buffer_count)
+	if (mutex_lock_interruptible(&video->lock))
+		return -ERESTARTSYS;
+	if (legacy_buffer.index >= video->buffer_count) {
+		mutex_unlock(&video->lock);
 		return -EIO;
+	}
 	buffer->index = legacy_buffer.index;
 	buffer->bytesused = legacy_buffer.bytesused;
 	buffer->flags = legacy_buffer.flags;
@@ -579,6 +599,7 @@ static int tx_isp_v4l2_dequeue_buffer(struct file *file, void *private,
 	buffer->memory = V4L2_MEMORY_MMAP;
 	buffer->m.offset = buffer->index * PAGE_ALIGN(video->format.sizeimage);
 	buffer->length = video->buffers[buffer->index]->size;
+	mutex_unlock(&video->lock);
 	return 0;
 }
 
@@ -602,7 +623,7 @@ static int tx_isp_v4l2_stream_on(struct file *file, void *private,
 		return ret;
 	video->upstream_streaming = true;
 
-	ret = tx_isp_v4l2_legacy_ioctl(TX_ISP_FRAME_IOCTL_LEGACY_STREAM_ON,
+	ret = tx_isp_v4l2_legacy_ioctl(file, TX_ISP_FRAME_IOCTL_LEGACY_STREAM_ON,
 					       &legacy_type);
 	if (ret) {
 		rollback_ret = tx_isp_video_s_stream(ourISPdev, 0);
@@ -622,7 +643,7 @@ static int tx_isp_v4l2_stop_streaming(struct tx_isp_v4l2_device *video,
 
 	if (video->streaming) {
 		channel_ret = tx_isp_v4l2_legacy_ioctl(
-			TX_ISP_FRAME_IOCTL_LEGACY_STREAM_OFF, &type);
+			NULL, TX_ISP_FRAME_IOCTL_LEGACY_STREAM_OFF, &type);
 		if (!channel_ret)
 			video->streaming = false;
 	}
@@ -793,6 +814,8 @@ int tx_isp_v4l2_init(void)
 	video->video_device->ioctl_ops = &tx_isp_v4l2_ioctl_ops;
 	video->video_device->release = video_device_release;
 	video->video_device->lock = &video->lock;
+	/* Do not hold vdev->lock across the (possibly blocking) DQBUF wait. */
+	v4l2_disable_ioctl_locking(video->video_device, VIDIOC_DQBUF);
 	video->video_device->vfl_dir = VFL_DIR_RX;
 	video_set_drvdata(video->video_device, video);
 	ret = video_register_device(video->video_device, VFL_TYPE_GRABBER, -1);

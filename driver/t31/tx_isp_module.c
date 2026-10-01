@@ -226,6 +226,27 @@ static void sensor_expo_work_func(struct work_struct *work)
             } else {
                 sensor_expo_last_packed = (u32)packed;
             }
+
+            /*
+             * Not every SDK sensor module implements the combined EXPO event.
+             * The imx307 module, for example, takes integration time and
+             * analog gain as separate events and its unknown-command path
+             * returns success, so the EXPO write above is silently dropped.
+             * Send the per-field events as well; modules that only implement
+             * EXPO ignore them, and those that handle both just write the
+             * same values.  This is the SDK event ABI, not a per-sensor list.
+             */
+            {
+                int expo_it = (int)it;
+                int expo_again = (int)again;
+
+                /* ops/sensor_sd were read under sensor_ops_call_mutex,
+                 * which is still held (last-close / rmmod safe). */
+                ops->sensor->ioctl(sensor_sd, TX_ISP_EVENT_SENSOR_INT_TIME,
+                                   &expo_it);
+                ops->sensor->ioctl(sensor_sd, TX_ISP_EVENT_SENSOR_AGAIN,
+                                   &expo_again);
+            }
         }
         mutex_unlock(&sensor_ops_call_mutex);
     }
@@ -5166,11 +5187,6 @@ static struct tx_isp_subdev_video_ops sensor_subdev_video_ops = {
     .s_stream = sensor_subdev_video_s_stream,
 };
 
-/* CSI video operations structure - CRITICAL for tx_isp_video_link_stream */
-static struct tx_isp_subdev_video_ops csi_video_ops = {
-    .s_stream = csi_video_s_stream,
-};
-
 /* CRITICAL FIX: stored_sensor_ops moved to top of file for global access */
 
 /* Sensor operations delegation functions */
@@ -6289,6 +6305,7 @@ static int tx_isp_init(void)
     int gpio_mode_check;
     struct platform_device *subdev_platforms[5];
 
+    extern struct tx_isp_subdev_ops core_subdev_ops;
     pr_info("TX ISP driver initializing with new subdevice management system...\n");
 
     ret = tx_isp_map_mainline_irqs();
@@ -6557,8 +6574,6 @@ static int tx_isp_init(void)
     /* which orchestrates all subdev streaming when called by tx_isp_video_link_stream */
 
     /* CRITICAL FIX: Ensure core subdev has ops pointer set */
-    extern struct tx_isp_subdev_ops core_subdev_ops;
-
     if (!ourISPdev->sd.ops) {
         pr_info("*** CRITICAL FIX: Core subdev ops is NULL, setting to core_subdev_ops ***\n");
         ourISPdev->sd.ops = &core_subdev_ops;
@@ -7897,8 +7912,9 @@ static int tx_isp_vic_handle_event(void *vic_subdev, int event_type, void *data)
 
         // Activate VIC
         if (vic_dev->state == 1) {
+            int ret;
             vic_dev->state = 2;
-    		int ret = tx_isp_activate_csi_subdev(ourISPdev);
+            ret = tx_isp_activate_csi_subdev(ourISPdev);
     		if (ret) {
         		pr_err("Failed to activate CSI subdev: %d\n", ret);
                 return ret;
@@ -8013,9 +8029,10 @@ static int sensor_subdev_core_g_chip_ident(struct tx_isp_subdev *sd, struct tx_i
         stored_sensor_ops.original_ops->core &&
         stored_sensor_ops.original_ops->core->g_chip_ident) {
 
+        int result;
         pr_info("*** CALLING REAL SENSOR DRIVER G_CHIP_IDENT ***\n");
 
-        int result = stored_sensor_ops.original_ops->core->g_chip_ident(stored_sensor_ops.sensor_sd, chip);
+        result = stored_sensor_ops.original_ops->core->g_chip_ident(stored_sensor_ops.sensor_sd, chip);
 
         pr_info("*** REAL SENSOR DRIVER G_CHIP_IDENT RETURNED: %d ***\n", result);
         return result;
@@ -8053,12 +8070,12 @@ static int sensor_subdev_video_s_stream(struct tx_isp_subdev *sd, int enable)
             if (vin_device && !vin_init_in_progress) {
                 if (vin_device->state != TX_ISP_MODULE_INIT &&
                     vin_device->state != TX_ISP_MODULE_RUNNING) {
+                    extern int tx_isp_vin_init(void* arg1, int32_t arg2);
                     pr_info("*** CRITICAL: VIN NOT INITIALIZED (state=%d), INITIALIZING NOW ***\n",
                             vin_device->state);
 
                     vin_init_in_progress = 1;
 
-                    extern int tx_isp_vin_init(void* arg1, int32_t arg2);
                     ret = tx_isp_vin_init(vin_device, 1);
 
                     vin_init_in_progress = 0;
@@ -8274,6 +8291,8 @@ int tx_isp_register_sensor_subdev(struct tx_isp_subdev *sd, struct tx_isp_sensor
         /* Add to sensor enumeration list */
         reg_sensor = kzalloc(sizeof(struct registered_sensor), GFP_KERNEL);
         if (reg_sensor) {
+            struct registered_sensor *existing;
+            struct registered_sensor *tmp;
             strncpy(reg_sensor->name, sensor->info.name, sizeof(reg_sensor->name) - 1);
             reg_sensor->name[sizeof(reg_sensor->name) - 1] = '\0';
             reg_sensor->index = sensor_count;
@@ -8281,7 +8300,6 @@ int tx_isp_register_sensor_subdev(struct tx_isp_subdev *sd, struct tx_isp_sensor
 
             mutex_lock(&sensor_list_mutex);
             /* Replace any existing sensor with same name */
-            struct registered_sensor *existing, *tmp;
             list_for_each_entry_safe(existing, tmp, &sensor_list, list) {
                 if (strncmp(existing->name, reg_sensor->name, sizeof(existing->name)) == 0) {
                     list_del(&existing->list);
@@ -8551,6 +8569,7 @@ static void tisp_set_sensor_integration_time_short(uint32_t integration_time)
 /* tisp_set_ae1_ag - Set AE analog gain */
 static void tisp_set_ae1_ag(uint32_t arg1, uint32_t arg2, uint32_t arg3, uint32_t arg4)
 {
+    uint32_t gain_value;
     pr_debug("tisp_set_ae1_ag: Setting AE analog gain\n");
 
     /* Suppress per-frame I2C writes unless explicitly enabled and value changed */
@@ -8559,7 +8578,7 @@ static void tisp_set_ae1_ag(uint32_t arg1, uint32_t arg2, uint32_t arg3, uint32_
         return;
     }
 
-    uint32_t gain_value = data_d04ac;
+    gain_value = data_d04ac;
     if (last_gain_sent == gain_value)
         return;
 
@@ -8584,6 +8603,15 @@ static void JZ_Isp_Ae_Dg2reg(uint32_t pos, uint32_t *reg1, uint32_t dg_val, uint
 /* tisp_ae1_ctrls_update - EXACT Binary Ninja implementation */
 static int tisp_ae1_ctrls_update(void)
 {
+    uint32_t v1_1;
+    uint32_t v0_5;
+    uint32_t v0_9;
+    uint32_t v1_5;
+    uint32_t v1_6;
+    uint32_t dmsc_val;
+    uint32_t v0_19;
+    uint32_t v1_11;
+    uint32_t v1_2;
     pr_info("*** tisp_ae1_ctrls_update: CRITICAL AE CONTROL UPDATE ***\n");
 
     /* Binary Ninja: if (data_b0e10 != 1) return 0 */
@@ -8592,7 +8620,7 @@ static int tisp_ae1_ctrls_update(void)
     }
 
     /* Binary Ninja: int32_t $v1_1 = data_c4700 */
-    uint32_t v1_1 = data_c4700;
+    v1_1 = data_c4700;
 
     /* Binary Ninja: if (data_b2ed0 u< $v1_1) data_c4700 = *data_d04d4 else *data_d04d4 = $v1_1 */
     if (data_b2ed0 < v1_1) {
@@ -8602,8 +8630,8 @@ static int tisp_ae1_ctrls_update(void)
     }
 
     /* Binary Ninja: uint32_t $v0_5 = tisp_math_exp2(data_b2ed4, 0x10, 0xa) */
-    uint32_t v0_5 = tisp_math_exp2(data_b2ed4, 0x10, 0xa);
-    uint32_t v1_2 = data_c46fc;
+    v0_5 = tisp_math_exp2(data_b2ed4, 0x10, 0xa);
+    v1_2 = data_c46fc;
 
     /* Binary Ninja: if ($v0_5 u< $v1_2) data_c46fc = *data_d04d8 else *data_d04d8 = $v1_2 */
     if (v0_5 < v1_2) {
@@ -8613,7 +8641,7 @@ static int tisp_ae1_ctrls_update(void)
     }
 
     /* Binary Ninja: int32_t $v0_9 = data_c4704 */
-    uint32_t v0_9 = data_c4704;
+    v0_9 = data_c4704;
 
     /* Binary Ninja: if ($v0_9 u>= 0x401) data_c4704 = *data_d04dc else *data_d04dc = $v0_9 */
     if (v0_9 >= 0x401) {
@@ -8623,13 +8651,13 @@ static int tisp_ae1_ctrls_update(void)
     }
 
     /* Binary Ninja: int32_t $v1_5 = data_c4708; if ($v1_5 != *data_d04e0) *data_d04e0 = $v1_5 */
-    uint32_t v1_5 = data_c4708;
+    v1_5 = data_c4708;
     if (v1_5 != data_d04e0) {
         data_d04e0 = v1_5;
     }
 
     /* Binary Ninja: int32_t $v1_6 = data_c4730 */
-    uint32_t v1_6 = data_c4730;
+    v1_6 = data_c4730;
 
     /* Binary Ninja: if ($v1_6 u< data_b2ecc) data_c4730 = *data_d04e4 else *data_d04e4 = $v1_6 */
     if (v1_6 < data_b2ecc) {
@@ -8639,7 +8667,7 @@ static int tisp_ae1_ctrls_update(void)
     }
 
     /* Binary Ninja: dmsc_sp_ud_ns_thres_array processing */
-    uint32_t dmsc_val = dmsc_sp_ud_ns_thres_array;
+    dmsc_val = dmsc_sp_ud_ns_thres_array;
     if (dmsc_val < 0x400) {
         dmsc_sp_ud_ns_thres_array = data_d04e8;
     } else {
@@ -8647,7 +8675,7 @@ static int tisp_ae1_ctrls_update(void)
     }
 
     /* Binary Ninja: int32_t $v0_19 = data_c4734 */
-    uint32_t v0_19 = data_c4734;
+    v0_19 = data_c4734;
     if (v0_19 < 0x400) {
         data_c4734 = data_d04ec;
     } else {
@@ -8655,7 +8683,7 @@ static int tisp_ae1_ctrls_update(void)
     }
 
     /* Binary Ninja: int32_t $v1_11 = data_c4738; if ($v1_11 != *data_d04f0) *data_d04f0 = $v1_11 */
-    uint32_t v1_11 = data_c4738;
+    v1_11 = data_c4738;
     if (v1_11 != data_d04f0) {
         data_d04f0 = v1_11;
     }
@@ -8674,6 +8702,7 @@ static int tisp_ae1_process_impl(void)
     uint32_t var_38 = v0;
     uint32_t var_34 = v0;
 
+    uint32_t v0_1;
     pr_info("*** tisp_ae1_process_impl: CRITICAL AE PROCESSING WITH REGISTER WRITES ***\n");
 
     /* Binary Ninja: Complex AE processing loops and calculations */
@@ -8692,7 +8721,7 @@ static int tisp_ae1_process_impl(void)
     tisp_set_ae1_ag(0, 0, 0, 0);
 
     /* Binary Ninja: Complex cache management and effect processing */
-    uint32_t v0_1 = data_b0cec;
+    v0_1 = data_b0cec;
     EffectFrame = v0_1;
     EffectCount1 = v0_1;
 

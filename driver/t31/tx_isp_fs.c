@@ -51,6 +51,7 @@ int fs_slake_module(struct tx_isp_subdev *sd)
     int i;
 
     /* Binary Ninja: if (arg1 == 0 || arg1 u>= 0xfffff001) return 0xffffffea */
+    int result;
     if (!sd || (unsigned long)sd >= 0xfffff001) {
         return -EINVAL;
     }
@@ -58,7 +59,7 @@ int fs_slake_module(struct tx_isp_subdev *sd)
     pr_info("*** fs_slake_module: EXACT Binary Ninja implementation ***\n");
 
     /* Binary Ninja: result = 0 */
-    int result = 0;
+    result = 0;
 
     /* Binary Ninja: if (*(arg1 + 0xe4) != 1) */
     /* SAFE: Get FS device and check state */
@@ -341,10 +342,11 @@ int tx_isp_fs_probe(struct platform_device *pdev)
 
     for (i = 0; i < channel_count; i++) {
         /* SAFE: Use proper array indexing instead of offset calculation */
+        struct tx_isp_channel_config *channel_config;
         current_channel = &channels_buffer[i];
 
         /* SAFE: Use proper struct member access instead of raw pointer arithmetic */
-        struct tx_isp_channel_config *channel_config = &fs_dev->channel_configs[i];
+        channel_config = &fs_dev->channel_configs[i];
 
         /* SAFE: Simple null check with proper struct access */
         if (!current_channel || !channel_config) {

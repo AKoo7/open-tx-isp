@@ -12,6 +12,7 @@
 #include "include/tx_isp_sysfs.h"
 #include "../include/tx_isp/tx_isp_frame_channel.h"
 #include "../include/tx_isp/tx_isp_subdev.h"
+#include "include/tx_isp_debug.h"
 /* Keep the named T31 subdevice model pinned to the recovered legacy ABI. */
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 0, 0)
 TX_ISP_ABI_ASSERT(t31_subdev_name,
@@ -294,14 +295,6 @@ int tx_isp_send_event_to_remote(struct tx_isp_subdev *sd, unsigned int event, vo
     return -ENOIOCTLCMD;
 }
 
-/* Frame channel file operations */
-static const struct file_operations fs_channel_ops = {
-    .owner = THIS_MODULE,
-    .open = frame_channel_open,
-    .release = frame_channel_release,
-    .unlocked_ioctl = frame_channel_unlocked_ioctl,
-};
-
 
 
 
@@ -578,6 +571,7 @@ int isp_subdev_init_clks(struct tx_isp_subdev *sd, int clk_count)
             unsigned long clk_rate;
 
             /* CRITICAL: Get clock name and rate from platform data - Binary Ninja: *$s6_1 */
+            struct clk *clk;
             if (clk_configs && i < clk_count) {
                 clk_name = clk_configs[i].name;
                 clk_rate = clk_configs[i].rate;
@@ -596,7 +590,7 @@ int isp_subdev_init_clks(struct tx_isp_subdev *sd, int clk_count)
             }
 
             /* Binary Ninja: int32_t $v0_3 = private_clk_get(*(arg1 + 4), *$s6_1) */
-            struct clk *clk = clk_get(sd->module.dev, clk_name);
+            clk = clk_get(sd->module.dev, clk_name);
             clk_array[i] = clk;
 
             /* Binary Ninja: if ($v0_3 u< 0xfffff001) */
@@ -791,6 +785,8 @@ int tx_isp_subdev_init(struct platform_device *pdev, struct tx_isp_subdev *sd,
 {
     struct resource *res;
     struct resource *mem_res = NULL;
+    const char *dev_name_str;
+    struct tx_isp_subdev_platform_data *pdata;
     void __iomem *regs;
     int ret;
     int i;
@@ -855,18 +851,19 @@ int tx_isp_subdev_init(struct platform_device *pdev, struct tx_isp_subdev *sd,
 		}
 	}
 
-    const char *dev_name_str = dev_name(&pdev->dev);
+    dev_name_str = dev_name(&pdev->dev);
 
     /* VIC interrupt registration moved to auto-linking function where registers are actually mapped */
     pr_info("*** tx_isp_subdev_init: VIC interrupt registration will happen in auto-linking function ***\n");
 
     /* Binary Ninja: char* $s1_1 = arg1[0x16] */
     /* SAFE: Get platform data using proper kernel API */
-    struct tx_isp_subdev_platform_data *pdata = dev_get_platdata(&pdev->dev);
+    pdata = dev_get_platdata(&pdev->dev);
     if (pdata != NULL) {
         /* CRITICAL: Skip IRQ request for devices that don't have IRQ resources */
         /* Only VIC (isp-w02) and Core (isp-m0) have IRQ resources */
         const char *dev_name_str = dev_name(&pdev->dev);
+        const char *dev_name_check;
         if (strcmp(dev_name_str, "isp-w00") != 0 &&  /* VIN - no IRQ */
             strcmp(dev_name_str, "isp-w01") != 0 &&  /* CSI - no IRQ */
             strcmp(dev_name_str, "isp-fs") != 0) {   /* FS - no IRQ */
@@ -964,7 +961,7 @@ int tx_isp_subdev_init(struct platform_device *pdev, struct tx_isp_subdev *sd,
         /* Binary Ninja: uint32_t $v0_5 = zx.d(*$s1_1) */
         /* CRITICAL FIX: Only check interface_type for devices that have tx_isp_subdev_platform_data */
         /* FS device has custom fs_platform_data, so skip this check for it */
-        const char *dev_name_check = dev_name(&pdev->dev);
+        dev_name_check = dev_name(&pdev->dev);
         if (strcmp(dev_name_check, "isp-fs") != 0) {
             /* Only process interface_type for non-FS devices */
             if (pdata->interface_type == 1 || pdata->interface_type == 2) {
@@ -1080,6 +1077,7 @@ EXPORT_SYMBOL(tx_isp_subdev_deinit);
 /* Auto-linking function to connect subdevices to global ISP device */
 void tx_isp_subdev_auto_link(struct platform_device *pdev, struct tx_isp_subdev *sd)
 {
+    const char *dev_name;
     pr_info("*** tx_isp_subdev_auto_link: ENTRY - pdev=%p, sd=%p, ourISPdev=%p ***\n", pdev, sd, ourISPdev);
 
     if (!ourISPdev) {
@@ -1099,7 +1097,7 @@ void tx_isp_subdev_auto_link(struct platform_device *pdev, struct tx_isp_subdev 
         return;
     }
 
-    const char *dev_name = pdev->name;
+    dev_name = pdev->name;
 
     pr_info("*** tx_isp_subdev_auto_link: Auto-linking device '%s' to ourISPdev=%p ***\n", dev_name, ourISPdev);
     pr_info("*** DEBUG: Device name comparison - checking '%s' ***\n", dev_name);
@@ -1117,11 +1115,12 @@ void tx_isp_subdev_auto_link(struct platform_device *pdev, struct tx_isp_subdev 
         pr_info("*** LINKED CSI device: %p, regs: %p ***\n", csi_dev, sd->base);
 
     } else if (strcmp(dev_name, "isp-w02") == 0) {
+        struct tx_isp_vic_device *vic_dev;
         pr_info("*** DEBUG: VIC DEVICE NAME MATCHED! Processing VIC device linking ***\n");
 
         /* Link VIC device - actual device name is "isp-w02" not "tx-isp-vic" */
         /* CRITICAL FIX: Use direct pointer storage instead of container_of to avoid corruption */
-        struct tx_isp_vic_device *vic_dev = (struct tx_isp_vic_device *)tx_isp_get_subdevdata(sd);
+        vic_dev = (struct tx_isp_vic_device *)tx_isp_get_subdevdata(sd);
         pr_info("*** DEBUG: Retrieved vic_dev from subdev data: %p ***\n", vic_dev);
 
         if (!vic_dev || (unsigned long)vic_dev < 0x80000000 || (unsigned long)vic_dev >= 0xfffff000) {
@@ -1151,10 +1150,11 @@ void tx_isp_subdev_auto_link(struct platform_device *pdev, struct tx_isp_subdev 
 
         /* CRITICAL: Register VIC interrupt handler NOW that registers are mapped */
         if (sd->base && ourISPdev->vic_dev && ourISPdev->vic_dev->vic_regs) {
+            struct platform_device *vic_pdev;
             pr_info("*** VIC AUTO-LINK: Registers are mapped, registering interrupt handler ***\n");
 
             /* Find the VIC platform device */
-            struct platform_device *vic_pdev = NULL;
+            vic_pdev = NULL;
             if (sd->module.dev) {
                 vic_pdev = to_platform_device(sd->module.dev);
             } else {
@@ -1168,12 +1168,14 @@ void tx_isp_subdev_auto_link(struct platform_device *pdev, struct tx_isp_subdev 
 
     } else if (strcmp(dev_name, "isp-w00") == 0) {
         /* Link VIN device - device name is "isp-w00" */
+        struct tx_isp_vin_device *vin_dev;
+        extern struct tx_isp_subdev_ops vin_subdev_ops;
+        int slot;
         pr_info("*** DEBUG: VIN device name matched! Setting up VIN device ***\n");
-        struct tx_isp_vin_device *vin_dev = container_of(sd, struct tx_isp_vin_device, sd);
+        vin_dev = container_of(sd, struct tx_isp_vin_device, sd);
         ourISPdev->vin_dev = vin_dev;
 
         /* CRITICAL FIX: Set up VIN subdev ops structure immediately after linking */
-        extern struct tx_isp_subdev_ops vin_subdev_ops;
         vin_dev->sd.ops = &vin_subdev_ops;
         /* VIN subdev references ISP dev via ourISPdev global */
 
@@ -1183,7 +1185,7 @@ void tx_isp_subdev_auto_link(struct platform_device *pdev, struct tx_isp_subdev 
                 vin_dev->sd.ops->video ? vin_dev->sd.ops->video->s_stream : NULL);
 
         /* VIN - register using helper function instead of hardcoded index */
-        int slot = tx_isp_register_subdev_by_name(ourISPdev, &vin_dev->sd);
+        slot = tx_isp_register_subdev_by_name(ourISPdev, &vin_dev->sd);
         if (slot >= 0) {
             pr_info("*** REGISTERED VIN SUBDEV AT SLOT %d WITH VIDEO OPS ***\n", slot);
         } else {
@@ -1193,11 +1195,12 @@ void tx_isp_subdev_auto_link(struct platform_device *pdev, struct tx_isp_subdev 
     } else if (strcmp(dev_name, "isp-fs") == 0) {
         /* Link FS device - device name is now "isp-fs" */
         struct tx_isp_fs_device *fs_dev = container_of(sd, struct tx_isp_fs_device, subdev);
+        int slot;
         ourISPdev->fs_dev = (struct frame_source_device *)fs_dev;
         pr_info("*** LINKED FS device: %p ***\n", fs_dev);
 
         /* FS - register using helper function instead of hardcoded index */
-        int slot = tx_isp_register_subdev_by_name(ourISPdev, sd);
+        slot = tx_isp_register_subdev_by_name(ourISPdev, sd);
         if (slot >= 0) {
             pr_info("*** REGISTERED FS SUBDEV AT SLOT %d WITH SUBDEV OPS ***\n", slot);
         } else {
@@ -1206,10 +1209,11 @@ void tx_isp_subdev_auto_link(struct platform_device *pdev, struct tx_isp_subdev 
 
     } else if (strcmp(dev_name, "isp-m0") == 0) {
         /* Link Core device - device name is now "isp-m0" */
+        struct tx_isp_core_device *core_dev;
         pr_info("*** DEBUG: CORE device name matched! Setting up Core device ***\n");
 
         /* CRITICAL: Get core device from subdev private data */
-        struct tx_isp_core_device *core_dev = tx_isp_get_subdevdata(sd);
+        core_dev = tx_isp_get_subdevdata(sd);
         if (core_dev) {
             /* Map core registers directly to core device */
             if (sd->base) {
@@ -1228,10 +1232,11 @@ void tx_isp_subdev_auto_link(struct platform_device *pdev, struct tx_isp_subdev 
     } else {
         /* Any device not matching isp-w*, isp-m0 is assumed to be a sensor */
         /* CRITICAL: This is a sensor device - check if already registered to prevent duplicates */
+        bool already_registered;
         pr_info("*** DETECTED SENSOR DEVICE: '%s' - checking for existing registration ***\n", dev_name);
 
         /* CRITICAL FIX: Check if this subdev is already registered to prevent duplicates */
-        bool already_registered = false;
+        already_registered = false;
         for (int i = 5; i < ISP_MAX_SUBDEVS; i++) {
             if (ourISPdev->subdevs[i] == sd) {
                 already_registered = true;
@@ -1361,6 +1366,7 @@ int __init tx_isp_subdev_platform_init(void)
 {
     int ret;
 
+    extern struct platform_driver tx_isp_fs_platform_driver;
     pr_info("*** TX ISP SUBDEV PLATFORM DRIVERS REGISTRATION ***\n");
 
     /* Register CSI platform driver */
@@ -1385,7 +1391,6 @@ int __init tx_isp_subdev_platform_init(void)
     }
 
     /* Register FS platform driver - CRITICAL for /proc/jz/isp/isp-fs entry */
-    extern struct platform_driver tx_isp_fs_platform_driver;
     ret = platform_driver_register(&tx_isp_fs_platform_driver);
     if (ret) {
         pr_err("Failed to register FS platform driver: %d\n", ret);
@@ -1416,11 +1421,11 @@ err_unregister_csi:
 
 void __exit tx_isp_subdev_platform_exit(void)
 {
+    extern struct platform_driver tx_isp_fs_platform_driver;
     pr_info("*** TX ISP SUBDEV PLATFORM DRIVERS UNREGISTRATION ***\n");
 
     /* Unregister all platform drivers in reverse order */
     platform_driver_unregister(&tx_isp_core_driver);
-    extern struct platform_driver tx_isp_fs_platform_driver;
     platform_driver_unregister(&tx_isp_fs_platform_driver);
     platform_driver_unregister(&tx_isp_vin_driver);
     platform_driver_unregister(&tx_isp_vic_driver);

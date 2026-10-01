@@ -1572,58 +1572,6 @@ out:
 
 
 
-/* Move vic_proc_write outside of vic_snapraw */
-static ssize_t vic_proc_write(struct file *file, const char __user *buf, size_t count, loff_t *ppos)
-{
-    struct tx_isp_subdev *sd = PDE_DATA(file->f_inode);
-    char cmd[32];
-    unsigned int savenum = 0;
-    int ret;
-
-    if (count >= sizeof(cmd))
-        return -EINVAL;
-
-    if (copy_from_user(cmd, buf, count))
-        return -EFAULT;
-
-    cmd[count] = '\0';
-    cmd[count-1] = '\0'; // Remove trailing newline
-
-    // Parse command format: "<cmd> <savenum>"
-    ret = sscanf(cmd, "%s %u", cmd, &savenum);
-    if (ret != 2) {
-        pr_info("\t\t\t please use this cmd: \n");
-        pr_info("\t\"echo snapraw savenum > /proc/jz/isp/isp-w02\"\n");
-        pr_info("\t\"echo saveraw savenum > /proc/jz/isp/isp-w02\"\n");
-        return count;
-    }
-
-    if (strcmp(cmd, "snapraw") == 0) {
-        if (savenum < 2)
-            savenum = 1;
-
-        // Save raw frames
-        ret = vic_snapraw(sd, savenum);
-    }
-    else if (strcmp(cmd, "saveraw") == 0) {
-        if (savenum < 2)
-            savenum = 1;
-
-        // Save processed frames
-        ret = vic_saveraw(sd, savenum);
-    }
-    else {
-        pr_info("help:\n");
-        pr_info("\t cmd:\n");
-        pr_info("\t\t snapraw\n");
-        pr_info("\t\t saveraw\n");
-        pr_info("\t\t\t please use this cmd: \n");
-        pr_info("\t\"echo cmd savenum > /proc/jz/isp/isp-w02\"\n");
-    }
-
-    return count;
-}
-
 
 /* tx_isp_vic_start - Following EXACT Binary Ninja flow with reference driver sequences */
 int tx_isp_vic_start(struct tx_isp_vic_device *vic_dev)
@@ -1973,12 +1921,13 @@ dvp_apply:
 
     } else if (interface_type == TX_SENSOR_DATA_INTERFACE_BT601) {
         /* BT601 - Binary Ninja 00010688-000107d4 */
+        int gpio_mode;
+        u32 bt601_config;
         pr_info("BT601 interface configuration\n");
 
         writel(1, vic_regs + 0xc);
 
-        int gpio_mode = sensor_attr->bt601bus.gpio;
-        u32 bt601_config;
+        gpio_mode = sensor_attr->bt601bus.gpio;
 
         if (gpio_mode == 0) {
             bt601_config = 0x800c8000;
@@ -3145,7 +3094,6 @@ extern ssize_t isp_vic_cmd_set(struct file *file, const char __user *buf, size_t
 extern int dump_isp_vic_frd_open(struct inode *inode, struct file *file);
 extern int vic_chardev_open(struct inode *inode, struct file *file);
 extern int vic_chardev_release(struct inode *inode, struct file *file);
-extern ssize_t vic_proc_write(struct file *file, const char __user *buf, size_t count, loff_t *ppos);
 
 /* VIC sensor operations structure - MISSING from original implementation */
 struct tx_isp_subdev_sensor_ops vic_sensor_ops = {
@@ -3174,16 +3122,6 @@ struct tx_isp_subdev_ops vic_subdev_ops = {
 };
 EXPORT_SYMBOL(vic_subdev_ops);
 
-
-/* VIC FRD file operations - EXACT Binary Ninja implementation */
-const TX_ISP_PROC_OPS isp_vic_frd_fops = {
-    TX_ISP_PROC_OWNER
-    TX_ISP_PROC_LSEEK = seq_lseek,      /* private_seq_lseek from hex dump */
-    TX_ISP_PROC_READ = seq_read,         /* private_seq_read from hex dump */
-    TX_ISP_PROC_WRITE = isp_vic_cmd_set, /* OEM: write handler for snapraw/saveraw */
-    TX_ISP_PROC_OPEN = dump_isp_vic_frd_open,
-    TX_ISP_PROC_RELEASE = single_release,
-};
 
 /* Wrapper fops for /proc/jz/isp/isp-w02 created from tx_isp_proc.c.
  * PDE_DATA is the tx_isp_dev*, but isp_vic_frd_show / isp_vic_cmd_set
@@ -3221,15 +3159,6 @@ const TX_ISP_PROC_OPS isp_vic_frd_fops_wrapper = {
     TX_ISP_PROC_WRITE = isp_vic_cmd_set_wrapper,
     TX_ISP_PROC_OPEN = dump_isp_vic_frd_open_wrapper,
     TX_ISP_PROC_RELEASE = single_release,
-};
-
-/* VIC W02 proc file operations - FIXED for proper proc interface */
-const struct file_operations isp_w02_proc_fops = {
-    .owner = THIS_MODULE,
-    .open = vic_chardev_open,
-    .release = vic_chardev_release,
-    .write = vic_proc_write,
-    .llseek = default_llseek,
 };
 
 /* Implementation of the open/release functions */

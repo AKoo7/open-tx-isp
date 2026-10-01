@@ -6,6 +6,7 @@
 #include "include/tx_isp.h"
 #include "include/tx_isp_vic.h"
 #include "include/tx_isp_vin.h"
+#include "include/tx_isp_debug.h"
 
 #define TX_ISP_PROC_ISP_DIR "jz/isp"
 #define TX_ISP_PROC_ISP_W00_FILE "isp-w00"
@@ -125,94 +126,6 @@ static const TX_ISP_PROC_OPS tx_isp_proc_w01_fops = {
     TX_ISP_PROC_OPEN = tx_isp_proc_w01_open,
     TX_ISP_PROC_READ = seq_read,
     TX_ISP_PROC_WRITE = tx_isp_proc_w01_write,
-    TX_ISP_PROC_LSEEK = seq_lseek,
-    TX_ISP_PROC_RELEASE = single_release,
-};
-
-/* ISP-W02 file operations - CRITICAL: Match reference driver output format */
-static int tx_isp_proc_w02_show(struct seq_file *m, void *v)
-{
-    struct tx_isp_dev *isp = m->private;
-
-    if (!isp) {
-        /* Output expected format: frame_counter, 0 on first line, then 13 zeros */
-        seq_printf(m, " 0, 0\n");
-        seq_printf(m, "0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0\n");
-        return 0;
-    }
-
-    /* CRITICAL: Output exact format as reference driver:
-     * Line 1: " frame_count, 0"
-     * Line 2: "0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0"
-     * The frame_count increments to show ISP is processing frames
-     */
-    seq_printf(m, " %u, 0\n", isp->frame_count);
-    seq_printf(m, "0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0\n");
-
-    /* Debug: Log what we're outputting */
-    pr_debug("isp-w02 proc: outputting frame_count=%u\n", isp->frame_count);
-
-    return 0;
-}
-
-static ssize_t tx_isp_proc_w02_write(struct file *file, const char __user *buffer,
-                                     size_t count, loff_t *ppos)
-{
-    struct seq_file *m = file->private_data;
-    struct tx_isp_dev *isp = m->private;
-    char cmd[64];
-
-    if (count >= sizeof(cmd))
-        return -EINVAL;
-
-    if (copy_from_user(cmd, buffer, count))
-        return -EFAULT;
-
-    cmd[count] = '\0';
-
-    pr_info("ISP W02 proc command: %s\n", cmd);
-
-    /* Handle common ISP commands that userspace might send */
-    if (!strncmp(cmd, "snapraw", 7) || !strncmp(cmd, "saveraw", 7) || !strncmp(cmd, "snapnv12", 8)) {
-        char op[16] = {0};
-        unsigned int savenum = 0;
-        int parsed = sscanf(cmd, "%15s %u", op, &savenum);
-        if (parsed >= 1) {
-            if (savenum < 1) savenum = 1;
-            if (isp && isp->vic_dev) {
-                int rc = 0;
-                if (!strcmp(op, "snapnv12"))
-                    rc = vic_snapnv12(&isp->vic_dev->sd, savenum);
-                else
-                    rc = vic_snapraw(&isp->vic_dev->sd, savenum);
-                pr_info("ISP W02 %s: savenum=%u rc=%d\n", op, savenum, rc);
-            } else {
-                pr_err("ISP W02 %s: VIC device not available\n", op[0] ? op : "snapraw");
-            }
-        }
-    } else if (strncmp(cmd, "enable", 6) == 0) {
-        pr_info("ISP W02 enable command received\n");
-        if (isp)
-            isp->streaming_enabled = true;
-    } else if (strncmp(cmd, "disable", 7) == 0) {
-        pr_info("ISP W02 disable command received\n");
-        if (isp)
-            isp->streaming_enabled = false;
-    }
-
-    return count;
-}
-
-static int tx_isp_proc_w02_open(struct inode *inode, struct file *file)
-{
-    return single_open(file, tx_isp_proc_w02_show, PDE_DATA(inode));
-}
-
-static const TX_ISP_PROC_OPS tx_isp_proc_w02_fops = {
-    TX_ISP_PROC_OWNER
-    TX_ISP_PROC_OPEN = tx_isp_proc_w02_open,
-    TX_ISP_PROC_READ = seq_read,
-    TX_ISP_PROC_WRITE = tx_isp_proc_w02_write,
     TX_ISP_PROC_LSEEK = seq_lseek,
     TX_ISP_PROC_RELEASE = single_release,
 };
@@ -375,12 +288,57 @@ int tisp_isp_info_show(struct seq_file *m);
 
 static int tx_isp_proc_m0_show(struct seq_file *m, void *v)
 {
+    struct tx_isp_dev *isp = m->private;
+    struct tx_isp_sensor *sensor = isp ? isp->sensor : NULL;
+    int ret;
+
     /*
      * Stock isp-m0 is the OEM "ISP INFO" key/value dump (isp_info_show)
-     * that userspace parses by line prefix (timps daynight, daynightd,
-     * isp-inspector).  It printed only the frame counter here.
+     * that userspace parses by line prefix.  It printed only the frame
+     * counter here.  Every label, its order and its unit follow stock;
+     * the consumers and the lines they read:
+     *   timps daynight.c (first match, column 0, IMP log2 gains):
+     *     ISP Runing Mode, SENSOR [Max] Integration Time, [MAX] SENSOR
+     *     analog gain, SENSOR digital gain, [MAX] ISP digital gain,
+     *     Brightness
+     *   timps dn-isp-log / dn-irprobe, thingino timps-dn-isp-log (sed
+     *     "^label", first match): the same exposure and gain lines
+     *   thingino daynightd parse_isp_m0 (strstr, LAST match wins):
+     *     the exposure and gain lines, ISP EV value[ log2| us], the
+     *     three ISP WB lines; EV log2 is its decision signal, the
+     *     integration ratio its fallback
+     *   thingino isp-inspector json-isp-m0.cgi / isp-sse.cgi ("^label",
+     *     first match): every line from SENSOR NAME to Mirror/Flip
+     *   thingino-devscripts daylightsample (awk /label/, every match):
+     *     ISP EV value us, SENSOR analog/digital gain, ISP WB weighted
+     *     r/bgain, ISP Runing Mode
      */
-    return tisp_isp_info_show(m);
+    ret = tisp_isp_info_show(m);
+    if (ret || !sensor)
+        return ret;
+
+    /*
+     * The AE state of thingino 0005-t31-isp-m0-expose-ae-state (sensor
+     * attr, gains in the sensor driver's units), kept as a diagnostic
+     * after the stock block.  The labels must not contain any of the
+     * strings above: daynightd matches anywhere in the line and keeps the
+     * last match, daylightsample prints every match, so a repeated stock
+     * label here would replace the stock (IMP log2) gains.
+     */
+    seq_printf(m, "open-tx-isp attr day/night : %s\n",
+               isp->day_night ? "Night" : "Day");
+    seq_printf(m, "open-tx-isp attr integration time : %u lines\n",
+               (unsigned)sensor->attr.integration_time);
+    seq_printf(m, "open-tx-isp attr max integration time : %u lines\n",
+               (unsigned)sensor->attr.max_integration_time);
+    seq_printf(m, "open-tx-isp attr analog gain : %u\n",
+               (unsigned)sensor->attr.again);
+    seq_printf(m, "open-tx-isp attr max analog gain : %u\n",
+               (unsigned)sensor->attr.max_again);
+    seq_printf(m, "open-tx-isp attr digital gain : %u\n",
+               (unsigned)sensor->attr.dgain);
+
+    return 0;
 }
 
 static ssize_t tx_isp_proc_m0_write(struct file *file, const char __user *buffer,

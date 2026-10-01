@@ -9504,8 +9504,23 @@ static void regtrace_t23_vin_proc_exit(void)
 static unsigned char regtrace_tx_isp_private[0x200] __attribute__((aligned(4)));
 static int regtrace_tx_isp_misc_registered;
 
+/*
+ * Whether libimp has registered a sensor through VIDIOC_REGISTER_SENSOR.
+ * The vendor libimp reports -1 from VIDIOC_G_INPUT until then, and uses that
+ * to gate IMP_ISP_DisableSensor()/EnableSensor(). The sensor module publishes
+ * its i2c driver to the ISP at boot (for the sensorN/ registry), so the client
+ * exists long before libimp adds the sensor: reporting it early made
+ * DisableSensor() decrement its own state below zero, after which every
+ * AddSensor() failed with "Sensor is runing".
+ */
+static int regtrace_t23_sensor_registered;
+
 #define REGTRACE_VIDIOC_ENUMINPUT 0xc050561aU
 #define REGTRACE_VIDIOC_GET_SENSOR_INPUT 0x40045626U
+#define REGTRACE_T23_REGISTER_SENSOR 0x805056c1U
+#define REGTRACE_T23_REGISTER_SENSOR_ALT 0x805456c1U
+#define REGTRACE_T23_DEL_SENSOR 0x805056c2U
+#define REGTRACE_T23_DEL_SENSOR_ALT 0x805456c2U
 #define REGTRACE_TX_ISP_GET_BUF 0x800c56d5U
 #define REGTRACE_TX_ISP_SET_BUF 0x800c56d4U
 #define REGTRACE_V4L2_INPUT_TYPE_CAMERA 2U
@@ -14308,7 +14323,7 @@ static long regtrace_tx_isp_setbuf(unsigned long arg)
 
 static long regtrace_tx_isp_get_sensor_input(unsigned long arg)
 {
-    u32 input = 0;
+    u32 input = regtrace_t23_sensor_registered ? 0U : 0xffffffffU;
 
     if (!arg)
         return -EINVAL;
@@ -14559,6 +14574,18 @@ static long regtrace_tx_isp_ioctl(struct file *file, unsigned int cmd, unsigned 
         regtrace_t23_direct_vic_input_stream(0, "tx-isp-streamoff");
         regtrace_t23_tisp_stream_regs(0, -1, "tx-isp-streamoff");
         regtrace_t23_stream_irq_gate(0, "tx-isp-streamoff", -1);
+    }
+
+    if (cmd == REGTRACE_T23_REGISTER_SENSOR ||
+        cmd == REGTRACE_T23_REGISTER_SENSOR_ALT) {
+        regtrace_t23_sensor_registered = 1;
+        return 0;
+    }
+
+    if (cmd == REGTRACE_T23_DEL_SENSOR ||
+        cmd == REGTRACE_T23_DEL_SENSOR_ALT) {
+        regtrace_t23_sensor_registered = 0;
+        return 0;
     }
 
     ret = tx_isp_unlocked_ioctl(file, cmd, arg);
@@ -15395,8 +15422,32 @@ static long regtrace_framechan_ioctl(struct file *file, unsigned int cmd, unsign
             printk(KERN_WARNING "tx_isp_t23_recovered: framechan%d streamoff arg=0x%lx ret=0\n",
                    channel, arg);
         break;
-    case REGTRACE_FRAMECHAN_WAIT:
+    case REGTRACE_FRAMECHAN_WAIT: {
+        /*
+         * The legacy wait blocks until a frame is done; libimp's
+         * frame_pooling_thread loops on it and OpenIMP waits on it the same
+         * way. Returning immediately added no waiting at all and made those
+         * loops spin at 100% CPU, so wait on the frame-done queue exactly as
+         * regtrace_framechan_repair_dqbuf() does - without consuming the
+         * frame, which the following DQBUF does.
+         */
+        uint32_t ready = 0;
+
+        if (channel >= 0 && channel < REGTRACE_FRAMECHAN_COUNT &&
+            regtrace_t23_source_frame_done) {
+            if (!regtrace_framechan_done_count[channel])
+                wait_event_interruptible_timeout(
+                    regtrace_framechan_done_wait[channel],
+                    regtrace_framechan_done_count[channel] ||
+                        !regtrace_framechan_streaming[channel],
+                    msecs_to_jiffies(1000));
+            ready = regtrace_framechan_done_count[channel];
+        }
+        if (arg && copy_to_user((void __user *)(uintptr_t)arg, &ready,
+                                sizeof(ready)))
+            ret = -EFAULT;
         break;
+    }
     default:
         printk(KERN_INFO "tx_isp_t23_recovered: framechan%d ioctl cmd=0x%x arg=0x%lx ret=0 pid=%d comm=%s\n",
                channel, cmd, arg, current->pid, current->comm);
