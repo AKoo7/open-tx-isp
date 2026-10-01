@@ -14864,6 +14864,16 @@ static uint32_t regtrace_framechan_done_unmatched[REGTRACE_FRAMECHAN_COUNT];
 static bool regtrace_framechan_streaming[REGTRACE_FRAMECHAN_COUNT];
 static wait_queue_head_t regtrace_framechan_done_wait[REGTRACE_FRAMECHAN_COUNT];
 static spinlock_t regtrace_framechan_done_lock;
+/*
+ * Frame channels that are between STREAMON and STREAMOFF, one bit per
+ * channel, and the file that started each of them. The ISP, VIC, sensor
+ * and their interrupts are shared by all channels: like the OEM driver,
+ * a channel STREAMOFF only stops that channel, and the shared pipeline
+ * stops with the last one. Serialised by regtrace_framechan_stream_lock.
+ */
+static DEFINE_MUTEX(regtrace_framechan_stream_lock);
+static uint32_t regtrace_framechan_stream_mask;
+static struct file *regtrace_framechan_stream_owner[REGTRACE_FRAMECHAN_COUNT];
 static struct regtrace_t23_frame_image_format
     regtrace_t23_framechan_formats[REGTRACE_FRAMECHAN_COUNT];
 static bool regtrace_t23_framechan_format_ready[REGTRACE_FRAMECHAN_COUNT];
@@ -15245,6 +15255,56 @@ static long regtrace_framechan_repair_dqbuf(int channel, unsigned long arg,
     return 0;
 }
 
+static void regtrace_framechan_stream_on(struct file *file, int channel)
+{
+    mutex_lock(&regtrace_framechan_stream_lock);
+    if (channel >= 0 && channel < REGTRACE_FRAMECHAN_COUNT) {
+        regtrace_framechan_stream_mask |= 1U << channel;
+        regtrace_framechan_stream_owner[channel] = file;
+    }
+    regtrace_framechan_set_streaming(channel, true);
+    regtrace_t23_enable_stream_clks();
+    if (!regtrace_t23_vic_streaming)
+        regtrace_t23_source_input_stream(1, "framechan-streamon");
+    regtrace_t23_direct_vic_input_stream(1, "framechan-streamon");
+    regtrace_t23_tisp_stream_regs(1, channel, "framechan-streamon");
+    regtrace_t23_set_msca_stream(channel, 1, "framechan-streamon");
+    regtrace_t23_direct_vic_mdma_stream(channel, 1, "framechan-streamon");
+    regtrace_t23_stream_irq_gate(1, "framechan-streamon", channel);
+    mutex_unlock(&regtrace_framechan_stream_lock);
+}
+
+/*
+ * Stop one frame channel. The OEM ispcore_frame_channel_streamoff() only
+ * resets the stopping channel's queue; the core interrupt, which drains the
+ * MSCA completion FIFOs of every channel, the TISP, the VIC and the sensor
+ * keep running for the others. Stop those only with the last channel.
+ */
+static void regtrace_framechan_stream_off(int channel, const char *reason)
+{
+    bool last;
+
+    mutex_lock(&regtrace_framechan_stream_lock);
+    if (channel >= 0 && channel < REGTRACE_FRAMECHAN_COUNT) {
+        regtrace_framechan_stream_mask &= ~(1U << channel);
+        regtrace_framechan_stream_owner[channel] = NULL;
+    }
+    last = !regtrace_framechan_stream_mask;
+    regtrace_framechan_set_streaming(channel, false);
+    if (last)
+        regtrace_t23_direct_vic_mdma_stream(channel, 0, reason);
+    regtrace_t23_set_msca_stream(channel, 0, reason);
+    if (last) {
+        regtrace_t23_source_input_stream(0, reason);
+        regtrace_t23_direct_vic_input_stream(0, reason);
+        regtrace_t23_tisp_stream_regs(0, -1, reason);
+        regtrace_t23_stream_irq_gate(0, reason, channel);
+    }
+    printk(KERN_INFO "tx_isp_t23_recovered: framechan%d stream off, still streaming mask=0x%x reason=%s\n",
+           channel, regtrace_framechan_stream_mask, reason ? reason : "?");
+    mutex_unlock(&regtrace_framechan_stream_lock);
+}
+
 static int regtrace_framechan_index_from_misc(struct miscdevice *mdev)
 {
     int i;
@@ -15285,7 +15345,14 @@ static int regtrace_framechan_release(struct inode *inode, struct file *file)
     ctx = file ? file->private_data : NULL;
     if (ctx)
         channel = ctx->channel;
-    regtrace_framechan_set_streaming(channel, false);
+    /*
+     * Like the OEM frame_channel_release(), a close stops the channel if
+     * this file started it. Another open file of the same channel (or of
+     * another channel) does not touch the stream.
+     */
+    if (file && channel >= 0 && channel < REGTRACE_FRAMECHAN_COUNT &&
+        regtrace_framechan_stream_owner[channel] == file)
+        regtrace_framechan_stream_off(channel, "framechan-release");
     if (file)
         file->private_data = NULL;
     printk(KERN_INFO "tx_isp_t23_recovered: release /dev/framechan%d pid=%d comm=%s\n",
@@ -15378,30 +15445,14 @@ static long regtrace_framechan_ioctl(struct file *file, unsigned int cmd, unsign
             channel, arg, file && (file->f_flags & O_NONBLOCK));
         break;
     case REGTRACE_T23_VIDIOC_STREAMON:
-        regtrace_framechan_set_streaming(channel, true);
-        regtrace_t23_enable_stream_clks();
-        if (!regtrace_t23_vic_streaming)
-            regtrace_t23_source_input_stream(1, "framechan-streamon");
-        regtrace_t23_direct_vic_input_stream(1, "framechan-streamon");
-        regtrace_t23_tisp_stream_regs(1, channel, "framechan-streamon");
-        regtrace_t23_set_msca_stream(channel, 1, "framechan-streamon");
-        regtrace_t23_direct_vic_mdma_stream(channel, 1, "framechan-streamon");
-        regtrace_t23_stream_irq_gate(1, "framechan-streamon", channel);
+        regtrace_framechan_stream_on(file, channel);
         if (regtrace_t23_log_framechan_payloads)
             printk(KERN_WARNING "tx_isp_t23_recovered: framechan%d streamon arg=0x%lx ret=0 core=%p vic=%p csi=%p fs=%p\n",
                    channel, arg, regtrace_t23_core_sd, regtrace_t23_vic_sd,
                    regtrace_t23_csi_sd, regtrace_t23_fs_sd);
         break;
     case REGTRACE_T23_VIDIOC_STREAMOFF:
-        regtrace_framechan_set_streaming(channel, false);
-        regtrace_t23_direct_vic_mdma_stream(channel, 0, "framechan-streamoff");
-        regtrace_t23_set_msca_stream(channel, 0, "framechan-streamoff");
-        if (!regtrace_t23_msca_ch_en) {
-            regtrace_t23_source_input_stream(0, "framechan-streamoff");
-            regtrace_t23_direct_vic_input_stream(0, "framechan-streamoff");
-        }
-        regtrace_t23_tisp_stream_regs(0, channel, "framechan-streamoff");
-        regtrace_t23_stream_irq_gate(0, "framechan-streamoff", channel);
+        regtrace_framechan_stream_off(channel, "framechan-streamoff");
         if (regtrace_t23_log_framechan_payloads)
             printk(KERN_WARNING "tx_isp_t23_recovered: framechan%d streamoff arg=0x%lx ret=0\n",
                    channel, arg);
