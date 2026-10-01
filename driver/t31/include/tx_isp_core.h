@@ -1,6 +1,14 @@
 #ifndef __TX_ISP_CORE_H__
 #define __TX_ISP_CORE_H__
 
+/* Forward declarations so the prototypes below do not each declare their own
+ * parameter-scoped struct type when this header is included first. */
+struct platform_device;
+struct tx_isp_subdev;
+struct tx_isp_config;
+struct tx_isp_sensor_attribute;
+struct tx_isp_channel_attr;
+
 /* Core Functions */
 int tx_isp_core_remove(struct platform_device *pdev);
 int tx_isp_core_probe(struct platform_device *pdev);

@@ -5560,8 +5560,8 @@ static uint32_t tisp_ae_target(uint32_t cur_ev_q, uint32_t q)
  *
  * OEM calling convention: tisp_ae_target(cur_ev_q, ev_list_ptr, at_list_ptr, q)
  */
-static uint32_t tisp_ae_target_ex(uint32_t cur_ev_q, uint32_t *ev_list,
-                                   uint32_t *at_list, uint32_t q)
+static uint32_t tisp_ae_target_ex(uint32_t cur_ev_q, const uint32_t *ev_list,
+                                   const uint32_t *at_list, uint32_t q)
 {
     uint32_t qm = q & 31;
     uint32_t cur_ev = cur_ev_q >> qm;

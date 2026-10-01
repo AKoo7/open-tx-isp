@@ -341,8 +341,8 @@ struct tx_isp_module {
 	struct device *dev;
 	const char *name;
 	struct miscdevice miscdev;
-	struct file_operations *ops;
-	struct file_operations *debug_ops;
+	const struct file_operations *ops;
+	const struct file_operations *debug_ops;
 	struct tx_isp_module *submods[TX_ISP_ENTITY_ENUM_MAX_DEPTH];
 	void *parent;
 	int (*notify)(struct tx_isp_module *module, unsigned int notification, void *data);
@@ -740,17 +740,17 @@ struct v4l2_subdev;
 int tx_isp_send_event_to_remote(struct tx_isp_subdev *sd, unsigned int event, void *data);
 
 
-static inline void tx_isp_set_module_nodeops(struct tx_isp_module *module, struct file_operations *ops)
+static inline void tx_isp_set_module_nodeops(struct tx_isp_module *module, const struct file_operations *ops)
 {
 	module->ops = ops;
 }
 
-static inline void tx_isp_set_module_debugops(struct tx_isp_module *module, struct file_operations *ops)
+static inline void tx_isp_set_module_debugops(struct tx_isp_module *module, const struct file_operations *ops)
 {
 	module->debug_ops = ops;
 }
 
-static inline void tx_isp_set_subdev_nodeops(struct tx_isp_subdev *sd, struct file_operations *ops)
+static inline void tx_isp_set_subdev_nodeops(struct tx_isp_subdev *sd, const struct file_operations *ops)
 {
 	tx_isp_set_module_nodeops(&sd->module, ops);
 }

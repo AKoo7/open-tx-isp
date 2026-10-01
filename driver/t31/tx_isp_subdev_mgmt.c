@@ -72,7 +72,7 @@ struct isp_subdev_data {
     uint32_t dst_index;       /* 0x0C: Destination index */
     struct miscdevice misc;   /* 0x10: Misc device (starts at 0xC, but we pad) */
     char device_name[16];     /* 0x20: Device name */
-    void *file_ops;           /* 0x30: File operations pointer */
+    const void *file_ops;     /* 0x30: File operations pointer */
     void *proc_ops;           /* 0x34: Proc operations pointer */
     char padding[0x100];      /* Padding to match Binary Ninja expectations */
 };
