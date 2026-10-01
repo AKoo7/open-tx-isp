@@ -7321,6 +7321,7 @@ int32_t __frame_channel_vb2_streamoff(void *arg1, int32_t arg2, int32_t arg3);
 int32_t frame_channel_release(uint32_t a0, uintptr_t a1, uint32_t a2);
 int32_t fs_slake_module(void *arg1);
 static long frame_channel_unlocked_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
+static unsigned int frame_channel_poll(struct file *file, poll_table *wait);
 static bool t21_isp_valid_ptr(const void *ptr);
 void sensor_hw_reset_enable(void);
 int32_t sensor_hw_reset_disable(void);
@@ -7859,6 +7860,8 @@ static void regtrace_patch_relocated_data(void)
     *(const void **)((char *)fs_internal_ops + 0x0) = (const void *)&fs_activate_module;
     *(const void **)((char *)fs_internal_ops + 0x4) = (const void *)&fs_slake_module;
     *(const void **)((char *)fs_subdev_ops + 0x10) = (const void *)&fs_internal_ops;
+    BUILD_BUG_ON(offsetof(struct file_operations, poll) != 0x1c);
+    *(const void **)((char *)fs_channel_ops + 0x1c) = (const void *)&frame_channel_poll;
     *(const void **)((char *)fs_channel_ops + 0x20) = (const void *)&frame_channel_unlocked_ioctl;
     *(const void **)((char *)fs_channel_ops + 0x2c) = (const void *)&frame_channel_open;
     *(const void **)((char *)fs_channel_ops + 0x34) = (const void *)&frame_channel_release;
@@ -13333,7 +13336,7 @@ int32_t apical_isp_core_ops_s_ctrl(int32_t *arg1, int32_t *arg2, int32_t arg3)
 	case 0x08000008:
 	case 0x08000022:
 	case 0x08000023:
-	case 0x0800002a:
+	case 0x0800002c: /* stock: no-op (OpenIMP sends Set/GetIntegrationTime here) */
 	case 0x0800002e:
 	case 0x08000060:
 	case 0x08000061:
@@ -13372,7 +13375,7 @@ int32_t apical_isp_core_ops_s_ctrl(int32_t *arg1, int32_t *arg2, int32_t arg3)
 	}
 	case 0x0800002b:
 		return apical_isp_gamma_s_attr((uintptr_t)arg2);
-	case 0x0800002c:
+	case 0x0800002a: /* stock decision tree at 0x3e18: 0x2a = highlight depress */
 		return tisp_s_Hilightdepress(value);
 	case 0x0800002d:
 		return apical_isp_ae_zone_weight_s_attr(arg2);
@@ -16721,6 +16724,25 @@ int32_t fs_slake_module(void *arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000008858 origin=model_output original=frame_channel_unlocked_ioctl */
+/*
+ * The stock fs_channel_ops has no .poll, so poll()/select() on
+ * /dev/framechanN always reported readable.  OpenIMP's frame worker
+ * select()s before its non-blocking DQBUF; wait on the channel's done queue.
+ */
+static unsigned int frame_channel_poll(struct file *file, poll_table *wait)
+{
+	struct t21_frame_channel_abi *ch = file->private_data;
+
+	if (!t21_isp_valid_ptr(ch))
+		return POLLERR;
+	poll_wait(file, (wait_queue_head_t *)ch->wait_queue, wait);
+	if (!(ch->streaming & 1))
+		return POLLERR;
+	if (!list_empty(&ch->done))
+		return POLLIN | POLLRDNORM;
+	return 0;
+}
+
 static long frame_channel_unlocked_ioctl(struct file *file, unsigned int cmd,
 					 unsigned long arg)
 {
@@ -16881,6 +16903,13 @@ static long frame_channel_unlocked_ioctl(struct file *file, unsigned int cmd,
 		for (;;) {
 			if (!(ch->streaming & 1))
 				return -EINVAL;
+			/*
+			 * O_NONBLOCK (as vb2_dqbuf): -EAGAIN instead of sleeping.
+			 * OpenIMP opens /dev/framechanN non-blocking and select()s
+			 * first.  The stock driver ignores the flag.
+			 */
+			if (list_empty(&ch->done) && (file->f_flags & O_NONBLOCK))
+				return -EAGAIN;
 			if (!list_empty(&ch->done)) {
 				__private_spin_lock_irqsave(
 					(spinlock_t *)&ch->done_count, &flags);
@@ -16895,7 +16924,12 @@ static long frame_channel_unlocked_ioctl(struct file *file, unsigned int cmd,
 			ret = private_wait_event_interruptible(
 				(wait_queue_head_t *)ch->wait_queue, check_state,
 				&ch->type);
-			if (ret && ret != -ERESTARTSYS)
+			/*
+			 * A pending signal makes every further interruptible wait
+			 * return at once; looping on -ERESTARTSYS (as the stock
+			 * driver does) spins unkillably until a frame arrives.
+			 */
+			if (ret)
 				return ret;
 		}
 		__fill_v4l2_buffer((uintptr_t)buffer, (uintptr_t)&user);
@@ -16948,6 +16982,9 @@ static long frame_channel_unlocked_ioctl(struct file *file, unsigned int cmd,
 
 		if (!t21_isp_valid_ptr(argp))
 			return -EINVAL;
+		if ((file->f_flags & O_NONBLOCK) &&
+		    !completion_done((struct completion *)ch->completion))
+			return -EAGAIN;
 		ret = private_wait_for_completion_interruptible(
 			(struct completion *)ch->completion);
 		if (ret < 0)
