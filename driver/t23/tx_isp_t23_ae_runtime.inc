@@ -6,7 +6,81 @@ struct regtrace_t23_ae_hlil_rung {
     uint32_t ev_q10;
     uint32_t it;            /* integration time the sensor allocated, lines */
     uint32_t gain_log2;     /* sensor analog gain allocated, log2 Q16 */
+    uint32_t dgain_q10;     /* ISP digital gain, linear Q10 (0x400 = 1x) */
 };
+
+/* Sensor gain times ISP digital gain, linear Q16. */
+static uint32_t regtrace_t23_ae_rung_total_gain(
+    const struct regtrace_t23_ae_hlil_rung *rung)
+{
+    uint64_t total = ((uint64_t)rung->gain_q16 * rung->dgain_q10) >> 10;
+
+    return total > 0xffffffffULL ? 0xffffffffU : (uint32_t)total;
+}
+
+/*
+ * ISP digital gain (OEM tisp_ae0_process_impl -> JZ_Isp_Ae_Dg2reg): the
+ * four GIB channel gains, 0x1030 (R, G) and 0x1034 (B, IR), Q10, latched
+ * through 0x1070 (OEM system_reg_write_ae(3, ...)).  The OEM writes the
+ * gain itself into all four fields; here it scales the IQ bank's base
+ * gains, which is the same for the usual 1x base and leaves the base
+ * untouched at 1x.  Only written on change.
+ */
+#define REGTRACE_T23_AE_DGAIN_STEPS 8U
+/* below 64x: the GIB gain fields are 16 bit Q10 */
+#define REGTRACE_T23_AE_ISP_DGAIN_MAX_LOG2 ((6U << 16) - 0x100U)
+
+int32_t system_reg_write_gib(int32_t arg1, int32_t arg2, int32_t arg3);
+
+static uint32_t regtrace_t23_ae_user_max_dgain;     /* log2, Q5 (API) */
+static uint32_t regtrace_t23_ae_isp_dgain_q10 = 0x400U;   /* in hardware */
+
+static uint32_t regtrace_t23_ae_dgain_field(const unsigned char *base,
+                                            uint32_t dgain_q10)
+{
+    uint32_t value = ((uint64_t)regtrace_t23_get_le32(base) * dgain_q10) >>
+                     10;
+
+    return min(value, 0xffffU);
+}
+
+static void regtrace_t23_ae_isp_dgain_write(uint32_t dgain_q10)
+{
+    if (dgain_q10 == regtrace_t23_ae_isp_dgain_q10)
+        return;
+    system_reg_write_gib(1, 0x1030,
+        (regtrace_t23_ae_dgain_field(tiziano_gib_r_g_linear + 4,
+                                     dgain_q10) << 16) |
+        regtrace_t23_ae_dgain_field(tiziano_gib_r_g_linear, dgain_q10));
+    system_reg_write_gib(1, 0x1034,
+        (regtrace_t23_ae_dgain_field(tiziano_gib_b_ir_linear + 4,
+                                     dgain_q10) << 16) |
+        regtrace_t23_ae_dgain_field(tiziano_gib_b_ir_linear, dgain_q10));
+    regtrace_t23_ae_isp_dgain_q10 = dgain_q10;
+}
+
+/*
+ * Program a ladder rung coming from *from: the sensor exposure when its
+ * register word changes, the ISP digital gain, and the gain-driven blocks
+ * when the total gain changes.
+ */
+static int regtrace_t23_ae_apply_rung(
+    const struct regtrace_t23_ae_hlil_rung *to,
+    const struct regtrace_t23_ae_hlil_rung *from, const char *reason)
+{
+    uint32_t total = regtrace_t23_ae_rung_total_gain(to);
+    int ret = 0;
+
+    if (to->packed != from->packed)
+        ret = regtrace_t23_call_sensor_exposure(to->packed, reason);
+    if (ret)
+        return ret;
+    regtrace_t23_ae_isp_dgain_write(to->dgain_q10);
+    if (total != regtrace_t23_ae_rung_total_gain(from))
+        ret = regtrace_t23_source_apply_total_gain_value(
+            total, to->packed >> 16, false, true);
+    return ret;
+}
 
 #define REGTRACE_T23_AE_HLIL_MAX_STATES 64U
 #define REGTRACE_T23_AE_HLIL_GAIN_STEPS 16U
@@ -18,7 +92,8 @@ static uint32_t regtrace_t23_ae_hlil_state_count;
 #define REGTRACE_T23_AE_HLIL_STATE_COUNT regtrace_t23_ae_hlil_state_count
 
 static int regtrace_t23_ae_hlil_append(uint32_t integration,
-                                       uint32_t gain_log2_q16)
+                                       uint32_t gain_log2_q16,
+                                       uint32_t dgain_q10)
 {
     struct regtrace_t23_ae_hlil_rung *rung;
     uint64_t ev_q10;
@@ -35,7 +110,9 @@ static int regtrace_t23_ae_hlil_append(uint32_t integration,
         return ret;
     if (regtrace_t23_ae_hlil_state_count &&
         regtrace_t23_ae_hlil_rungs[
-            regtrace_t23_ae_hlil_state_count - 1U].packed == packed)
+            regtrace_t23_ae_hlil_state_count - 1U].packed == packed &&
+        regtrace_t23_ae_hlil_rungs[
+            regtrace_t23_ae_hlil_state_count - 1U].dgain_q10 == dgain_q10)
         return 0;
     if (regtrace_t23_ae_hlil_state_count >=
         REGTRACE_T23_AE_HLIL_MAX_STATES)
@@ -47,7 +124,8 @@ static int regtrace_t23_ae_hlil_append(uint32_t integration,
     rung->gain_q16 = gain_q16;
     rung->it = actual_it;
     rung->gain_log2 = actual_gain_log2;
-    ev_q10 = (uint64_t)actual_it * gain_q16;
+    rung->dgain_q10 = dgain_q10;
+    ev_q10 = (uint64_t)actual_it * regtrace_t23_ae_rung_total_gain(rung);
     ev_q10 >>= 6;
     rung->ev_q10 = ev_q10 > 0xffffffffULL ?
         0xffffffffU : (uint32_t)ev_q10;
@@ -106,6 +184,7 @@ static int regtrace_t23_ae_hlil_build_ladder(void)
     uint32_t gain;
     uint32_t unity_states;
     uint32_t gain_it = regtrace_t23_source_sensor_max_it;
+    uint32_t dgain_max;
     uint32_t step;
     int ret;
 
@@ -124,7 +203,7 @@ static int regtrace_t23_ae_hlil_build_ladder(void)
 
         integration = regtrace_t23_source_sensor_min_it;
         while (integration < step) {
-            ret = regtrace_t23_ae_hlil_append(integration, 0U);
+            ret = regtrace_t23_ae_hlil_append(integration, 0U, 0x400U);
             if (ret)
                 return ret;
             next = integration + max(integration >> 1, 1U);
@@ -133,7 +212,7 @@ static int regtrace_t23_ae_hlil_build_ladder(void)
             integration = next;
         }
         for (periods = 1; periods <= max_periods;) {
-            ret = regtrace_t23_ae_hlil_append(periods * step, 0U);
+            ret = regtrace_t23_ae_hlil_append(periods * step, 0U, 0x400U);
             if (ret)
                 return ret;
             if (periods == max_periods)
@@ -148,7 +227,7 @@ static int regtrace_t23_ae_hlil_build_ladder(void)
         regtrace_t23_ae_flicker_lines = 0;
         integration = regtrace_t23_source_sensor_min_it;
         for (;;) {
-            ret = regtrace_t23_ae_hlil_append(integration, 0U);
+            ret = regtrace_t23_ae_hlil_append(integration, 0U, 0x400U);
             if (ret)
                 return ret;
             if (integration == regtrace_t23_source_sensor_max_it)
@@ -173,25 +252,49 @@ static int regtrace_t23_ae_hlil_build_ladder(void)
         for (gain = gain_step;
              gain < regtrace_t23_source_sensor_max_again;
              gain += gain_step) {
-            ret = regtrace_t23_ae_hlil_append(gain_it, gain);
+            ret = regtrace_t23_ae_hlil_append(gain_it, gain, 0x400U);
             if (ret)
                 return ret;
             if (gain > 0xffffffffU - gain_step)
                 break;
         }
         ret = regtrace_t23_ae_hlil_append(
-            gain_it, regtrace_t23_source_sensor_max_again);
+            gain_it, regtrace_t23_source_sensor_max_again, 0x400U);
         if (ret)
             return ret;
     }
 
+    /*
+     * ISP digital gain once the analog gain is at its limit (OEM AE:
+     * integration time, then sensor gain, then ISP dgain up to
+     * ae_exp_th[3] = MAX_DGAIN).  None while MAX_DGAIN is 0 (1x).
+     */
+    dgain_max = min(regtrace_t23_ae_user_max_dgain << 11,
+                    REGTRACE_T23_AE_ISP_DGAIN_MAX_LOG2);
+    if (dgain_max) {
+        uint32_t dgain_step = DIV_ROUND_UP(dgain_max,
+                                           REGTRACE_T23_AE_DGAIN_STEPS);
+
+        for (gain = dgain_step;; gain += dgain_step) {
+            if (gain > dgain_max)
+                gain = dgain_max;
+            ret = regtrace_t23_ae_hlil_append(
+                gain_it, regtrace_t23_source_sensor_max_again,
+                tisp_math_exp2(gain, 16U, 10U));
+            if (ret)
+                return ret;
+            if (gain == dgain_max)
+                break;
+        }
+    }
+
     printk(KERN_INFO
-           "tx_isp_t23_recovered: generic AE ladder states=%u it=%u..%u flicker=%u lines max_again_log2=0x%x initial=0x%08x\n",
+           "tx_isp_t23_recovered: generic AE ladder states=%u it=%u..%u flicker=%u lines max_again_log2=0x%x max_isp_dgain_log2=0x%x initial=0x%08x\n",
            regtrace_t23_ae_hlil_state_count,
            regtrace_t23_source_sensor_min_it,
            regtrace_t23_source_sensor_max_it,
            regtrace_t23_ae_flicker_lines,
-           regtrace_t23_source_sensor_max_again,
+           regtrace_t23_source_sensor_max_again, dgain_max,
            regtrace_t23_source_ae_initial_packed);
     return 0;
 }
@@ -302,11 +405,8 @@ static void regtrace_t23_source_ae_hlil_work_body(struct work_struct *work)
 
     if (!ret && next_state != state) {
         rung = &rungs[next_state];
-        ret = regtrace_t23_call_sensor_exposure(rung->packed,
-                                                "source-ae-hlil");
-        if (!ret && rung->gain_q16 != rungs[state].gain_q16)
-            ret = regtrace_t23_source_apply_total_gain_value(
-                rung->gain_q16, rung->packed >> 16, false, true);
+        ret = regtrace_t23_ae_apply_rung(rung, &rungs[state],
+                                         "source-ae-hlil");
         if (!ret) {
             regtrace_t23_source_ae_hlil_state = next_state;
             regtrace_t23_source_ae_hlil_ev = rung->ev_q10;
@@ -430,6 +530,9 @@ static void regtrace_t23_source_ae_hlil_reset(void)
             regtrace_t23_ae_hlil_nearest_state(initial_packed & 0xffffU);
     regtrace_t23_source_ae_hlil_ev =
         rungs[regtrace_t23_source_ae_hlil_state].ev_q10;
+    /* the sensor exposure is programmed by the stream start */
+    regtrace_t23_ae_isp_dgain_write(
+        rungs[regtrace_t23_source_ae_hlil_state].dgain_q10);
     regtrace_t23_source_ae_hlil_runs = 0;
     regtrace_t23_source_ae_hlil_updates = 0;
     regtrace_t23_source_ae_hlil_drops = 0;
@@ -468,8 +571,7 @@ static int regtrace_t23_ae_hlil_retime_force(uint32_t max_it,
     uint32_t saved_count;
     uint32_t saved_max_it;
     uint32_t saved_initial;
-    uint32_t old_packed = 0;
-    uint32_t old_gain = 0;
+    struct regtrace_t23_ae_hlil_rung old_rung;
     uint32_t old_ev;
     uint32_t state;
     int ret;
@@ -491,10 +593,11 @@ static int regtrace_t23_ae_hlil_retime_force(uint32_t max_it,
     saved_initial = regtrace_t23_source_ae_initial_packed;
     memcpy(saved, regtrace_t23_ae_hlil_rungs, sizeof(saved));
     old_ev = regtrace_t23_source_ae_hlil_ev;
+    memset(&old_rung, 0, sizeof(old_rung));
+    old_rung.dgain_q10 = regtrace_t23_ae_isp_dgain_q10;
     if (saved_count) {
         state = min(regtrace_t23_source_ae_hlil_state, saved_count - 1U);
-        old_packed = saved[state].packed;
-        old_gain = saved[state].gain_q16;
+        old_rung = saved[state];
         if (!old_ev)
             old_ev = saved[state].ev_q10;
     }
@@ -513,14 +616,9 @@ static int regtrace_t23_ae_hlil_retime_force(uint32_t max_it,
         rung = &regtrace_t23_ae_hlil_rungs[state];
         regtrace_t23_source_ae_hlil_state = state;
         regtrace_t23_source_ae_hlil_ev = rung->ev_q10;
-        if (regtrace_t23_sensor_streaming && regtrace_t23_core_started &&
-            rung->packed != old_packed) {
-            ret = regtrace_t23_call_sensor_exposure(rung->packed,
-                                                    "source-ae-retime");
-            if (!ret && rung->gain_q16 != old_gain)
-                ret = regtrace_t23_source_apply_total_gain_value(
-                    rung->gain_q16, rung->packed >> 16, false, true);
-        }
+        if (regtrace_t23_sensor_streaming && regtrace_t23_core_started)
+            ret = regtrace_t23_ae_apply_rung(rung, &old_rung,
+                                             "source-ae-retime");
     }
 
     spin_lock_irqsave(&regtrace_t23_ae_hlil_lock, flags);
@@ -548,7 +646,6 @@ static uint32_t regtrace_t23_ae_sensor_max_it;      /* lines */
 static uint32_t regtrace_t23_ae_user_max_it;        /* lines */
 static uint32_t regtrace_t23_ae_sensor_max_again;   /* log2, Q16 */
 static uint32_t regtrace_t23_ae_user_max_again;     /* log2, Q16 */
-static uint32_t regtrace_t23_ae_user_max_dgain;     /* log2, Q5 (API) */
 
 static uint32_t regtrace_t23_ae_cap_it(uint32_t sensor_max_it)
 {
@@ -642,16 +739,26 @@ static uint32_t regtrace_t23_ae_get_max_again(void)
 }
 
 /*
- * MAX_DGAIN: ISP digital-gain ceiling, log2 in 1/32 steps.  The ladder has
- * no ISP digital-gain stage (all gain is sensor gain), so the ceiling is
- * kept and reported but changes nothing.
+ * MAX_DGAIN: ISP digital-gain ceiling, log2 in 1/32 steps (32 = 2x), as
+ * the OEM tiziano_ae_s_max_isp_dgain takes it (ae_exp_th[3] = 2^value).
+ * The ladder gets ISP digital-gain rungs above the analog-gain limit up to
+ * this ceiling (capped below 64x, the GIB gain field); 0 = none.
  */
 static int regtrace_t23_ae_set_max_dgain(uint32_t log2_q5)
 {
+    uint32_t old = regtrace_t23_ae_user_max_dgain;
+    int ret;
+
     if (log2_q5 > 0xffffU)
         return -EINVAL;
     regtrace_t23_ae_user_max_dgain = log2_q5;
-    return 0;
+    if (!regtrace_t23_source_sensor_configured || old == log2_q5)
+        return 0;   /* resolve_sensor_config builds the ladder */
+    ret = regtrace_t23_ae_hlil_retime_force(
+        regtrace_t23_source_sensor_max_it, "max-dgain", true);
+    if (ret)
+        regtrace_t23_ae_user_max_dgain = old;
+    return ret;
 }
 
 static uint32_t regtrace_t23_ae_get_max_dgain(void)

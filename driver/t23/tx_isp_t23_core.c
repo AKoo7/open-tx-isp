@@ -78915,7 +78915,7 @@ int32_t system_reg_write_ae(int32_t arg1, int32_t arg2, int32_t arg3) {
     } else if (arg1 == 2) {
         system_reg_write((const void *)0xa800, 1);
     } else if (arg1 == 3) {
-        system_reg_write((const void *)0x4208, 1);
+        system_reg_write((const void *)0x1070, 1);  /* OEM: 4208 decimal */
     }
     return system_reg_write((const void *)(uintptr_t)arg2, arg3);
 }
@@ -92427,10 +92427,10 @@ static uint32_t regtrace_t23_gain_q16_to_imp_log2(uint32_t gain_q16)
  *   0x78/0x7a   AE integration-time window min/max (u16)
  *   0x88        one line, us (u16)
  *
- * This driver's AE steps the sensor integration time and analog gain only;
- * sensor digital gain and ISP digital gain stay at unity, so they and their
- * AE limits read 0.  Process context only (takes the FPS mutex); touches no
- * hardware.
+ * This driver's AE steps the sensor integration time, the analog gain and,
+ * above the analog limit, the ISP digital gain up to MAX_DGAIN; sensor
+ * digital gain stays at unity, so it and its limit read 0.  Process context
+ * only (takes the FPS mutex); touches no hardware.
  */
 static void regtrace_t23_ev_info_get(struct regtrace_t23_ev_info *info)
 {
@@ -92440,9 +92440,13 @@ static void regtrace_t23_ev_info_get(struct regtrace_t23_ev_info *info)
     uint32_t den;
     uint64_t ev_q10;
     uint32_t max_again_q10;
+    uint32_t dgain_q10 = ACCESS_ONCE(regtrace_t23_ae_isp_dgain_q10);
+    uint32_t total_q16;
 
     memset(info, 0, sizeof(*info));
     regtrace_t23_expo_get_live(&live);
+    info->max_isp_dgain = min(regtrace_t23_ae_user_max_dgain << 11,
+                              REGTRACE_T23_AE_ISP_DGAIN_MAX_LOG2) >> 11;
 
     info->sensor_ok = attr && regtrace_t23_sensor_initialized;
     info->valid = live.valid;
@@ -92488,11 +92492,16 @@ static void regtrace_t23_ev_info_get(struct regtrace_t23_ev_info *info)
         return;
     }
     info->again = regtrace_t23_gain_q16_to_imp_log2(live.gain_q16);
-    info->total_gain = live.gain_q16 >> 8;
-    if (live.gain_q16 > 0x10000U)
+    if (dgain_q10 > 0x400U)
+        info->isp_dgain = (uint32_t)tisp_log2_fixed_to_fixed(
+            dgain_q10, 10U, 5U);
+    total_q16 = (uint32_t)min_t(uint64_t,
+        ((uint64_t)live.gain_q16 * dgain_q10) >> 10, 0xffffffffULL);
+    info->total_gain = total_q16 >> 8;
+    if (total_q16 > 0x10000U)
         info->tgain_log2 = (uint32_t)tisp_log2_fixed_to_fixed(
-            live.gain_q16, 16U, 16U) >> 16;
-    ev_q10 = ((uint64_t)live.it * live.gain_q16) >> 6;
+            total_q16, 16U, 16U) >> 16;
+    ev_q10 = ((uint64_t)live.it * total_q16) >> 6;
     if (ev_q10 > 0xffffffffULL)
         ev_q10 = 0xffffffffULL;
     info->ev = (uint32_t)(ev_q10 >> 10);
