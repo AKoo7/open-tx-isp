@@ -13863,79 +13863,24 @@ int32_t apical_isp_gamma_g_attr_isra_63(uintptr_t a0) __asm__("apical_isp_gamma_
 #endif
 int32_t apical_isp_gamma_g_attr_isra_63(uintptr_t a0)
 {
-    uint32_t local_10 = 0;
-    uint32_t local_214 = 0;
-    uint32_t local_318 = 0;
-    uint32_t local_31c = 0;
-    uint32_t local_320 = 0;
-    uint32_t local_324 = 0;
-    uint32_t a1 = 0;
-    uint32_t a2 = 0;
-    uint32_t a3 = 0;
-    uint32_t ra = 0;
-    uint32_t s0 = 0;
-    uint32_t s1 = 0;
-    uintptr_t s2 = 0;
-    uintptr_t *v0 = 0;
-    uint32_t v1 = 0;
+	/* OEM @0x4904: tisp_g_Gamma fills 129 words (516 bytes) into a stack
+	 * buffer, which are narrowed to u16 and copied out as 258 bytes.  The
+	 * fragment rebuild passed a single 4-byte local. */
+	uint32_t gamma[129];
+	uint16_t out[129];
+	int32_t ret;
+	int i;
 
-    /* fragment 0: Prologue */
-    /* function prologue: stack frame and callee-saved register setup */
-
-    /* fragment 1: CallSetup */
-    s1 = (uintptr_t)&local_10;
-    s2 = a0;
-    v0 = (uintptr_t *)((uintptr_t (*)(int32_t *))(uintptr_t)tisp_g_Gamma)(&local_10); /* jalr target resolved by relocation */
-
-    /* fragment 2: Arithmetic */
-    s0 = v0;
-
-    /* fragment 3: Branch */
-    v1 = 129;
-    if (v0 == 0) { goto apical_isp_gamma_g_attr_isra_630x64; }
-
-    /* fragment 4: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))(int32_t *)isp_printf)(1, &LC17, &__param_str_isp_clk, 1128); /* jalr target resolved by relocation */
-
-    /* fragment 5: Branch */
-    goto apical_isp_gamma_g_attr_isra_630xac;
-
-apical_isp_gamma_g_attr_isra_630x64:
-    /* fragment 6: Arithmetic */
-    a2 = -2;
-    a1 = -4;
-
-apical_isp_gamma_g_attr_isra_630x6c:
-    /* fragment 7: Arithmetic */
-    a3 = v1 * a2;
-    a0 = (uint32_t *)&local_214;
-    v0 = a3 + a0;
-    a3 = v1 * a1;
-    v1 = v1 - 1;
-    a0 = a3 + s1;
-
-    /* fragment 8: MemoryAccess */
-    a0 = *(uint32_t *)((char *)a0 + 516);
-
-    /* fragment 9: Branch */
-    *(uint16_t *)((char *)v0 + 258) = a0;
-    if (v1 != 0) { goto apical_isp_gamma_g_attr_isra_630x6c; }
-
-    /* fragment 10: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t))(uintptr_t)private_copy_to_user)(*(uint32_t *)((char *)(s2) + 4), &local_214, 258); /* jalr target resolved by relocation */
-
-    /* fragment 11: Epilogue */
-    /* function epilogue: restore registers and return */
-    return (int32_t)v0;
-
-apical_isp_gamma_g_attr_isra_630xac:
-    /* fragment 12: Arithmetic */
-    v0 = s0;
-
-    /* fragment 13: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    return 0;
+	ret = tisp_g_Gamma((uint32_t)(uintptr_t)gamma);
+	if (ret) {
+		isp_printf(1, "%s:%d get control failed!!!\n",
+			   "apical_isp_gamma_g_attr", 1128);
+		return ret;
+	}
+	for (i = 0; i < 129; i++)
+		out[i] = (uint16_t)gamma[i];
+	private_copy_to_user(*(void **)((char *)a0 + 4), out, sizeof(out));
+	return 0;	/* OEM returns the tisp_g_Gamma result */
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000052a8 origin=model_output original=apical_isp_ae_g_roi.isra.64 */
@@ -13970,7 +13915,7 @@ int32_t apical_isp_ae_g_roi_isra_64(void *arg1)
         src = (uint32_t *)((uintptr_t)buf + row * 0x3c);
         dst = &var_f8[row * 0xf];
         for (col = 0; col < 0xf; col++) {
-            ((void **)dst)[col] = (char)src[col];
+            dst[col] = (char)src[col];	/* OEM sb: one byte per weight */
         }
     }
 
@@ -14068,7 +14013,7 @@ int32_t apical_isp_ae_zone_weight_g_attr_isra_70(void *arg1)
         dst = &var_f8[row * 0xf];
         for (col = 0; col < 0xf; col++) {
             val = src[col];
-            ((void **)dst)[col] = (char)val;
+            dst[col] = (char)val;	/* OEM sb: one byte per weight */
         }
     }
 
@@ -14135,7 +14080,7 @@ int32_t apical_isp_af_weight_g_attr_isra_74(void *arg1)
         src = (uint8_t *)((uintptr_t)buf + row * 0x3c);
         dst = &var_f8[row * 15];
         for (col = 0; col < 15; col++) {
-            ((void **)(uintptr_t)dst)[col] = *(uint8_t *)&src[col * 4];
+            dst[col] = src[col * 4];	/* OEM sb: one byte per weight */
         }
     }
 
