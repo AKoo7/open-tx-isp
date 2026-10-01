@@ -32877,7 +32877,9 @@ int32_t tisp_dmsc_sp_d_sigma_3_np_cfg(void)
     local_1c = ra;
 
     /* fragment 3: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(int32_t *))(uintptr_t)system_reg_write)(a0); /* jalr target resolved by relocation */
+    /* OEM (@0x182f8 dmsc / @0x1ace8 sharpen): value = a1 | arr[1] << 5,
+     * the or sits in the jalr delay slot; the decompile dropped it. */
+    system_reg_write((uint32_t)(uintptr_t)a0, (uint32_t)(uintptr_t)a1 | (uint32_t)(uintptr_t)v0);
 
     /* fragment 4: CallSetup */
     v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(4280, ((*(uint32_t *)((char *)(s0) + 44)) << 25) | ((*(uint32_t *)((char *)(s0) + 40)) << 20) | (*(uint32_t *)((char *)(s0) + 24)) | ((*(uint32_t *)((char *)(s0) + 36)) << 15) | ((*(uint32_t *)((char *)(s0) + 32)) << 10) | ((*(uint32_t *)((char *)(s0) + 28)) << 5)); /* jalr target resolved by relocation */
@@ -34771,7 +34773,9 @@ int32_t tisp_sharpen_v1_sigma_np_cfg(void)
     local_1c = ra;
 
     /* fragment 3: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(int32_t *))(uintptr_t)system_reg_write)(a0); /* jalr target resolved by relocation */
+    /* OEM (@0x182f8 dmsc / @0x1ace8 sharpen): value = a1 | arr[1] << 5,
+     * the or sits in the jalr delay slot; the decompile dropped it. */
+    system_reg_write((uint32_t)(uintptr_t)a0, (uint32_t)(uintptr_t)a1 | (uint32_t)(uintptr_t)v0);
 
     /* fragment 4: CallSetup */
     v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(6448, ((*(uint32_t *)((char *)(s0) + 44)) << 25) | ((*(uint32_t *)((char *)(s0) + 40)) << 20) | (*(uint32_t *)((char *)(s0) + 24)) | ((*(uint32_t *)((char *)(s0) + 36)) << 15) | ((*(uint32_t *)((char *)(s0) + 32)) << 10) | ((*(uint32_t *)((char *)(s0) + 28)) << 5)); /* jalr target resolved by relocation */
