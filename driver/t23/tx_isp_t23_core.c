@@ -14033,6 +14033,16 @@ static uint32_t regtrace_t23_csc_pack_triplet(int32_t c0, int32_t c1,
            (regtrace_t23_csc_abs10(c2) << 20);
 }
 
+/*
+ * Night mode is monochrome on the OEM T23: ispcore_interrupt_service_routine
+ * (and tisp_comn_param_array_set) write the CSC output clip register 0x6030
+ * = 0xff008080 for night and 0xff00ff00 for day, the T21 0x1730 pair.  The
+ * night IQ bank alone does not do it (sc2336: night saturation 768..1024),
+ * so without this the IR picture stayed colour - saturated purple.
+ */
+#define REGTRACE_T23_CSC_CLIP_NIGHT 0xff008080U
+static bool regtrace_t23_dn_night;
+
 static void regtrace_t23_csc_write_current(void)
 {
     const int32_t *preset = regtrace_t23_csc_current;
@@ -14051,10 +14061,12 @@ static void regtrace_t23_csc_write_current(void)
                                                     preset[8]));
     system_reg_write(0x6020U, ((uint32_t)preset[9] & 0xffU) |
                               (((uint32_t)preset[10] & 0xffU) << 8));
-    system_reg_write(0x6030U, ((uint32_t)preset[11] & 0xffU) |
-                              (((uint32_t)preset[12] & 0xffU) << 8) |
-                              (((uint32_t)preset[13] & 0xffU) << 16) |
-                              (((uint32_t)preset[14] & 0xffU) << 24));
+    system_reg_write(0x6030U, regtrace_t23_dn_night ?
+                              REGTRACE_T23_CSC_CLIP_NIGHT :
+                              (((uint32_t)preset[11] & 0xffU) |
+                               (((uint32_t)preset[12] & 0xffU) << 8) |
+                               (((uint32_t)preset[13] & 0xffU) << 16) |
+                               (((uint32_t)preset[14] & 0xffU) << 24)));
 }
 
 static int regtrace_t23_source_hldc_write_tuning_startup(void)
@@ -45511,7 +45523,8 @@ tisp_comn_param_array_set0x80:
 
 tisp_comn_param_array_set0x84:
     /* fragment 10: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t))(uintptr_t)system_reg_write)(24624); /* jalr target resolved by relocation */
+    /* the recovered call lost its value argument (day 0xff00ff00 / night 0xff008080) */
+    system_reg_write(0x6030U, (uint32_t)a1);
 
     /* fragment 11: CallSetup */
     v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uint32_t *)system_reg_write)(24576, -1); /* jalr target resolved by relocation */
@@ -92013,11 +92026,15 @@ int64_t tisp_day_or_night_s_ctrl(uintptr_t a0, uint32_t a1)
 
     memcpy(active, selected, T23_TPARAMS_BANK_SIZE);
     *(uint32_t *)(void *)(tisp_par_info + a0 * 156U + 124U) = a1;
+    regtrace_t23_dn_night = a1 == 1;
     *(uint32_t *)(void *)(day_night + a0 * sizeof(uint32_t)) = 0;
 
     if (regtrace_t23_source_core_start) {
         regtrace_t23_source_mode_flags_apply(active);
         regtrace_t23_source_dn_params_refresh(a1 ? "night" : "day");
+        /* mono at night, the active CSC preset's clip by day */
+        if (regtrace_t23_core_started)
+            regtrace_t23_csc_write_current();
     } else {
         tx_isp_t23_mode_profile_apply(active);
     }
@@ -101013,7 +101030,9 @@ ispcore_interrupt_service_routine0x3f0:
 ispcore_interrupt_service_routine0x424:
     /* fragment 89: CallSetup */
     *(uint32_t *)((char *)&ivdc_threshold_line + -31960) = 0;
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(24624, 4278190080 | 65280); /* jalr target resolved by relocation */
+    /* OEM: day clip only while the tuning mode is day (lost condition) */
+    if (!regtrace_t23_dn_night)
+        system_reg_write(0x6030U, 0xff00ff00U);
 
     /* fragment 90: MemoryAccess */
     *(uint32_t *)((char *)&ivdc_threshold_line + -31960) = 0;
@@ -101069,12 +101088,16 @@ ispcore_interrupt_service_routine0x4ec:
 ispcore_interrupt_service_routine0x500:
     /* fragment 102: CallSetup */
     v0 = *(uint32_t *)((char *)s0 + 308);
+    /* OEM bnel v1,3: only state 3 (night) writes; others skip the write */
+    if (v1 != 3)
+        goto ispcore_interrupt_service_routine0x524;
     a1 = 4278190080;
     a1 = (uintptr_t)a1 | 32896;
 
 ispcore_interrupt_service_routine0x510:
     /* fragment 103: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t))(uintptr_t)system_reg_write)(24624); /* jalr target resolved by relocation */
+    /* the recovered call lost its value argument (day 0xff00ff00 / night 0xff008080) */
+    system_reg_write(0x6030U, (uint32_t)a1);
 
     /* fragment 104: MemoryAccess */
     *(uint32_t *)((char *)s0 + 380) = 0;
