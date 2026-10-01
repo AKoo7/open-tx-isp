@@ -9057,9 +9057,18 @@ static int apical_isp_core_ops_g_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
             break;
         }
 
-        case 0x8000045: { /* OEM: copies a 20-byte AF record to userspace */
-            uint32_t af_rec[5] = {0};
-            if (copy_to_user((void __user *)(unsigned long)ctrl->value, af_rec, 0x14))
+        case 0x8000045: { /* OEM GetSensorAttr (0x80e4): IMPISPSENSORAttr */
+            /* {hts, vts, fps, width, height}: the OEM reads the u16 total
+             * size from the sensor attribute (+0xb0/+0xb2), the packed fps
+             * (+0x12c) and the output size (+0x124/+0x128) */
+            uint32_t attr[5];
+
+            attr[0] = tisp_si_total_width(&sensor_info);
+            attr[1] = tisp_si_total_height(&sensor_info);
+            attr[2] = tisp_si_fps(&sensor_info);
+            attr[3] = tisp_si_width(&sensor_info);
+            attr[4] = tisp_si_height(&sensor_info);
+            if (copy_to_user((void __user *)(unsigned long)ctrl->value, attr, sizeof(attr)))
                 ret = -EFAULT;
             break;
         }
