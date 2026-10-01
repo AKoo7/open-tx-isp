@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Lift MIPS32 functions from a relocatable .ko into C (one register file per
 function, explicit delay slots, relocations resolved to C symbols)."""
-import struct, sys
+import struct, sys, re
 
 def s16(x): return x - 0x10000 if x & 0x8000 else x
 
@@ -29,6 +29,20 @@ class Elf:
                 for k in range(s[5] // 8):
                     off, info = struct.unpack_from('<II', d, s[4] + k * 8)
                     self.relocs[off] = (info & 0xff, self.syms[info >> 8])
+    def rodata_text_targets(self):
+        if hasattr(self, '_rtt'): return self._rtt
+        out = set()
+        for i, sh in enumerate(self.sh):
+            if sh[1] == 9 and self.secname[sh[7]].startswith('.rodata'):
+                tgt = sh[7]
+                for k in range(sh[5] // 8):
+                    off, info = struct.unpack_from('<II', self.d, sh[4] + k * 8)
+                    sym = self.syms[info >> 8]
+                    if (info & 0xff) == 2 and sym['shndx'] == self.text:
+                        add = struct.unpack_from('<I', self.d, self.sh[tgt][4] + off)[0]
+                        out.add(add + (sym['val'] if sym['type'] != 3 else 0))
+        self._rtt = out
+        return out
     def secdata(self, idx):
         s = self.sh[idx]
         return self.d[s[4]:s[4] + s[5]]
@@ -61,6 +75,13 @@ class Lifter:
         self.need = []
         self.fnids = {}
         self.alias = {}
+        self.undef = set()
+        self.shared = {}
+        self.fnaddr = set()
+        self.cfuncs = set()
+        self.vamap = {}
+        self.extidx = {}
+        self.callbacks = set()
     def symexpr(self, sym, addend):
         """C expression (uint32) for symbol address + addend."""
         e = self.e
@@ -70,20 +91,64 @@ class Lifter:
                 key = 'oem_rodata' if sec == '.rodata' else 'oem_' + sec.strip('.').replace('.', '_')
                 self.private[key] = (e.secdata(sym['shndx']), True)
                 return '((uint32_t)(uintptr_t)%s + 0x%x)' % (key, addend & 0xffffffff)
+            if sym['shndx'] == e.text:
+                fs = [x for x in e.syms if x['shndx'] == e.text and x['type'] == 2 and x['val'] == addend]
+                if not fs:
+                    raise Exception('no function at .text %#x' % addend)
+                return self.symexpr(fs[0], 0)
             t = e.sym_at(sym['shndx'], addend)
             if not t:
                 raise Exception('no symbol in %s at %#x' % (sec, addend))
             return self.namedexpr(t, addend - t['val'])
         if sym['shndx'] == e.text or sym['shndx'] == 0:
-            fid = self.fnids.setdefault(sym['name'], 0xF0000000 + 0x10 * len(self.fnids))
-            return '0x%xu /* &%s */' % (fid, sym['name'])
+            n_ = sym['name']
+            self.fnaddr.add(n_)
+            if sym['shndx'] == 0 or n_ in self.extern_c or n_ in self.callbacks:
+                return '((uint32_t)(uintptr_t)&%s + %d)' % (n_, addend)
+            self.need.append(n_)
+            return '((uint32_t)(uintptr_t)&%s%s + %d)' % (self.prefix, n_, addend)
         return self.namedexpr(sym, addend)
+    def secbase(self, shndx):
+        return ((shndx + 1) & 0x7f) << 24
+    def resolve(self, sym, addend):
+        """Return the OEM virtual address of sym+addend and register the
+        containing object in the translation table."""
+        e = self.e
+        if sym['shndx'] == 0:
+            name = sym['name']
+            idx = self.extidx.setdefault(name, len(self.extidx))
+            va = 0xE0000000 + idx * 16
+            self.vamap[va] = (1, '((uintptr_t)&%s)' % name)
+            return va + addend
+        if sym['type'] == 3 or not sym['name']:
+            sec = e.secname[sym['shndx']]
+            base = self.secbase(sym['shndx'])
+            if sec.startswith('.rodata'):
+                key = 'oem_rodata' if sec == '.rodata' else 'oem_' + sec.strip('.').replace('.', '_')
+                self.private[key] = (e.secdata(sym['shndx']), True)
+                self.vamap[base] = (len(e.secdata(sym['shndx'])), '((uintptr_t)%s)' % key)
+                return base + addend
+            if sym['shndx'] == e.text:
+                fs = [x for x in e.syms if x['shndx'] == e.text and x['type'] == 2 and x['val'] <= addend < x['val'] + max(x['size'], 1)]
+                if not fs:
+                    raise Exception('no function at .text %#x' % addend)
+                return self.resolve(fs[0], addend - fs[0]['val'])
+            t = e.sym_at(sym['shndx'], addend)
+            if not t:
+                raise Exception('no symbol in %s at %#x' % (sec, addend))
+            return self.resolve(t, addend - t['val'])
+        va0 = self.secbase(sym['shndx']) + sym['val']
+        if va0 not in self.vamap:
+            expr = self.symexpr(sym, 0)
+            self.vamap[va0] = (max(sym['size'], 1), '((uintptr_t)(%s))' % expr)
+        return va0 + addend
     def namedexpr(self, t, off):
         name = self.alias.get('%s@%x' % (t['name'], t['val']), self.alias.get(t['name'], t['name']))
         if name in self.ours or name in self.alias.values():
             cname = name
+            self.shared[name] = t['size']
         else:
-            cname = 'oem_' + name
+            cname = 'oem_' + re.sub(r'[^A-Za-z0-9_]', '_', name)
             sec = self.e.secname[t['shndx']]
             if sec.startswith('.bss') or sec.startswith('.sbss'):
                 data = bytes(t['size'])
@@ -116,14 +181,42 @@ class Lifter:
                 else:
                     raise Exception('unpaired HI16 at %x' % (start + 4 * i))
         lo_add = {}
+        def _writes(w):
+            op = w >> 26
+            if op == 0:
+                fn = w & 63
+                if fn in (8, 24, 25, 26, 27, 17, 19, 13, 15, 52): return None
+                return (w >> 11) & 31
+            if op == 28:
+                return (w >> 11) & 31 if (w & 63) in (2, 32) else None
+            if op in (8, 9, 10, 11, 12, 13, 14, 15, 32, 33, 34, 35, 36, 37, 38):
+                return (w >> 16) & 31
+            if op == 3: return 31
+            return None
+        lo_lui = {}
         for i in range(n):
             r = rel[i]
             if r and r[0] == 6:
-                # find nearest preceding HI16 with same symbol
+                base = (ins[i] >> 21) & 31
+                found = None
                 for j in range(i - 1, -1, -1):
-                    rj = rel[j]
-                    if rj and rj[0] == 5 and rj[1] is r[1]:
-                        lo_add[i] = ((ins[j] & 0xffff) << 16) + s16(ins[i] & 0xffff); break
+                    wj = ins[j]
+                    if _writes(wj) == base:
+                        rj = rel[j]
+                        if rj and rj[0] == 5 and (wj >> 26) == 15:
+                            found = j
+                            break
+                        if (wj >> 26) == 15:
+                            break
+                        continue
+                if found is None:
+                    for j in range(i - 1, -1, -1):
+                        rj = rel[j]
+                        if rj and rj[0] == 5 and rj[1] is r[1]:
+                            found = j; break
+                lo_lui[i] = found
+                if found is not None:
+                    lo_add[i] = ((ins[found] & 0xffff) << 16) + s16(ins[i] & 0xffff)
                 else:
                     lo_add[i] = s16(ins[i] & 0xffff)
         # branch targets
@@ -135,9 +228,12 @@ class Lifter:
             elif op == 2:
                 t = ((w & 0x3ffffff) << 2) - start
                 targets.add(t // 4)
+        for t_ in e.rodata_text_targets():
+            if start <= t_ < start + size:
+                targets.add((t_ - start) // 4)
         for i, w in enumerate(ins):
             op = w >> 26; rt = (w >> 16) & 31
-            if (op in (20, 21, 22, 23) or (op == 1 and rt in (2, 3))) and (i + 1) in targets:
+            if (op in (4, 5, 6, 7, 20, 21, 22, 23) or (op == 1 and rt in (0, 1, 2, 3))) and (i + 1) in targets:
                 targets.add(i + 2)
         out = []
         P = lambda s: out.append('\t' + s)
@@ -151,20 +247,46 @@ class Lifter:
                     return '(csp + %d)' % (imm - frame)
                 return '(sp_base + %d)' % imm
             return '(%s + (uint32_t)%d)' % (reg(rs), imm)
+        def lo_full(i, rs):
+            r = rel[i]
+            va = self.resolve(r[1], lo_add[i]) & 0xffffffff
+            return 'LIFT_XLATE(%s + (uint32_t)%d)' % (reg(rs), s16(va & 0xffff))
         def immexpr(i, default):
             r = rel[i]
             if r and r[0] == 6:
                 full = self.symexpr(r[1], lo_add[i])
                 return '((int32_t)(int16_t)(%s & 0xffff))' % full
             return str(default)
+        def writes_reg(w):
+            op = w >> 26
+            if op == 0:
+                fn = w & 63
+                if fn in (8, 24, 25, 26, 27, 17, 19, 13, 15, 52): return None
+                return (w >> 11) & 31
+            if op == 28:
+                return (w >> 11) & 31 if (w & 63) in (2, 32) else None
+            if op == 31:
+                return (w >> 16) & 31 if (w & 63) in (0, 4) else (w >> 11) & 31
+            if op in (8, 9, 10, 11, 12, 13, 14, 15, 32, 33, 34, 35, 36, 37, 38):
+                return (w >> 16) & 31
+            if op == 3: return 31
+            return None
         def last_set_sym(i, rr):
-            for j in range(i - 1, max(-1, i - 12), -1):
+            for j in range(i - 1, max(-1, i - 40), -1):
+                if (j + 1) in targets:
+                    return None
                 w = ins[j]; r = rel[j]
                 rt = (w >> 16) & 31; op = w >> 26
                 if r and r[0] == 6 and op == 9 and rt == rr:
-                    return r[1]
+                    s_ = r[1]
+                    return s_ if (s_['type'] == 2 or s_['shndx'] == 0) else None
                 if r and r[0] == 5 and op == 15 and rt == rr:
-                    return r[1]
+                    s_ = r[1]
+                    return s_ if (s_['type'] == 2 or s_['shndx'] == 0) else None
+                if writes_reg(w) == rr:
+                    return None
+                if j in targets:
+                    return None
             return None
         def emit(i, in_delay=False):
             w = ins[i]
@@ -206,14 +328,18 @@ class Lifter:
             elif op == 15:
                 r = rel[i]
                 if r and r[0] == 5:
-                    W(rt, '(%s + 0x8000) & 0xffff0000u' % self.symexpr(r[1], hi_add[i]))
+                    va = self.resolve(r[1], hi_add[i]) & 0xffffffff
+                    W(rt, '0x%xu' % (((va + 0x8000) >> 16) << 16 & 0xffffffff))
                 else:
                     W(rt, '0x%xu' % (imm << 16))
             elif op in (8, 9):
                 if rs == 29 and rt == 29: return
                 if rs == 29:
                     W(rt, addr(29, simm)); return
-                W(rt, '%s + (uint32_t)%s' % (reg(rs), immexpr(i, simm)))
+                if rel[i] and rel[i][0] == 6:
+                    W(rt, lo_full(i, rs))
+                else:
+                    W(rt, '%s + (uint32_t)%s' % (reg(rs), simm))
             elif op == 10: W(rt, '(int32_t)%s < %d' % (reg(rs), simm))
             elif op == 11: W(rt, '%s < (uint32_t)%d' % (reg(rs), simm))
             elif op == 12: W(rt, '%s & 0x%x' % (reg(rs), imm))
@@ -223,7 +349,7 @@ class Lifter:
                 if rs == 29 and not (rel[i] and rel[i][0] == 6):
                     a = addr(29, simm)
                 else:
-                    a = '(%s + (uint32_t)%s)' % (reg(rs), immexpr(i, simm))
+                    a = lo_full(i, rs) if (rel[i] and rel[i][0] == 6) else '(%s + (uint32_t)%s)' % (reg(rs), simm)
                 if op == 32: W(rt, '(int32_t)*(int8_t *)(uintptr_t)%s' % a)
                 elif op == 33: W(rt, '(int32_t)*(int16_t *)(uintptr_t)%s' % a)
                 elif op == 35: W(rt, '*(uint32_t *)(uintptr_t)%s' % a)
@@ -233,7 +359,7 @@ class Lifter:
                 elif op == 41: P('*(uint16_t *)(uintptr_t)%s = (uint16_t)%s;' % (a, reg(rt)))
                 elif op == 43: P('*(uint32_t *)(uintptr_t)%s = %s;' % (a, reg(rt)))
             elif op == 28:
-                if fn == 2: W(rd, '(int32_t)%s * (int32_t)%s' % (reg(rs), reg(rt)))
+                if fn == 2: W(rd, '%s * %s' % (reg(rs), reg(rt)))
                 elif fn == 0: P('{ int64_t p = (int64_t)(((uint64_t)r_hi << 32) | r_lo) + (int64_t)(int32_t)%s * (int32_t)%s; r_lo = (uint32_t)p; r_hi = (uint32_t)((uint64_t)p >> 32); }' % (reg(rs), reg(rt)))
                 elif fn == 1: P('{ uint64_t p = (((uint64_t)r_hi << 32) | r_lo) + (uint64_t)%s * %s; r_lo = (uint32_t)p; r_hi = (uint32_t)(p >> 32); }' % (reg(rs), reg(rt)))
                 elif fn == 4: P('{ int64_t p = (int64_t)(((uint64_t)r_hi << 32) | r_lo) - (int64_t)(int32_t)%s * (int32_t)%s; r_lo = (uint32_t)p; r_hi = (uint32_t)((uint64_t)p >> 32); }' % (reg(rs), reg(rt)))
@@ -267,15 +393,19 @@ class Lifter:
                 sym = last_set_sym(i, (w >> 21) & 31)
             if not sym:
                 self.dispatch_used = True
-                P('r_v0 = %sdispatch(%s, r_a0, r_a1, r_a2, r_a3, sp_base);' % (self.prefix, reg((w >> 21) & 31)))
+                P('{ uint64_t q_ = %sdispatch(%s, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }' % (self.prefix, reg((w >> 21) & 31)))
                 return
             name = sym['name']
+            if sym['shndx'] == 0 and name not in self.extern_c:
+                self.undef.add(name)
+                P('r_v0 = LIFT_EXTERN_%s(r_a0, r_a1, r_a2, r_a3);' % name)
+                return
             if name in self.extern_c:
                 P(self.extern_c[name])
             else:
                 self.need.append(name)
-                P('r_v0 = %s%s(r_a0, r_a1, r_a2, r_a3, sp_base);' % (self.prefix, name))
-        out.append('static uint32_t %s%s(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, uint32_t r_a3, uint32_t csp)' % (self.prefix, fname))
+                P('{ uint64_t q_ = %s%s(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }' % (self.prefix, name))
+        out.append('static uint64_t %s%s(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, uint32_t r_a3, uint32_t csp)' % (self.prefix, fname))
         out.append('{')
         if frame > 256:
             P('/* large stock frame: static (single caller context, not reentrant) */')
@@ -301,7 +431,9 @@ class Lifter:
                 else:
                     P('{ int c_ = (%s);' % cond(w, i)); emit(i + 1); P('if (c_) goto L_%x; }' % tgt)
                 if i + 1 in targets:
-                    raise Exception('delay slot is a branch target at %x' % (start + 4 * i + 4))
+                    P('goto L_%x;' % (start + 4 * (i + 2)))
+                    out.append('L_%x:' % (start + 4 * (i + 1)))
+                    emit(i + 1)
                 i += 2; continue
             if islikely:
                 tgt = start + 4 * (i + 1 + s16(w & 0xffff))
@@ -316,13 +448,22 @@ class Lifter:
                 emit(i + 1); P('goto L_%x;' % tgt); i += 2; continue
             if op == 0 and fn == 8:  # jr
                 emit(i + 1)
-                if rs != 31: raise Exception('jr reg')
-                P('return r_v0;'); i += 2; continue
+                if rs == 25:
+                    call(i); P('return ((uint64_t)r_v1 << 32) | r_v0;'); i += 2; continue
+                if rs != 31:
+                    cands = sorted(t for t in e.rodata_text_targets() if start <= t < start + size)
+                    if not cands: raise Exception('jr reg in %s at %x' % (fname, start + 4 * i))
+                    P('switch (%s) {' % reg(rs))
+                    for t_ in cands:
+                        P('case 0x%xu: goto L_%x;' % (t_, t_))
+                    P('default: WARN_ON_ONCE(1); return 0; }')
+                    i += 2; continue
+                P('return ((uint64_t)r_v1 << 32) | r_v0;'); i += 2; continue
             if (op == 0 and fn == 9) or op == 3:
                 emit(i + 1); call(i); i += 2; continue
             emit(i)
             i += 1
-        out.append('\treturn r_v0;')
+        out.append('\treturn ((uint64_t)r_v1 << 32) | r_v0;')
         out.append('}')
         self.lifted.add(fname)
         return '\n'.join(out)
