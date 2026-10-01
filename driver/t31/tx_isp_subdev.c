@@ -295,14 +295,6 @@ int tx_isp_send_event_to_remote(struct tx_isp_subdev *sd, unsigned int event, vo
     return -ENOIOCTLCMD;
 }
 
-/* Frame channel file operations */
-static const struct file_operations fs_channel_ops = {
-    .owner = THIS_MODULE,
-    .open = frame_channel_open,
-    .release = frame_channel_release,
-    .unlocked_ioctl = frame_channel_unlocked_ioctl,
-};
-
 
 
 

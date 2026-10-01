@@ -64,46 +64,6 @@ int tx_isp_vic_device_deinit(struct tx_isp_dev *isp);
 int tx_isp_setup_pipeline(struct tx_isp_dev *isp);
 void tx_isp_cleanup_subdev_graph(struct tx_isp_dev *isp);
 
-/* Frame channel device operation forward declarations */
-int frame_channel_open(struct inode *inode, struct file *file);
-int frame_channel_release(struct inode *inode, struct file *file);
-long frame_channel_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
-unsigned int frame_channel_poll(struct file *file, struct poll_table_struct *wait);
-
-static const struct file_operations frame_channel_fops = {
-    .owner = THIS_MODULE,
-    .open = frame_channel_open,
-    .release = frame_channel_release,
-    .unlocked_ioctl = frame_channel_unlocked_ioctl,
-    .compat_ioctl = frame_channel_unlocked_ioctl,
-    .poll = frame_channel_poll,
-};
-
-static int graph_proc_show(struct seq_file *m, void *v)
-{
-    struct tx_isp_dev *isp = m->private;
-    
-    seq_printf(m, "TX ISP Subdevice Graph Status\n");
-    seq_printf(m, "=============================\n");
-    seq_printf(m, "Registry count: %d\n", subdev_count);
-    seq_printf(m, "ISP device: %p\n", isp);
-    
-    return 0;
-}
-
-static int graph_proc_open(struct inode *inode, struct file *file)
-{
-    return single_open(file, graph_proc_show, PDE_DATA(inode));
-}
-
-const struct file_operations graph_proc_fops = {
-    .owner = THIS_MODULE,
-    .open = graph_proc_open,
-    .read = seq_read,
-    .llseek = seq_lseek,
-    .release = single_release,
-};
-
 /* Binary Ninja compatible subdevice data structure */
 struct isp_subdev_data {
     uint32_t device_type;     /* 0x00: Device type (1=source, 2=sink) */
@@ -126,7 +86,6 @@ static struct tx_isp_subdev_desc isp_subdev_descriptors[] = {
         .src_index = 0,
         .dst_index = 0,
         .pdev = NULL,  /* Will be set during registration */
-        .fops = &frame_channel_fops,
         .create_misc_device = true,
         .create_proc_entry = true,
     },
@@ -137,7 +96,6 @@ static struct tx_isp_subdev_desc isp_subdev_descriptors[] = {
         .src_index = 0,  /* Connect from CSI (not used for sources) */
         .dst_index = 1,  /* Store VIC at index 1 for Core to find */
         .pdev = NULL,
-        .fops = &frame_channel_fops,
         .create_misc_device = true,
         .create_proc_entry = true,
     },
@@ -148,7 +106,6 @@ static struct tx_isp_subdev_desc isp_subdev_descriptors[] = {
         .src_index = 0,
         .dst_index = 2,
         .pdev = NULL,
-        .fops = &frame_channel_fops,
         .create_misc_device = false,
         .create_proc_entry = true,
     },
@@ -159,7 +116,6 @@ static struct tx_isp_subdev_desc isp_subdev_descriptors[] = {
         .src_index = 0,
         .dst_index = 3,
         .pdev = NULL,
-        .fops = &frame_channel_fops,
         .create_misc_device = true,
         .create_proc_entry = true,
     },
@@ -170,7 +126,6 @@ static struct tx_isp_subdev_desc isp_subdev_descriptors[] = {
         .src_index = 1,  /* Connect from VIC at index 1 */
         .dst_index = 4,
         .pdev = NULL,
-        .fops = &frame_channel_fops,
         .create_misc_device = false,
         .create_proc_entry = true,
     },

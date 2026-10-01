@@ -9970,15 +9970,6 @@ int tisp_s_wb_attr(int mode, uint32_t r_gain, uint32_t b_gain,
     return tisp_s_wb_mode(mode, r_gain, b_gain);
 }
 
-/* File operations structure - Binary Ninja reference */
-static const struct file_operations tisp_fops = {
-    .owner = THIS_MODULE,
-    .open = tisp_code_tuning_open,
-    .release = tisp_code_tuning_release,
-    .unlocked_ioctl = tisp_code_tuning_ioctl,
-    .compat_ioctl = tisp_code_tuning_ioctl,
-};
-
 /* Global AF zone data - Binary Ninja reference implementation */
 struct af_zone_data af_zone_data = {
 	.status = 0,

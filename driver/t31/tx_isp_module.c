@@ -5105,11 +5105,6 @@ static struct tx_isp_subdev_video_ops sensor_subdev_video_ops = {
     .s_stream = sensor_subdev_video_s_stream,
 };
 
-/* CSI video operations structure - CRITICAL for tx_isp_video_link_stream */
-static struct tx_isp_subdev_video_ops csi_video_ops = {
-    .s_stream = csi_video_s_stream,
-};
-
 /* CRITICAL FIX: stored_sensor_ops moved to top of file for global access */
 
 /* Sensor operations delegation functions */
