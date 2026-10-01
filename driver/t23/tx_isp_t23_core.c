@@ -9872,6 +9872,73 @@ static uint regtrace_t23_snapraw_buffer_bytes = 4U * 1024U * 1024U;
 static uint regtrace_t23_snapraw_phys_addr;
 module_param_named(enable_irqs_on_streamon, regtrace_t23_enable_irqs_on_streamon, bool, 0644);
 module_param_named(log_framechan_payloads, regtrace_t23_log_framechan_payloads, bool, 0644);
+
+/*
+ * Debug aid: text_watch=1 keeps a copy of this module's core text and
+ * compares it at the entry and exit of every tx-isp, isp-m0 and frame
+ * channel call and AE/AWB worker run. A change is reported once, with the
+ * offsets and words, the call it was first seen in, and the copy is then
+ * updated. Something that writes into the module (a stray pointer or a
+ * DMA into the wrong page) shows up there long before the CPU executes the
+ * damaged instruction. Costs a ~450 KiB compare per check; off by default.
+ */
+static bool regtrace_t23_text_watch;
+module_param_named(text_watch, regtrace_t23_text_watch, bool, 0644);
+static u32 *regtrace_t23_text_snap;
+static size_t regtrace_t23_text_words;
+static DEFINE_SPINLOCK(regtrace_t23_text_lock);
+
+static void regtrace_t23_text_check(const char *where, unsigned int cmd)
+{
+    const u32 *text = THIS_MODULE->module_core;
+    unsigned long flags;
+    unsigned int shown = 0;
+    size_t words;
+    size_t i;
+    u32 *snap;
+
+    if (!regtrace_t23_text_watch || !text)
+        return;
+
+    if (!regtrace_t23_text_snap) {
+        words = THIS_MODULE->core_text_size / sizeof(u32);
+        snap = vmalloc(words * sizeof(u32));
+        if (!snap)
+            return;
+        memcpy(snap, text, words * sizeof(u32));
+        spin_lock_irqsave(&regtrace_t23_text_lock, flags);
+        if (!regtrace_t23_text_snap) {
+            regtrace_t23_text_words = words;
+            regtrace_t23_text_snap = snap;
+            snap = NULL;
+        }
+        spin_unlock_irqrestore(&regtrace_t23_text_lock, flags);
+        if (snap)
+            vfree(snap);
+        else
+            printk(KERN_WARNING "tx_isp_t23_recovered: text watch armed text=%p size=0x%zx at %s\n",
+                   text, words * sizeof(u32), where);
+        return;
+    }
+
+    spin_lock_irqsave(&regtrace_t23_text_lock, flags);
+    snap = regtrace_t23_text_snap;
+    words = regtrace_t23_text_words;
+    if (memcmp(snap, text, words * sizeof(u32))) {
+        for (i = 0; i < words; i++) {
+            if (snap[i] == text[i])
+                continue;
+            if (shown++ < 16)
+                printk(KERN_ERR "tx_isp_t23_recovered: TEXT CHANGED at %p (text+0x%zx) 0x%08x -> 0x%08x seen at %s cmd=0x%x pid=%d comm=%s\n",
+                       &text[i], i * sizeof(u32), snap[i], text[i],
+                       where, cmd, current->pid, current->comm);
+            snap[i] = text[i];
+        }
+        printk(KERN_ERR "tx_isp_t23_recovered: TEXT CHANGED %u words, seen at %s cmd=0x%x\n",
+               shown, where, cmd);
+    }
+    spin_unlock_irqrestore(&regtrace_t23_text_lock, flags);
+}
 module_param_named(direct_msca_qbuf, regtrace_t23_direct_msca_qbuf, bool, 0644);
 module_param_named(direct_msca_start, regtrace_t23_direct_msca_start, bool, 0644);
 module_param_named(direct_msca_cfg_load, regtrace_t23_direct_msca_cfg_load, bool, 0644);
@@ -14509,7 +14576,21 @@ static int regtrace_tx_isp_release(struct inode *inode, struct file *file)
     return 0;
 }
 
+static long regtrace_tx_isp_ioctl_body(struct file *file, unsigned int cmd,
+                                        unsigned long arg);
+
 static long regtrace_tx_isp_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+    long ret;
+
+    regtrace_t23_text_check("tx_isp_ioctl-enter", cmd);
+    ret = regtrace_tx_isp_ioctl_body(file, cmd, arg);
+    regtrace_t23_text_check("tx_isp_ioctl-exit", cmd);
+    return ret;
+}
+
+static long regtrace_tx_isp_ioctl_body(struct file *file, unsigned int cmd,
+                                        unsigned long arg)
 {
     long ret;
 
@@ -14639,7 +14720,21 @@ static int regtrace_isp_m0_release(struct inode *inode, struct file *file)
     return 0;
 }
 
+static long regtrace_isp_m0_ioctl_body(struct file *file, unsigned int cmd,
+                                        unsigned long arg);
+
 static long regtrace_isp_m0_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+    long ret;
+
+    regtrace_t23_text_check("isp_m0_ioctl-enter", cmd);
+    ret = regtrace_isp_m0_ioctl_body(file, cmd, arg);
+    regtrace_t23_text_check("isp_m0_ioctl-exit", cmd);
+    return ret;
+}
+
+static long regtrace_isp_m0_ioctl_body(struct file *file, unsigned int cmd,
+                                        unsigned long arg)
 {
     long ret;
 
@@ -15453,6 +15548,7 @@ static int regtrace_framechan_open(struct inode *inode, struct file *file)
         file->private_data = &regtrace_framechan_contexts[channel];
     printk(KERN_INFO "tx_isp_t23_recovered: open /dev/framechan%d pid=%d comm=%s\n",
            channel, current->pid, current->comm);
+    regtrace_t23_text_check("framechan-open", (unsigned int)channel);
     return 0;
 }
 
@@ -15477,10 +15573,31 @@ static int regtrace_framechan_release(struct inode *inode, struct file *file)
         file->private_data = NULL;
     printk(KERN_INFO "tx_isp_t23_recovered: release /dev/framechan%d pid=%d comm=%s\n",
            channel, current->pid, current->comm);
+    regtrace_t23_text_check("framechan-release", (unsigned int)channel);
     return 0;
 }
 
+static long regtrace_framechan_ioctl_body(struct file *file, unsigned int cmd,
+                                           unsigned long arg);
+
 static long regtrace_framechan_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+    /* Skip the per-frame calls: the compare is too slow for them. */
+    bool check = cmd != REGTRACE_FRAMECHAN_QBUF &&
+                 cmd != REGTRACE_FRAMECHAN_DQBUF &&
+                 cmd != REGTRACE_FRAMECHAN_WAIT;
+    long ret;
+
+    if (check)
+        regtrace_t23_text_check("framechan_ioctl-enter", cmd);
+    ret = regtrace_framechan_ioctl_body(file, cmd, arg);
+    if (check)
+        regtrace_t23_text_check("framechan_ioctl-exit", cmd);
+    return ret;
+}
+
+static long regtrace_framechan_ioctl_body(struct file *file, unsigned int cmd,
+                                           unsigned long arg)
 {
     struct regtrace_framechan_context *ctx;
     int channel = -1;
@@ -100196,6 +100313,8 @@ int32_t init_module(void)
         regtrace_t23_vin_proc_exit();
         tx_isp_sinfo_exit();
     }
+    if (!ret)
+        regtrace_t23_text_check("module-init", 0);
     return ret;
 #endif
     return tx_isp_init();
@@ -100205,6 +100324,8 @@ int32_t init_module(void)
 void cleanup_module(void)
 {
 #ifdef REGTRACE_KERNEL_TREE_BUILD
+    vfree(regtrace_t23_text_snap);
+    regtrace_t23_text_snap = NULL;
     regtrace_framechan_set_streaming(0, false);
     regtrace_framechan_set_streaming(1, false);
     regtrace_framechan_set_streaming(2, false);

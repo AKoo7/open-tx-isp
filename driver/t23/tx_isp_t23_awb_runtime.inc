@@ -461,7 +461,16 @@ static uint32_t regtrace_t23_awb_hlil_ratio_to_mf(uint32_t ratio)
     return (uint32_t)((reciprocal + rounding) >> q);
 }
 
+static void regtrace_t23_source_awb_hlil_work_body(struct work_struct *work);
+
 static void regtrace_t23_source_awb_hlil_work(struct work_struct *work)
+{
+    regtrace_t23_text_check("awb_hlil_work-enter", 0);
+    regtrace_t23_source_awb_hlil_work_body(work);
+    regtrace_t23_text_check("awb_hlil_work-exit", 0);
+}
+
+static void regtrace_t23_source_awb_hlil_work_body(struct work_struct *work)
 {
     struct regtrace_t23_awb_hlil_result result;
     unsigned long flags;
