@@ -9419,10 +9419,15 @@ int32_t tx_isp_subdev_init(uintptr_t a0, uintptr_t a1, uint32_t a2)
            pdev->name, sd, (void *)(uintptr_t)a2, pdata);
     return 0;
 }
+void tx_isp_t23_sinfo_sensor_unbound(void *subdev, struct module *owner);
+
 int32_t tx_isp_subdev_deinit(uintptr_t arg1)
 {
     if (arg1)
         *(uint32_t *)((char *)arg1 + REGTRACE_TX_ISP_SUBDEV_OPS_OFFSET) = 0;
+    /* A sensor's remove() frees the subdev right after this call. */
+    if (arg1 && (uintptr_t)regtrace_t23_sensor_sd == arg1)
+        tx_isp_t23_sinfo_sensor_unbound((void *)arg1, NULL);
     return 0;
 }
 
