@@ -41,6 +41,12 @@
 
 /* T23, T30, and T31 share this recovered subdevice prefix. */
 #define TX_ISP_ABI_SUBDEV_NAME_OFFSET           0x08
+/*
+ * struct tx_isp_module ends with its notify callback, immediately before the
+ * irq device.  Sensor modules reach the ISP through it for
+ * TX_ISP_EVENT_SYNC_SENSOR_ATTR (tx_isp_call_subdev_notify()).
+ */
+#define TX_ISP_ABI_LEGACY_MODULE_NOTIFY_OFFSET  0x7c
 #define TX_ISP_ABI_LEGACY_SUBDEV_IRQDEV_OFFSET  0x80
 #define TX_ISP_ABI_LEGACY_SUBDEV_CLOCKS_OFFSET  0xbc
 #define TX_ISP_ABI_LEGACY_SUBDEV_CLK_NUM_OFFSET 0xc0

@@ -136,6 +136,8 @@ static uint32_t regtrace_t23_ae_hlil_nearest_state(uint32_t ev)
 static uint32_t regtrace_t23_ae_hlil_pending_luma;
 static uint32_t regtrace_t23_ae_hlil_pending_snapshot;
 static bool regtrace_t23_ae_hlil_pending;
+/* Set while the ladder is rebuilt for a new frame length; blocks new work. */
+static bool regtrace_t23_ae_hlil_retiming;
 static DEFINE_SPINLOCK(regtrace_t23_ae_hlil_lock);
 
 static void regtrace_t23_source_ae_hlil_work(struct work_struct *work);
@@ -276,7 +278,7 @@ static void regtrace_t23_source_ae_hlil_capture(uint32_t luma,
         return;
 
     spin_lock_irqsave(&regtrace_t23_ae_hlil_lock, flags);
-    if (regtrace_t23_ae_hlil_pending) {
+    if (regtrace_t23_ae_hlil_pending || regtrace_t23_ae_hlil_retiming) {
         regtrace_t23_source_ae_hlil_drops++;
         spin_unlock_irqrestore(&regtrace_t23_ae_hlil_lock, flags);
         return;
@@ -297,7 +299,7 @@ static void regtrace_t23_source_ae_hlil_trigger(void)
         return;
 
     spin_lock_irqsave(&regtrace_t23_ae_hlil_lock, flags);
-    if (regtrace_t23_ae_hlil_pending) {
+    if (regtrace_t23_ae_hlil_pending || regtrace_t23_ae_hlil_retiming) {
         regtrace_t23_source_ae_hlil_drops++;
         spin_unlock_irqrestore(&regtrace_t23_ae_hlil_lock, flags);
         return;
@@ -361,4 +363,90 @@ static void regtrace_t23_source_ae_hlil_reset(void)
            regtrace_t23_source_ae_hlil_state,
            regtrace_t23_source_ae_hlil_ev,
            regtrace_t23_source_ae_hlil ? 1U : 0U);
+}
+
+/*
+ * A sensor FPS change moves VTS and with it the longest integration time.
+ * Stock tisp_set_fps refreshes the AE limits from the re-synced sensor
+ * attributes; the generic ladder is built from those limits, so rebuild it
+ * and continue from the rung closest to the exposure value in use.  When
+ * the frame gets shorter, the current rung may exceed the new limit and is
+ * reprogrammed at once.
+ */
+static int regtrace_t23_ae_hlil_retime(uint32_t max_it, const char *reason)
+{
+    static struct regtrace_t23_ae_hlil_rung
+        saved[REGTRACE_T23_AE_HLIL_MAX_STATES];
+    const struct regtrace_t23_ae_hlil_rung *rung;
+    unsigned long flags;
+    uint32_t saved_count;
+    uint32_t saved_max_it;
+    uint32_t saved_initial;
+    uint32_t old_packed = 0;
+    uint32_t old_gain = 0;
+    uint32_t old_ev;
+    uint32_t state;
+    int ret;
+
+    if (!regtrace_t23_source_sensor_configured)
+        return 0;   /* resolve_sensor_config reads the new limit later */
+    if (!max_it || max_it < regtrace_t23_source_sensor_min_it)
+        return -EINVAL;
+    if (max_it == regtrace_t23_source_sensor_max_it)
+        return 0;
+
+    spin_lock_irqsave(&regtrace_t23_ae_hlil_lock, flags);
+    regtrace_t23_ae_hlil_retiming = true;
+    spin_unlock_irqrestore(&regtrace_t23_ae_hlil_lock, flags);
+    cancel_work_sync(&regtrace_t23_source_ae_hlil_work_item);
+
+    saved_count = regtrace_t23_ae_hlil_state_count;
+    saved_max_it = regtrace_t23_source_sensor_max_it;
+    saved_initial = regtrace_t23_source_ae_initial_packed;
+    memcpy(saved, regtrace_t23_ae_hlil_rungs, sizeof(saved));
+    old_ev = regtrace_t23_source_ae_hlil_ev;
+    if (saved_count) {
+        state = min(regtrace_t23_source_ae_hlil_state, saved_count - 1U);
+        old_packed = saved[state].packed;
+        old_gain = saved[state].gain_q16;
+        if (!old_ev)
+            old_ev = saved[state].ev_q10;
+    }
+
+    regtrace_t23_source_sensor_max_it = max_it;
+    ret = regtrace_t23_ae_hlil_build_ladder();
+    if (ret || !regtrace_t23_ae_hlil_state_count) {
+        memcpy(regtrace_t23_ae_hlil_rungs, saved, sizeof(saved));
+        regtrace_t23_ae_hlil_state_count = saved_count;
+        regtrace_t23_source_sensor_max_it = saved_max_it;
+        regtrace_t23_source_ae_initial_packed = saved_initial;
+        if (!ret)
+            ret = -EINVAL;
+    } else {
+        state = regtrace_t23_ae_hlil_nearest_state(old_ev >> 10);
+        rung = &regtrace_t23_ae_hlil_rungs[state];
+        regtrace_t23_source_ae_hlil_state = state;
+        regtrace_t23_source_ae_hlil_ev = rung->ev_q10;
+        if (regtrace_t23_sensor_streaming && regtrace_t23_core_started &&
+            rung->packed != old_packed) {
+            ret = regtrace_t23_call_sensor_exposure(rung->packed,
+                                                    "source-ae-retime");
+            if (!ret && rung->gain_q16 != old_gain)
+                ret = regtrace_t23_source_apply_total_gain_value(
+                    rung->gain_q16, rung->packed >> 16, false, true);
+        }
+    }
+
+    spin_lock_irqsave(&regtrace_t23_ae_hlil_lock, flags);
+    regtrace_t23_ae_hlil_pending = false;
+    regtrace_t23_ae_hlil_retiming = false;
+    spin_unlock_irqrestore(&regtrace_t23_ae_hlil_lock, flags);
+
+    printk(KERN_INFO
+           "tx_isp_t23_recovered: AE retime max_it=%u->%u states=%u state=%u ev=%u ret=%d reason=%s\n",
+           saved_max_it, regtrace_t23_source_sensor_max_it,
+           regtrace_t23_ae_hlil_state_count,
+           regtrace_t23_source_ae_hlil_state,
+           regtrace_t23_source_ae_hlil_ev, ret, reason ? reason : "?");
+    return ret;
 }

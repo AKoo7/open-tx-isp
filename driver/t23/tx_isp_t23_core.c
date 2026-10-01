@@ -853,6 +853,7 @@ static uintptr_t data_a8f64;
 static uintptr_t data_a8f68;
 static struct file_operations video_input_cmd_fops;
 static struct file_operations isp_vic_frd_fops;
+static const struct file_operations regtrace_t23_isp_m0_proc_fops;
 static int regtrace_t23_vic_proc_open(struct inode *inode, struct file *file);
 static int regtrace_t23_vic_proc_show(struct seq_file *seq, void *unused);
 static ssize_t regtrace_t23_vic_proc_write(struct file *file,
@@ -9044,7 +9045,7 @@ int32_t sensor_early_init(uint32_t arg1);
 int32_t tx_isp_video_s_stream(void *arg1, int32_t arg2);
 int32_t tx_isp_video_link_stream(void *arg1, int32_t arg2);
 int32_t tx_isp_open(int32_t arg1, void *arg2);
-int32_t tx_isp_notify(int32_t arg1, int32_t arg2);
+int tx_isp_notify(void *module, unsigned int notification, void *data);
 int64_t find_subdev_link_pad(uintptr_t arg1, uintptr_t arg2);
 int32_t isp_subdev_release_clks(void *arg1);
 int isp_subdev_init_clks(void * arg1, int32_t * arg2);
@@ -9239,6 +9240,10 @@ static bool regtrace_t23_csi_initialized;
 static void regtrace_t23_seed_sensor_caches(const char *reason);
 static int regtrace_t23_call_sensor_chip_ident(const char *reason);
 uint32_t tisp_set_fps(uint32_t unused, uint32_t fps);
+static uint32_t regtrace_t23_sensor_fps_request;
+static int regtrace_t23_sensor_fps_stream_on(const char *reason);
+static uint32_t regtrace_t23_sensor_fps_report(void);
+static void regtrace_t23_install_sensor_notify(uintptr_t sd);
 static int regtrace_t23_ensure_sensor_client(struct i2c_driver *drv,
                                              unsigned short addr,
                                              const char *reason);
@@ -9262,6 +9267,8 @@ static void regtrace_t23_release_sensor_client(struct i2c_driver *drv,
 #define REGTRACE_TX_ISP_EVENT_SENSOR_INT_TIME 0x02000005U
 #define REGTRACE_TX_ISP_EVENT_SENSOR_AGAIN 0x02000007U
 #define REGTRACE_TX_ISP_EVENT_SENSOR_FPS 0x0200000aU
+#define REGTRACE_TX_ISP_EVENT_SYNC_SENSOR_ATTR 0x01000001U
+#define REGTRACE_TX_ISP_MODULE_NOTIFY_OFFSET TX_ISP_ABI_LEGACY_MODULE_NOTIFY_OFFSET
 #define REGTRACE_TX_ISP_EVENT_SENSOR_EXPO 0x02000016U
 
 static int regtrace_t23_ops_has_sensor_table(uintptr_t ops)
@@ -9303,6 +9310,8 @@ static int regtrace_t23_capture_sensor_subdev(uintptr_t pdev,
     regtrace_t23_sensor_identified = false;
     regtrace_t23_sensor_initialized = false;
     regtrace_t23_sensor_streaming = false;
+    regtrace_t23_sensor_fps_request = 0;
+    regtrace_t23_install_sensor_notify(sd);
     regtrace_t23_seed_sensor_caches("sensor-subdev-init");
     printk(KERN_INFO "tx_isp_t23_recovered: captured external sensor subdev name=%s sd=%p ops=%p\n",
            name, (void *)sd, (void *)ops);
@@ -9454,10 +9463,13 @@ void tx_isp_t23_sinfo_sensor_bound(void *subdev, struct module *owner)
 {
     struct tx_isp_subdev *sd = subdev;
 
+    if (regtrace_t23_sensor_sd != sd)
+        regtrace_t23_sensor_fps_request = 0;
     regtrace_t23_sensor_sd = sd;
     regtrace_t23_sensor_identified = false;
     regtrace_t23_sensor_initialized = false;
     regtrace_t23_sensor_streaming = false;
+    regtrace_t23_install_sensor_notify((uintptr_t)sd);
     regtrace_t23_seed_sensor_caches("sensor-bind");
     printk(KERN_INFO "tx_isp_t23_recovered: sensor bind sd=%p owner=%p\n",
            sd, owner);
@@ -9490,6 +9502,12 @@ static int regtrace_t23_vin_proc_init(void)
     }
     if (!proc_create("isp-w02", 0644, regtrace_t23_isp_proc_root,
                      &isp_vic_frd_fops)) {
+        remove_proc_subtree("jz/isp", NULL);
+        regtrace_t23_isp_proc_root = NULL;
+        return -ENOMEM;
+    }
+    if (!proc_create("isp-m0", 0444, regtrace_t23_isp_proc_root,
+                     &regtrace_t23_isp_m0_proc_fops)) {
         remove_proc_subtree("jz/isp", NULL);
         regtrace_t23_isp_proc_root = NULL;
         return -ENOMEM;
@@ -9542,6 +9560,9 @@ static int regtrace_t23_sensor_registered;
 #define REGTRACE_T23_SENSOR_VIDEO_CODE_OFFSET \
     (REGTRACE_T23_SENSOR_VIDEO_MBUS_OFFSET + 0x08U)
 #define REGTRACE_T23_SENSOR_VIDEO_ATTR_OFFSET 0x270U
+/* struct tx_isp_video_in.fps (packed num << 16 | den) without
+ * CONFIG_MULTI_SENSOR; sensor_sc2336_t23.ko stores it at sd + 0x27c. */
+#define REGTRACE_T23_SENSOR_VIDEO_FPS_OFFSET 0x27cU
 #define REGTRACE_T23_CSI_PHY_PHYS 0x10022000U
 #define REGTRACE_T23_CSI_PHY_SIZE 0x1000U
 #define REGTRACE_T23_ATTR_NAME 0x00U
@@ -11036,10 +11057,11 @@ static int regtrace_t23_call_sensor_core_init(const char *reason)
     ret = ((int (*)(void *, int))(uintptr_t)init_fn)((void *)sd, 1);
     /*
      * Current T23 sensor modules return the notify result after their sensor
-     * register table has already been programmed.  The recovered graph does
-     * not install module.notify yet, so that callback returns
-     * -ENOIOCTLCMD.  We perform the required attribute propagation below;
-     * do not turn a missing advisory callback into a failed sensor init.
+     * register table has already been programmed.  The bound sensor's
+     * module.notify is installed by regtrace_t23_install_sensor_notify(); a
+     * subdev registered some other way may still lack it and return
+     * -ENOIOCTLCMD.  The attribute propagation is repeated below, so do not
+     * turn a missing advisory callback into a failed sensor init.
      */
     if (ret == -ENOIOCTLCMD)
         ret = 0;
@@ -11223,8 +11245,8 @@ static int regtrace_t23_call_sensor_stream(int enable, const char *reason)
         uint32_t packed;
 
         regtrace_t23_sensor_streaming = enable ? true : false;
-        if (enable && regtrace_t23_source_sensor_fps)
-            ret = (int)tisp_set_fps(0, regtrace_t23_source_sensor_fps);
+        if (enable)
+            ret = regtrace_t23_sensor_fps_stream_on(reason);
         if (enable && !ret)
             ret = regtrace_t23_source_resolve_sensor_config();
         packed = regtrace_t23_source_ae_force_packed ?
@@ -14627,10 +14649,8 @@ static long regtrace_isp_m0_ext_control(unsigned long arg)
             ret = (long)(int32_t)tisp_set_fps(0, ctrl.value_or_ptr);
             if (ret)
                 return ret;
-            regtrace_t23_source_sensor_fps = ctrl.value_or_ptr;
         } else if (ctrl.count == 1) {
-            ctrl.value_or_ptr = regtrace_t23_source_sensor_fps ?
-                regtrace_t23_source_sensor_fps : 0x00190001U;
+            ctrl.value_or_ptr = regtrace_t23_sensor_fps_report();
         } else {
             return -EINVAL;
         }
@@ -37994,10 +38014,29 @@ int32_t tx_isp_open(int32_t arg1, void *arg2) {
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000010684 origin=model_output original=tx_isp_notify */
-int32_t tx_isp_notify(int32_t arg1, int32_t arg2)
+/*
+ * module.notify of the bound sensor.  Sensor modules call it through
+ * tx_isp_call_subdev_notify() after changing their attributes (sensor init,
+ * TX_ISP_EVENT_SENSOR_FPS) and return its result to the ISP.  The stock
+ * handler fans TX_ISP_EVENT_SYNC_SENSOR_ATTR out to the VIC/CSI/core
+ * sync_sensor_attr ops; here those copies are the seeded sensor caches.
+ * Other notifications have no consumer in this driver.
+ */
+int tx_isp_notify(void *module, unsigned int notification, void *data)
 {
-    /* one-off compile triage stub for malformed recovered body */
+    (void)module;
+    (void)data;
+    if (notification == REGTRACE_TX_ISP_EVENT_SYNC_SENSOR_ATTR)
+        regtrace_t23_seed_sensor_caches("sensor-sync-attr");
     return 0;
+}
+
+static void regtrace_t23_install_sensor_notify(uintptr_t sd)
+{
+    if (!regtrace_t23_valid_ptr(sd))
+        return;
+    *(uint32_t *)(sd + REGTRACE_TX_ISP_MODULE_NOTIFY_OFFSET) =
+        (uint32_t)(uintptr_t)&tx_isp_notify;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000010798 origin=fragment_seed original=find_subdev_link_pad */
@@ -91668,32 +91707,179 @@ int32_t tisp_flip_enable(void)
     return 0;
 }
 
-/* WHOLE_DRIVER_CANDIDATE fn_00000000000655f8 origin=fragment_seed original=tisp_set_fps */
-uint32_t tisp_set_fps(uint32_t a0, uint32_t a1)
+static DEFINE_MUTEX(regtrace_t23_sensor_fps_lock);
+
+static bool regtrace_t23_sensor_fps_valid(uint32_t packed)
 {
-    uint32_t numerator = a1 >> 16;
-    uint32_t denominator = a1 & 0xffffU;
-    uint32_t fps_q8;
+    uint32_t numerator = packed >> 16;
+    uint32_t denominator = packed & 0xffffU;
+
+    /* The sensor driver enforces its own min/max rate. */
+    return numerator && denominator && numerator <= 120U * denominator;
+}
+
+/* The rate the bound sensor driver last accepted (tx_isp_video_in.fps). */
+static uint32_t regtrace_t23_sensor_held_fps(void)
+{
+    uintptr_t sd = (uintptr_t)regtrace_t23_sensor_sd;
+    uint32_t fps;
+
+    if (!regtrace_t23_valid_ptr(sd) || !regtrace_t23_sensor_owned_attr())
+        return 0;
+    fps = *(uint32_t *)(sd + REGTRACE_T23_SENSOR_VIDEO_FPS_OFFSET);
+    return regtrace_t23_sensor_fps_valid(fps) ? fps : 0;
+}
+
+/*
+ * Program a rate into the initialized sensor, as stock tisp_set_fps does:
+ * TX_ISP_EVENT_SENSOR_FPS makes the sensor driver rewrite VTS and its
+ * integration limits, then sync its attributes through module.notify; the
+ * AE then follows the new maximum integration time.  Caller holds
+ * regtrace_t23_sensor_fps_lock.
+ */
+static int regtrace_t23_sensor_fps_apply(uint32_t packed, const char *reason)
+{
+    unsigned char *attr;
+    uint32_t value = packed;
+    uint32_t vts = 0;
+    uint32_t max_it = 0;
     int ret;
 
-    (void)a0;
-    if (!numerator || !denominator)
-        return (uint32_t)-EINVAL;
-    fps_q8 = (numerator / denominator) << 8;
-    fps_q8 += ((numerator % denominator) << 8) / denominator;
-    if (fps_q8 < (5U << 8) || fps_q8 > (30U << 8))
-        return (uint32_t)-ERANGE;
-
     ret = regtrace_t23_call_sensor_ioctl(REGTRACE_TX_ISP_EVENT_SENSOR_FPS,
-                                         &a1);
-    if (ret)
-        return (uint32_t)ret;
+                                         &value);
+    if (ret) {
+        printk(KERN_WARNING
+               "tx_isp_t23_recovered: sensor rejected fps=%u/%u ret=%d reason=%s\n",
+               packed >> 16, packed & 0xffffU, ret, reason ? reason : "?");
+        return ret;
+    }
 
     regtrace_t23_seed_sensor_caches("tisp-set-fps");
+    attr = regtrace_t23_sensor_owned_attr();
+    if (attr) {
+        vts = regtrace_t23_get_le16(attr + REGTRACE_T23_ATTR_TOTAL_HEIGHT);
+        max_it = regtrace_t23_get_le16(attr + REGTRACE_T23_ATTR_MAX_IT);
+        if (!max_it)
+            max_it = regtrace_t23_get_le16(
+                attr + REGTRACE_T23_ATTR_MAX_IT_NATIVE);
+    }
+    if (max_it)
+        regtrace_t23_ae_hlil_retime(max_it, reason);
+
     printk(KERN_INFO
-           "tx_isp_t23_recovered: sensor fps=%u/%u applied through sensor event\n",
-           numerator, denominator);
+           "tx_isp_t23_recovered: sensor fps=%u/%u held=0x%08x vts=%u max_it=%u ae_max_it=%u reason=%s\n",
+           packed >> 16, packed & 0xffffU, regtrace_t23_sensor_held_fps(),
+           vts, max_it, regtrace_t23_source_sensor_max_it,
+           reason ? reason : "?");
     return 0;
+}
+
+/*
+ * Sensor stream-on: the sensor's init table has just restored its default
+ * frame length on first start, so program the rate libimp requested (or
+ * the source_sensor_fps default) if the sensor does not hold it already.
+ */
+static int regtrace_t23_sensor_fps_stream_on(const char *reason)
+{
+    uint32_t want;
+    int ret = 0;
+
+    mutex_lock(&regtrace_t23_sensor_fps_lock);
+    want = regtrace_t23_sensor_fps_request ?
+        regtrace_t23_sensor_fps_request : regtrace_t23_source_sensor_fps;
+    if (want && regtrace_t23_sensor_fps_valid(want) &&
+        want != regtrace_t23_sensor_held_fps())
+        ret = regtrace_t23_sensor_fps_apply(want, reason);
+    mutex_unlock(&regtrace_t23_sensor_fps_lock);
+    return ret;
+}
+
+/*
+ * TX_ISP_TUNING_CMD_T31_SENSOR_FPS GET: what the sensor runs at, or the
+ * pending request while the sensor waits for its first stream-on.
+ */
+static uint32_t regtrace_t23_sensor_fps_report(void)
+{
+    uint32_t fps = 0;
+
+    mutex_lock(&regtrace_t23_sensor_fps_lock);
+    if (!regtrace_t23_sensor_initialized)
+        fps = regtrace_t23_sensor_fps_request ?
+            regtrace_t23_sensor_fps_request : regtrace_t23_source_sensor_fps;
+    if (!fps)
+        fps = regtrace_t23_sensor_held_fps();
+    mutex_unlock(&regtrace_t23_sensor_fps_lock);
+    return fps ? fps : 0x00190001U;
+}
+
+static int regtrace_t23_isp_m0_proc_show(struct seq_file *seq, void *unused)
+{
+    unsigned char *attr = regtrace_t23_sensor_owned_attr();
+    uint32_t fps = regtrace_t23_sensor_fps_report();
+
+    (void)unused;
+    seq_printf(seq, "ISP OUTPUT FPS : %u / %u\n", fps >> 16, fps & 0xffffU);
+    seq_printf(seq, "SENSOR FPS REQUEST : %u / %u\n",
+               regtrace_t23_sensor_fps_request >> 16,
+               regtrace_t23_sensor_fps_request & 0xffffU);
+    if (attr) {
+        seq_printf(seq, "SENSOR VTS : %u\n",
+                   regtrace_t23_get_le16(attr +
+                                         REGTRACE_T23_ATTR_TOTAL_HEIGHT));
+        seq_printf(seq, "SENSOR MAX INTEGRATION TIME : %u\n",
+                   regtrace_t23_get_le16(attr + REGTRACE_T23_ATTR_MAX_IT));
+    }
+    seq_printf(seq, "AE MAX INTEGRATION TIME : %u\n",
+               regtrace_t23_source_sensor_max_it);
+    seq_printf(seq, "SENSOR STATE : %s\n",
+               regtrace_t23_sensor_streaming ? "streaming" :
+               regtrace_t23_sensor_initialized ? "initialized" : "idle");
+    return 0;
+}
+
+static int regtrace_t23_isp_m0_proc_open(struct inode *inode, struct file *file)
+{
+    return single_open(file, regtrace_t23_isp_m0_proc_show, PDE_DATA(inode));
+}
+
+static const struct file_operations regtrace_t23_isp_m0_proc_fops = {
+    .owner = THIS_MODULE,
+    .open = regtrace_t23_isp_m0_proc_open,
+    .read = seq_read,
+    .llseek = seq_lseek,
+    .release = single_release,
+};
+
+/* WHOLE_DRIVER_CANDIDATE fn_00000000000655f8 origin=fragment_seed original=tisp_set_fps */
+/*
+ * IMP_ISP_Tuning_SetSensorFPS.  libimp may call it before the first
+ * frame-channel STREAMON, when this driver has not run the sensor's init
+ * table yet; the table would overwrite the frame length again, so the
+ * request is held and programmed at sensor stream-on.
+ */
+uint32_t tisp_set_fps(uint32_t a0, uint32_t a1)
+{
+    uint32_t previous;
+    int ret = 0;
+
+    (void)a0;
+    if (!regtrace_t23_sensor_fps_valid(a1))
+        return (uint32_t)-EINVAL;
+
+    mutex_lock(&regtrace_t23_sensor_fps_lock);
+    previous = regtrace_t23_sensor_fps_request;
+    regtrace_t23_sensor_fps_request = a1;
+    if (regtrace_t23_sensor_initialized) {
+        ret = regtrace_t23_sensor_fps_apply(a1, "tisp-set-fps");
+        if (ret)
+            regtrace_t23_sensor_fps_request = previous;
+    } else {
+        printk(KERN_INFO
+               "tx_isp_t23_recovered: sensor fps=%u/%u held until sensor stream-on\n",
+               a1 >> 16, a1 & 0xffffU);
+    }
+    mutex_unlock(&regtrace_t23_sensor_fps_lock);
+    return (uint32_t)ret;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000065770 origin=model_output original=tisp_set_brightness */
