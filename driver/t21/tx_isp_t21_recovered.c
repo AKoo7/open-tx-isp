@@ -4430,7 +4430,7 @@ static unsigned char __attribute__((aligned(4))) _ae_wm_q[60] = {
     0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00,
 };
 static uintptr_t ae_dn_refresh_flag;
-static uintptr_t (*ae_compensation)();
+static uintptr_t ae_compensation = 128;	/* OEM .data 0x44a64 */
 static unsigned char data_7de18[16384];
 static unsigned char data_7de1c[16384];
 static unsigned char data_7de20[16384];
@@ -4474,7 +4474,7 @@ static uintptr_t again_new;
 static uintptr_t again_old;
 static uintptr_t total_gain_new;
 static uintptr_t total_gain_old;
-static uintptr_t ftune;
+static uintptr_t ftune = 1;	/* OEM .data initial value */
 static uint32_t force_trig;
 static uint32_t trig;
 static uint32_t gro_result;
@@ -4502,13 +4502,14 @@ static uint32_t t21_ae_frame_count;
  */
 static int ae_step_shift = 3;
 module_param(ae_step_shift, int, 0644);
-MODULE_PARM_DESC(ae_step_shift, "T21 AE: step by (target/luma)^(1/2^n) (0 = full step)");
+MODULE_PARM_DESC(ae_step_shift, "T21 AE: no-op since the stock AE (ae_tune2) runs; kept for load-line compatibility");
 static int ae_hold_pct = 15;
 module_param(ae_hold_pct, int, 0644);
-MODULE_PARM_DESC(ae_hold_pct, "T21 AE: hold the exposure while luma is within this percent of the target");
+MODULE_PARM_DESC(ae_hold_pct, "T21 AE: no-op since the stock AE (ae_tune2) runs; kept for load-line compatibility");
 /* Read-only AE diagnostics (/sys/module/tx_isp_t21/parameters/ae_dbg_*):
- * the AE statistics IRQ count, the last weighted mean luma, the target,
- * the update_luma result and the centre zone raw sums d/m/s/dc/sc. */
+ * the AE statistics IRQ count and the centre zone raw sums d/m/s/dc/sc.
+ * ae_dbg_luma/target/ret belonged to the replaced controller and stay 0
+ * now that the stock AE (ae_tune2) runs. */
 static uint ae_dbg_stat_irqs;
 module_param(ae_dbg_stat_irqs, uint, 0444);
 static uint ae_dbg_luma;
@@ -40159,22 +40160,29 @@ int32_t tisp_clm_param_array_set(int32_t param_id, int32_t param)
  */
 #include "tx_isp_t21_adr_oem.inc"
 
+/* Lifted functions may spill a0..a3 into their caller's 16-byte home area
+ * (o32 ABI), so C callers pass a scratch block as the caller frame. */
+#define LIFT_CALL(fn, a0, a1, a2, a3) ({			\
+	uint32_t stk_[8] = { 0 };				\
+	fn((a0), (a1), (a2), (a3), (uint32_t)(uintptr_t)stk_);	\
+})
+
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000025360 origin=model_output original=tisp_defog_ev_update */
 int32_t tisp_defog_ev_update(uint32_t arg1, uint32_t arg2)
 {
-	return (int32_t)L_tisp_defog_ev_update(arg1, arg2, 0, 0, 0);
+	return (int32_t)LIFT_CALL(L_tisp_defog_ev_update, arg1, arg2, 0, 0);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000025388 origin=model_output original=tiziano_defog_get_data */
 uint32_t *tiziano_defog_get_data(void *arg1)
 {
-	return (uint32_t *)(uintptr_t)L_tiziano_defog_get_data((uint32_t)(uintptr_t)arg1, 0, 0, 0, 0);
+	return (uint32_t *)(uintptr_t)LIFT_CALL(L_tiziano_defog_get_data, (uint32_t)(uintptr_t)arg1, 0, 0, 0);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000025498 origin=model_output original=tiziano_defog_interrupt_static */
 int32_t tiziano_defog_interrupt_static(void)
 {
-	return (int32_t)L_tiziano_defog_interrupt_static(0, 0, 0, 0, 0);
+	return (int32_t)LIFT_CALL(L_tiziano_defog_interrupt_static, 0, 0, 0, 0);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002560c origin=model_output original=tiziano_defog_algorithm */
@@ -40451,7 +40459,7 @@ int32_t tiziano_defog_algorithm(void)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000025d50 origin=model_output original=tisp_defog_process */
 int32_t tisp_defog_process(void)
 {
-	return (int32_t)L_tisp_defog_process(0, 0, 0, 0, 0);
+	return (int32_t)LIFT_CALL(L_tisp_defog_process, 0, 0, 0, 0);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000025d78 origin=fragment_seed original=tiziano_defog_params_init */
@@ -41124,19 +41132,19 @@ int32_t tisp_defog_param_array_set(int32_t param_id, int32_t src)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000027590 origin=model_output original=tisp_adr_ev_update */
 int32_t tisp_adr_ev_update(uint32_t arg1, uint32_t arg2)
 {
-	return (int32_t)L_tisp_adr_ev_update(arg1, arg2, 0, 0, 0);
+	return (int32_t)LIFT_CALL(L_tisp_adr_ev_update, arg1, arg2, 0, 0);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000275b8 origin=fragment_seed original=tiziano_adr_get_data */
 int64_t tiziano_adr_get_data(uintptr_t a0)
 {
-	return (int32_t)L_tiziano_adr_get_data((uint32_t)a0, 0, 0, 0, 0);
+	return (int32_t)LIFT_CALL(L_tiziano_adr_get_data, (uint32_t)a0, 0, 0, 0);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000027700 origin=model_output original=tiziano_adr_interrupt_static */
 int32_t tiziano_adr_interrupt_static(void)
 {
-	return (int32_t)L_tiziano_adr_interrupt_static(0, 0, 0, 0, 0);
+	return (int32_t)LIFT_CALL(L_tiziano_adr_interrupt_static, 0, 0, 0, 0);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000027874 origin=model_output original=tiziano_adr_algorithm */
@@ -41463,7 +41471,7 @@ int32_t tiziano_adr_algorithm(void)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000027ea8 origin=model_output original=tisp_adr_process */
 int32_t tisp_adr_process(void)
 {
-	return (int32_t)L_tisp_adr_process(0, 0, 0, 0, 0);
+	return (int32_t)LIFT_CALL(L_tisp_adr_process, 0, 0, 0, 0);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000028098 origin=model_output original=tiziano_adr_params_init */
@@ -41886,7 +41894,7 @@ uint32_t tisp_g_adr_str_internal(uintptr_t a0)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000029280 origin=model_output original=tisp_s_adr_str_internal */
 int32_t tisp_s_adr_str_internal(uint32_t a0)
 {
-	return (int32_t)L_tisp_s_adr_str_internal(a0, 0, 0, 0, 0);
+	return (int32_t)LIFT_CALL(L_tisp_s_adr_str_internal, a0, 0, 0, 0);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000293d8 origin=model_output original=tiziano_adr_params_refresh */
@@ -44443,21 +44451,13 @@ ae_tune20x1180:
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002c34c origin=model_output original=tisp_ae_g_min */
 int32_t tisp_ae_g_min(uint32_t *arg1)
 {
-	arg1[0] = tisp_ae_g_min_a;
-	arg1[1] = tisp_ae_g_min_b;
-	return 0;
+	return LIFT_CALL(L_tisp_ae_g_min, (uint32_t)(uintptr_t)arg1, 0, 0, 0);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002c36c origin=model_output original=tisp_ae_s_min */
 int32_t tisp_ae_s_min(uint32_t min_it, uint32_t min_ag, int32_t trig_cal)
 {
-    if (min_it == 0 || min_ag < 0x400) {
-        isp_printf(2, "invaild min integration or min sensor analog gain\n", trig_cal);
-        return -1;
-    }
-    tisp_ae_g_min_a = min_it;
-    tisp_ae_g_min_b = min_ag;
-    return 0;
+	return LIFT_CALL(L_tisp_ae_s_min, min_it, min_ag, (uint32_t)trig_cal, 0);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002c3d0 origin=fragment_seed original=Tiziano_ae_fpga */
@@ -45150,80 +45150,31 @@ int32_t tiziano_ae_dump(void)
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002cc78 origin=model_output original=tiziano_ae_params_refresh */
 int tiziano_ae_params_refresh(void)
 {
-	/* These are absolute offsets in the 0x15380-byte OEM TISP image.
-	 * The first-pass recovery incorrectly treated them as one compact,
-	 * contiguous C record beginning at tparams[0]. */
-	memcpy(_ae_parameter, tparams + 0x6690, 0x98);
-	memcpy(ae_switch_night_mode, tparams + 0x6728, 0x10);
-	memcpy(_AePointPos, tparams + 0x6738, 8);
-	memcpy(_exp_parameter, tparams + 0x6740, 0x2c);
-	memcpy(ae_ev_step, tparams + 0x676c, 0x14);
-	memcpy(ae_stable_tol, tparams + 0x6780, 0x10);
-	memcpy(_ev_list, tparams + 0x6790, 0x28);
-	memcpy(_lum_list, tparams + 0x67b8, 0x18);
-	memcpy(_at_list, tparams + 0x67d0, 0x28);
-	memcpy(_deflicker_para, tparams + 0x67f8, 0xc);
-	memcpy(_flicker_t, tparams + 0x6804, 0x18);
-	memcpy(_scene_para, tparams + 0x681c, 0x2c);
-	memcpy(t21_ae_scene_cfg, _scene_para, sizeof(t21_ae_scene_cfg));
-	memcpy(ae_scene_mode_th, tparams + 0x6848, 0x10);
-	memcpy(_log2_lut, tparams + 0x6858, 0x50);
-	memcpy(_weight_lut, tparams + 0x68a8, 0x50);
-	memcpy(_ae_zone_weight, tparams + 0x68f8, 0x384);
-	memcpy(_scene_roui_weight, tparams + 0x6c7c, 0x384);
-	memcpy(_scene_roi_weight, tparams + 0x7000, 0x384);
-
-	if (ae_dn_refresh_flag == 0) {
-		memcpy(_ae_result, tparams + 0x7384, 0x10);
-		memcpy(_ae_stat, tparams + 0x7394, 0x14);
-		memcpy(_ae_wm_q, tparams + 0x73a8, 0x3c);
-	}
-
-	ae_dn_refresh_flag = 0;
-	return 0;
+	return LIFT_CALL(L_tiziano_ae_params_refresh, 0, 0, 0, 0);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002ceb4 origin=model_output original=tiziano_ae_compensation_set */
 int32_t tiziano_ae_compensation_set(uint32_t a0)
 {
-    ae_compensation = (uintptr_t (*)())(uintptr_t)a0;
-    /* OEM: trig = force_trig = 1; the recovery wrote both into d_linear
-     * (the LSC table) at +0x1014/+0x1004 (HI16 0x10000 dropped). */
-    trig = 1;
-    force_trig = 1;
-    return 0;
+	return LIFT_CALL(L_tiziano_ae_compensation_set, a0, 0, 0, 0);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002ced8 origin=model_output original=tiziano_ae_s_ev_start */
 uint32_t tiziano_ae_s_ev_start(uint32_t arg1)
 {
-	ae_ev_init_strict = (uintptr_t (*)())(uintptr_t)arg1;
-	ae_ev_init_en = 1;
-	return 0;
+	return LIFT_CALL(L_tiziano_ae_s_ev_start, arg1, 0, 0, 0);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002cef0 origin=model_output original=tiziano_ae_s_max_again */
 int32_t tiziano_ae_s_max_again(int32_t arg1)
 {
-
-    uint32_t max_val = *(uint32_t *)((char *)((char *)&sensor_ctrl + 0x18));
-
-    if ((max_val << 11) < (uint32_t)arg1) {
-        isp_printf(2, "%d not in range, max_again must between 0~%d\n", arg1);
-        return -1;
-    }
-
-    *(uint32_t *)((char *)((char *)&tisp_ae_ctrls + 0x14)) = tisp_math_exp2(arg1, 5, 10);
-    return 0;
+	return LIFT_CALL(L_tiziano_ae_s_max_again, (uint32_t)arg1, 0, 0, 0);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002cf5c origin=model_output original=tiziano_ae_s_max_isp_dgain */
 int32_t tiziano_ae_s_max_isp_dgain(int32_t arg1)
 {
-    int32_t (*fn)(int32_t, int32_t, int32_t) = tisp_math_exp2;
-    int32_t v = fn(arg1, 5, 10);
-    *(uint32_t *)&tisp_ae_ctrls[32] = v;
-    return 0;
+	return LIFT_CALL(L_tiziano_ae_s_max_isp_dgain, (uint32_t)arg1, 0, 0, 0);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002cf90 origin=model_output original=tiziano_deflicker_expt */
@@ -45283,11 +45234,7 @@ int32_t tiziano_deflicker_expt(int32_t flicker, int32_t packed_fps,
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002d118 origin=model_output original=tiziano_deflicker_expt_tune */
 int32_t tiziano_deflicker_expt_tune(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4)
 {
-	int32_t *p_lut = &_deflick_lut;
-	int32_t *p_nodes = &_nodes_num;
-	int32_t (*fn)(int32_t, int32_t, int32_t, int32_t, int32_t *, int32_t *) = (int32_t (*)(int32_t, int32_t, int32_t, int32_t, int32_t *, int32_t *))tiziano_deflicker_expt;
-
-	return fn(arg1, arg2, arg3, arg4, p_lut, p_nodes);
+	return LIFT_CALL(L_tiziano_deflicker_expt_tune, (uint32_t)arg1, (uint32_t)arg2, (uint32_t)arg3, (uint32_t)arg4);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002d154 origin=model_output original=system_reg_write_ae */
@@ -45885,253 +45832,9 @@ static u32 t21_ae_target_for_exposure(u32 exposure)
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002d884 origin=model_output original=tisp_ae_process */
 int32_t tisp_ae_process(void)
 {
-	static u32 last_total_gain = ~0U;
-	static u32 last_again = ~0U;
-	struct t21_sensor_ctrl_view *ctrl =
-		(struct t21_sensor_ctrl_view *)sensor_ctrl;
-	struct t21_ae_ctrls_view *ae_ctrl =
-		(struct t21_ae_ctrls_view *)tisp_ae_ctrls;
-	u32 dg_regs[2] = { 0x04000400, 0x04000400 };
-	int32_t linear_pair[2] = { 1024, 1024 };
-	u32 target;
-	u32 luma;
-	u32 min_it = ctrl->min_integration_time;
-	u32 max_it = ctrl->max_integration_time;
-	u32 max_again;
-	u32 max_sensor_dgain;
-	u32 max_isp_dgain;
-	u32 new_it;
-	u32 requested_again;
-	u32 requested_sensor_dgain;
-	u32 actual_again;
-	u32 actual_sensor_dgain;
-	u32 isp_dgain;
-	u32 total_gain_q10;
-	u32 total_gain;
-	u32 again;
-	u32 event[12] = { 0 };
-	u64 desired;
-	u64 max_exposure;
-	u64 current_exposure;
-	u64 actual_sensor_gain;
-	u32 current_ev;
-	u32 *reg = (u32 *)_ae_reg;
-	u32 *result = (u32 *)_ae_result;
-	bool hold = false;
-
-	BUILD_BUG_ON(sizeof(*ae_ctrl) != sizeof(tisp_ae_ctrls));
-	BUILD_BUG_ON(offsetof(struct t21_ae_ctrls_view, sensor_dgain) != 0x08);
-	BUILD_BUG_ON(offsetof(struct t21_ae_ctrls_view, isp_dgain) != 0x10);
-	BUILD_BUG_ON(offsetof(struct t21_ae_ctrls_view,
-			      max_integration_time) != 0x1c);
-
-	tisp_ae_ctrls_update();
-	t21_ae_update_luma();
-	luma = t21_ae_measured_luma;
-
-	/* Run the sensor bus at a modest cadence while the reconstructed AE
-	 * policy is converging.  All sensor limits and operations remain supplied
-	 * by the generic sensor descriptor loaded from the tuning blob. */
-	if (++t21_ae_frame_count % 3)
-		return 0;
-	if (!luma)
-		luma = 1;
-	if (min_it < 1)
-		min_it = 1;
-	if (max_it < min_it)
-		max_it = min_it;
-	if (ae_ctrl->max_integration_time >= min_it &&
-	    ae_ctrl->max_integration_time < max_it)
-		max_it = ae_ctrl->max_integration_time;
-	max_again = tisp_math_exp2(ctrl->exp2_input_a, 16, 10);
-	if (max_again < 1024)
-		max_again = 1024;
-	if (ae_ctrl->max_sensor_again >= 1024 &&
-	    ae_ctrl->max_sensor_again < max_again)
-		max_again = ae_ctrl->max_sensor_again;
-	max_sensor_dgain = tisp_math_exp2(ctrl->exp2_input_b, 16, 10);
-	if (max_sensor_dgain < 1024)
-		max_sensor_dgain = 1024;
-	if (ae_ctrl->max_sensor_dgain >= 1024 &&
-	    ae_ctrl->max_sensor_dgain < max_sensor_dgain)
-		max_sensor_dgain = ae_ctrl->max_sensor_dgain;
-	max_isp_dgain = max_t(u32, ae_ctrl->max_isp_dgain, 1024);
-	if (t21_ae_current_it < min_it)
-		t21_ae_current_it = min_it;
-	if (t21_ae_current_gain_q10 < 1024)
-		t21_ae_current_gain_q10 = 1024;
-	if (t21_ae_current_sensor_dgain_q10 < 1024)
-		t21_ae_current_sensor_dgain_q10 = 1024;
-	if (t21_ae_current_isp_dgain_q10 < 1024)
-		t21_ae_current_isp_dgain_q10 = 1024;
-
-	current_exposure = (u64)t21_ae_current_it *
-			   t21_ae_current_gain_q10;
-	current_exposure = div_u64(current_exposure *
-				   t21_ae_current_sensor_dgain_q10, 1024);
-	current_exposure = div_u64(current_exposure *
-				   t21_ae_current_isp_dgain_q10, 1024);
-	current_ev = div_u64(current_exposure, 1024);
-	target = t21_ae_target_for_exposure(current_ev);
-	if (target < 20 || target > 160)
-		target = 64;
-	ae_dbg_target = target;
-	{
-		u32 tol = target * (u32)clamp_t(int, ae_hold_pct, 0, 50) / 100;
-		u32 shift = (u32)clamp_t(int, ae_step_shift, 0, 4);
-
-		if (luma + tol >= target && luma <= target + tol) {
-			hold = true;
-			desired = current_exposure;
-		} else {
-			/* desired = current * (target/luma)^(1/2^shift), at
-			 * most 8x either way per step.  Moving in the log
-			 * domain converges against a luma that lags one or two
-			 * AE steps; the old full step oscillated against one. */
-			u32 ratio = (u32)min_t(u64, div_u64((u64)target << 10, luma),
-					       64U << 10);
-			u32 i;
-
-			for (i = 0; i < shift; i++)
-				ratio = int_sqrt((unsigned long)ratio << 10);
-			ratio = clamp_t(u32, ratio, 1024 / 8, 1024 * 8);
-			desired = div_u64(current_exposure * ratio, 1024);
-		}
-	}
-	max_exposure = (u64)max_it * max_again;
-	max_exposure = div_u64(max_exposure * max_sensor_dgain, 1024);
-	max_exposure = div_u64(max_exposure * max_isp_dgain, 1024);
-	/* A lowered limit (day/night max ISP dgain, IT cap) is applied even
-	 * inside the hold band. */
-	if (hold && (current_exposure > max_exposure ||
-		     t21_ae_current_it > max_it ||
-		     t21_ae_current_isp_dgain_q10 > max_isp_dgain))
-		hold = false;
-	if (desired < (u64)min_it * 1024U)
-		desired = (u64)min_it * 1024U;
-	if (desired > max_exposure)
-		desired = max_exposure;
-
-	/* Holding: the sensor and the ISP digital gain keep what they have; no
-	 * register or I2C writes, so quantisation cannot dither them. */
-	if (!hold) {
-		/* Stock spends integration time first, then sensor analogue/digital gain,
-		 * and uses ISP digital gain for the remaining budget and sensor
-		 * quantisation error.  The active tuning bank and sensor descriptor own
-		 * every limit and quantisation decision. */
-		new_it = div_u64(desired + 1023, 1024);
-		new_it = clamp_t(u32, new_it, min_it, max_it);
-		total_gain_q10 = div_u64(desired + new_it - 1, new_it);
-		requested_again = clamp_t(u32, total_gain_q10, 1024, max_again);
-		requested_sensor_dgain = div_u64((u64)total_gain_q10 * 1024 +
-						 requested_again - 1,
-						 requested_again);
-		requested_sensor_dgain = clamp_t(u32, requested_sensor_dgain,
-						  1024, max_sensor_dgain);
-
-		if (ctrl->start_changes)
-			ctrl->start_changes();
-		ctrl->set_integration_time(new_it & 0xffff);
-		t21_ae_current_it = new_it;
-		actual_again = tisp_set_sensor_analog_gain(requested_again);
-		actual_sensor_dgain =
-			tisp_set_sensor_digital_gain(requested_sensor_dgain);
-		if (ctrl->end_changes)
-			ctrl->end_changes();
-		actual_again = max_t(u32, actual_again, 1);
-		actual_sensor_dgain = max_t(u32, actual_sensor_dgain, 1);
-		actual_sensor_gain = (u64)actual_again * actual_sensor_dgain;
-		isp_dgain = div_u64((u64)total_gain_q10 * 1024 * 1024,
-					 actual_sensor_gain);
-		isp_dgain = clamp_t(u32, isp_dgain, 1024, max_isp_dgain);
-		t21_ae_current_gain_q10 = actual_again;
-		t21_ae_current_sensor_dgain_q10 = actual_sensor_dgain;
-		t21_ae_current_isp_dgain_q10 = isp_dgain;
-
-		JZ_Isp_Ae_Dg2reg(10, dg_regs, isp_dgain, linear_pair);
-		system_reg_write_ae(2, 0x408, dg_regs[0]);
-		system_reg_write_ae(2, 0x40c, dg_regs[1]);
-	}
-
-	/* Keep the OEM result/control records coherent for userspace queries and
-	 * for the downstream gain-driven tuning callbacks. */
-	reg[1] = t21_ae_current_isp_dgain_q10;
-	reg[2] = t21_ae_current_it;
-	reg[3] = t21_ae_current_gain_q10;
-	memcpy(result, reg, sizeof(_ae_result));
-	ae_ctrl->sensor_again = t21_ae_current_gain_q10;
-	ae_ctrl->sensor_dgain = t21_ae_current_sensor_dgain_q10;
-	ae_ctrl->integration_time = t21_ae_current_it;
-	ae_ctrl->isp_dgain = t21_ae_current_isp_dgain_q10;
-	total_gain_q10 = (u32)min_t(u64, div_u64((u64)t21_ae_current_gain_q10 *
-					 t21_ae_current_sensor_dgain_q10 *
-					 t21_ae_current_isp_dgain_q10,
-					 1024 * 1024), 0x3ffffff);
-
-	/* OEM event 6 carries the effective exposure to every tuning block which
-	 * selects curves by EV (AWB, CCM, ADR and defog).  The first-pass AE body
-	 * retained gain-change events 4/5 but dropped this unconditional event,
-	 * pinning those generic, tuning-driven consumers at EV zero.
-	 *
-	 * The payload is the EV in Q10 (lines x linear gain x 1024), exactly the
-	 * word stock tisp_ae_process_impl also stores at tisp_ae_ctrls+0x24:
-	 * tisp_ccm_ev_update and the ADR/defog updates shift it right by 10,
-	 * and the AWB compares it with its _awb_mode lux thresholds << 10.
-	 * Pushing the integer EV made every consumer see a scene 1024 times
-	 * brighter than it was, so AWB always ran its outdoor high-lux CT
-	 * window and CCM/ADR/defog stayed on their brightest-scene curves. */
-	current_exposure = (u64)t21_ae_current_it *
-			   t21_ae_current_gain_q10;
-	current_exposure = div_u64(current_exposure *
-				   t21_ae_current_sensor_dgain_q10, 1024);
-	current_exposure = div_u64(current_exposure *
-				   t21_ae_current_isp_dgain_q10, 1024);
-	current_ev = (u32)min_t(u64, current_exposure, 0xffffffffULL);
-	ae_ctrl->ev_q10 = current_ev;
-	event[2] = 6;
-	event[4] = current_ev;
-	tisp_event_push(event);
-	memset(event, 0, sizeof(event));
-
-	/* The dynamic ISP blocks consume gain in Q16 log2 form.  Keep that
-	 * policy generic: the sensor callback supplies the quantized Q10 gain,
-	 * while every interpolation curve comes from the active tuning bank.
-	 * Stock keeps both logs in tisp_ae_ctrls+0x28/+0x2c; isp-m0's
-	 * "ISP Tgain DB" is the integer part of the first. */
-	total_gain = tisp_log2_fixed_to_fixed(total_gain_q10 << 6, 16, 16);
-	again = tisp_log2_fixed_to_fixed(t21_ae_current_gain_q10 << 6,
-					 16, 16);
-	ae_ctrl->total_gain_log2 = total_gain;
-	ae_ctrl->again_log2 = again;
-	if (total_gain != last_total_gain) {
-		event[2] = 4;
-		event[4] = total_gain;
-		tisp_event_push(event);
-		last_total_gain = total_gain;
-	}
-	if (again != last_again) {
-		memset(event, 0, sizeof(event));
-		event[2] = 5;
-		event[4] = again;
-		tisp_event_push(event);
-		last_again = again;
-	}
-
-	pr_debug_ratelimited("tx-isp-t21: ae luma=%u target=%u ev=%u it=%u again=%u sdgain=%u ispgain=%u limits=%u/%u/%u\n",
-			    t21_ae_measured_luma, target,
-			    current_ev >> 10,
-			    t21_ae_current_it, t21_ae_current_gain_q10,
-			    t21_ae_current_sensor_dgain_q10,
-			    t21_ae_current_isp_dgain_q10,
-			    max_it, max_again, max_isp_dgain);
-	if (!(t21_ae_frame_count % 750))
-		pr_debug("tx-isp-t21: ae sample luma=%u target=%u ev=%u it=%u again=%u sdgain=%u ispgain=%u limits=%u/%u/%u\n",
-			t21_ae_measured_luma, target, current_ev >> 10,
-			t21_ae_current_it, t21_ae_current_gain_q10,
-			t21_ae_current_sensor_dgain_q10,
-			t21_ae_current_isp_dgain_q10,
-			max_it, max_again, max_isp_dgain);
-	return 0;
+	/* Stock AE (tisp_ae_ctrls_update + tisp_ae_process_impl with
+	 * Tiziano_ae_fpga/ae_tune2), lifted from oem-t21.ko. */
+	return LIFT_CALL(L_tisp_ae_process, 0, 0, 0, 0);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002d8bc origin=fragment_seed original=tiziano_ae_set_hardware_param */
@@ -46178,18 +45881,7 @@ int32_t tiziano_ae_set_hardware_param(void)
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002db2c origin=model_output original=tiziano_ae_dn_params_refresh */
 int tiziano_ae_dn_params_refresh(void)
 {
-
-    ftune = 1;
-    ae_dn_refresh_flag = 1;
-    tiziano_ae_params_refresh();
-    /* Stock stores the reloaded maximum ISP digital gain to
-     * tisp_ae_ctrls+0x20.  The recovery wrote it over word 0 (the manual-mode
-     * flag), so a day/night switch put AE in "manual" for every reader of
-     * that flag and the new bank's ISP-gain limit was never applied. */
-    *(uint32_t *)&tisp_ae_ctrls[0x20] =
-	*(uint32_t *)((char *)&_exp_parameter + 0x10);
-    tiziano_ae_set_hardware_param();
-    return 0;
+	return LIFT_CALL(L_tiziano_ae_dn_params_refresh, 0, 0, 0, 0);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002db88 origin=model_output original=tiziano_ae_init */
@@ -46202,208 +45894,15 @@ struct t21_ae_result_record {
 
 int32_t tiziano_ae_init(uint32_t arg1, uint32_t arg2, uint32_t arg3)
 {
-	struct t21_ae_result_record *result =
-		(struct t21_ae_result_record *)_ae_result;
-	struct t21_sensor_ctrl_view *ctrl =
-		(struct t21_sensor_ctrl_view *)sensor_ctrl;
-	struct t21_ae_ctrls_view *ae_ctrl =
-		(struct t21_ae_ctrls_view *)tisp_ae_ctrls;
-	uint32_t i;
-	uint32_t j;
-	uint32_t val;
-	uint32_t reg_val;
-	uint32_t exp_val;
-	uint32_t exp_val2;
-	uint32_t flicker_val;
-	uint32_t flicker_val2;
-	uint32_t flicker_val3;
-	uint32_t flicker_val4;
-	uint32_t ae_point_pos;
-	uint32_t sensor_it;
-	uint32_t sensor_gain;
-	uint32_t sensor_reg;
-	uint32_t sensor_ctrl_val;
-	uint32_t ctrl_val;
-	uint32_t ctrl_val2;
-	uint32_t ctrl_val3;
-	uint32_t ctrl_val4;
-	uint32_t ret;
-
-	BUILD_BUG_ON(sizeof(*result) != 0x10);
-	BUILD_BUG_ON(offsetof(struct t21_sensor_ctrl_view,
-			      max_integration_time) != 0x24);
-	pr_debug("tx-isp-t21: ae init entry h=%u w=%u min_it=%u\n",
-		arg1, arg2, arg3);
-
-	/* These are distinct OEM globals; the model had aliased them into AWB,
-	 * a function address, and stack locals respectively. */
-	ftune = 1;
-	*(u32 *)ae_first = 0;
-	*(u32 *)min_it = arg3;
-
-	memset(tisp_ae_hist, 0, sizeof(tisp_ae_hist));
-
-	*(uint32_t *)(tisp_ae_hist + 0x414) = 0x0d;
-	*(uint32_t *)(tisp_ae_hist + 0x418) = 0x40;
-	*(uint32_t *)(tisp_ae_hist + 0x41c) = 0x90;
-	*(uint32_t *)(tisp_ae_hist + 0x420) = 0xc0;
-	*(uint32_t *)(tisp_ae_hist + 0x424) = 0x0f;
-	*(uint32_t *)(tisp_ae_hist + 0x428) = 0x0f;
-
-	memcpy(tisp_ae_hist_last, tisp_ae_hist, sizeof(tisp_ae_hist));
-
-	tiziano_ae_params_refresh();
-	pr_debug("tx-isp-t21: ae params refreshed rows=%u cols=%u\n",
-		*(u32 *)((u8 *)&_ae_parameter + 0x4),
-		*(u32 *)((u8 *)&_ae_parameter + 0xc));
-
-	for (i = 0; i < *(uint32_t *)((char *)((char *)&_ae_parameter + 0xc)); i++) {
-		val = (arg2 >> 1) / *(uint32_t *)((char *)((char *)&_ae_parameter + 0xc));
-		*(uint32_t *)((char *)&_ae_parameter + i * 4 + 0x10) = val;
-	}
-
-	for (j = 0; j < *(uint32_t *)((char *)((char *)&_ae_parameter + 0x4)); j++) {
-		val = (arg1 >> 1) / *(uint32_t *)((char *)((char *)&_ae_parameter + 0x4));
-		*(uint32_t *)((char *)&_ae_parameter + j * 4 + 0x4c) = val;
-	}
-
-	pr_debug("tx-isp-t21: ae hardware setup begin\n");
-	tiziano_ae_set_hardware_param();
-	pr_debug("tx-isp-t21: ae hardware setup done result=%u/%u/%u\n",
-		result->sensor_reg, result->integration_time, result->analog_gain);
-
-	sensor_it = result->integration_time;
-	t21_ae_current_it = sensor_it;
-	t21_ae_current_sensor_dgain_q10 = 1024;
-	t21_ae_current_isp_dgain_q10 = max_t(u32, result->sensor_reg, 1024);
-	pr_debug("tx-isp-t21: ae integration begin value=%u cb=%p\n",
-		sensor_it, ((struct t21_sensor_ctrl_view *)sensor_ctrl)->set_integration_time);
-	ret = tisp_set_sensor_integration_time(sensor_it);
-	pr_debug("tx-isp-t21: ae integration done ret=%u\n", ret);
-	if (ret != 0) {
-		isp_printf(2, "sorry,set integration time failed!\n", ret);
-		return -1;
-	}
-
-	sensor_gain = result->analog_gain;
-	t21_ae_current_gain_q10 = sensor_gain;
-	pr_debug("tx-isp-t21: ae gain begin value=%u\n", sensor_gain);
-	tisp_set_sensor_analog_gain(sensor_gain);
-	pr_debug("tx-isp-t21: ae gain done\n");
-
-	sensor_reg = result->sensor_reg;
-	reg_val = (sensor_reg << 0x10) | sensor_reg;
-	pr_debug("tx-isp-t21: ae reg 408 begin value=%08x\n", reg_val);
-	system_reg_write_ae(2, 0x408, reg_val);
-	pr_debug("tx-isp-t21: ae reg 408 done\n");
-
-	sensor_reg = result->sensor_reg;
-	reg_val = (sensor_reg << 0x10) | sensor_reg;
-	pr_debug("tx-isp-t21: ae reg 40c begin value=%08x\n", reg_val);
-	system_reg_write_ae(2, 0x40c, reg_val);
-	pr_debug("tx-isp-t21: ae reg 40c done\n");
-
-	pr_debug("tx-isp-t21: ae irq callbacks begin\n");
-	system_irq_func_set(0x11, ae_interrupt_hist);
-	system_irq_func_set(0x10, ae_interrupt_static);
-	pr_debug("tx-isp-t21: ae irq callbacks done\n");
-
-	/* Stock clears the 64-byte AE control record.  The first-pass recovery
-	 * mistook that data symbol for tisp_ae_tune() and wrote into text here. */
-	memset(ae_ctrl, 0, sizeof(*ae_ctrl));
-	memset(&ae_ctrls, 0, 0x10);
-
-	ae_point_pos = *(uint32_t *)&_AePointPos;
-	sensor_it = result->integration_time;
-	sensor_gain = result->analog_gain;
-	sensor_reg = result->sensor_reg;
-	val = fix_point_mult3_32(ae_point_pos, sensor_it << (ae_point_pos & 0x1f), sensor_gain, sensor_reg);
-	ae_ctrl->ev_q10 = val;
-	pr_debug("tx-isp-t21: ae initial exposure=%u point=%u\n", val,
-		ae_point_pos);
-
-	sensor_ctrl_val = ctrl->max_integration_time;
-	ctrl_val = ae_ctrl->ev_q10;
-	if (sensor_ctrl_val == 0) {
-		*(uint32_t *)((char *)((char *)&_exp_parameter + 0x8)) = ctrl_val;
-	} else if (ctrl_val < sensor_ctrl_val) {
-		*(uint32_t *)((char *)((char *)&_exp_parameter + 0x8)) = ctrl_val;
-	}
-
-	exp_val = *(uint32_t *)((char *)((char *)&_exp_parameter + 0x8));
-	ae_ctrl->max_integration_time = exp_val;
-
-	exp_val2 = tisp_math_exp2(ctrl->exp2_input_a, 0x10, 0xa);
-	ctrl_val2 = *(uint32_t *)((char *)((char *)&_exp_parameter + 0xc));
-	if (ctrl_val2 == 0) {
-		*(uint32_t *)((char *)((char *)&_exp_parameter + 0xc)) = exp_val2;
-	} else if (exp_val2 < ctrl_val2) {
-		*(uint32_t *)((char *)((char *)&_exp_parameter + 0xc)) = exp_val2;
-	}
-
-	exp_val2 = tisp_math_exp2(ctrl->exp2_input_b, 0x10, 0xa);
-	ae_ctrl->max_sensor_dgain = exp_val2;
-	pr_debug("tx-isp-t21: ae exposure limits done\n");
-
-	ctrl_val3 = *(uint32_t *)((char *)((char *)&_exp_parameter + 0xc));
-	ae_ctrl->max_sensor_again = ctrl_val3;
-
-	ctrl_val4 = *(uint32_t *)((char *)((char *)&_exp_parameter + 0x10));
-	ae_ctrl->max_isp_dgain = ctrl_val4;
-
-	flicker_val = *(uint32_t *)&_flicker_t;
-	flicker_val2 = *(uint32_t *)((char *)((char *)&_flicker_t + 0x4));
-	flicker_val3 = *(uint32_t *)((char *)((char *)&_flicker_t + 0x8));
-	flicker_val4 = *(uint32_t *)((char *)((char *)&_flicker_t + 0xc));
-	tiziano_deflicker_expt(flicker_val, flicker_val2, flicker_val3,
-				 flicker_val4, (uintptr_t)_deflick_lut,
-				 (u32 *)&_nodes_num);
-	pr_debug("tx-isp-t21: ae deflicker done node_index=%u first=%u last=%u\n",
-		(u32)_nodes_num, ((u32 *)_deflick_lut)[0],
-		((u32 *)_deflick_lut)[_nodes_num]);
-
-	tisp_event_set_cb(1, tisp_ae_process);
-	pr_debug("tx-isp-t21: ae event callback done\n");
-
-	private_spin_lock_init(&t21_ae_hist_lock);
-	private_spin_lock_init(&t21_ae_state_lock);
-	pr_debug("tx-isp-t21: ae init done\n");
-
-	return 0;
+	return LIFT_CALL(L_tiziano_ae_init, arg1, arg2, arg3, 0);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002df04 origin=fragment_seed original=tisp_ae_manual_set */
 int32_t tisp_ae_manual_set(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t arg4)
 {
-    uint32_t local_0 = 0;
-    uint32_t local_4 = 0;
-    uint32_t local_8 = 0;
-    uint32_t local_c = 0;
-    uint32_t local_34 = 0;
-    uint32_t ra = 0;
-    uintptr_t *v0 = 0;
-    uint32_t v1 = 0;
+	uint32_t stk[5] = { 0, 0, 0, 0, arg4 };
 
-    /* fragment 0: StackAccess */
-    v1 = local_34;
-    v0 = (uintptr_t *)&tisp_ae_ctrls;
-    v0 = v0;
-    *(uint32_t *)((char *)v0 + 52) = v1;
-    *(uint32_t *)((char *)v0 + 12) = a3;
-    v0 = (uintptr_t *)&isp_clk;
-    *(uint32_t *)trig_cal = 0; /* OEM trig_cal, not tparams+0x4020 */
-    local_0 = a0;
-    local_4 = a1;
-    local_8 = a2;
-    local_c = a3;
-
-    /* fragment 1: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    /* fragment 2: Arithmetic */
-    v0 = 0;
-
-    return 0;
+	return L_tisp_ae_manual_set(a0, a1, a2, a3, (uint32_t)(uintptr_t)stk);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002df38 origin=fragment_seed original=tisp_ae_get_y_zone */

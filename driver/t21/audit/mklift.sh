@@ -1,0 +1,3 @@
+ADR=tisp_adr_process,tiziano_adr_interrupt_static,tisp_adr_ev_update,tiziano_adr_get_data,tisp_s_adr_str_internal,tisp_defog_process,tiziano_defog_interrupt_static,tisp_defog_ev_update,tiziano_defog_get_data
+AE=tisp_ae_process,tiziano_ae_init,tiziano_ae_dn_params_refresh,tiziano_ae_params_refresh,tisp_ae_s_min,tisp_ae_g_min,tiziano_ae_compensation_set,tiziano_ae_s_ev_start,tiziano_ae_s_max_again,tiziano_ae_s_max_isp_dgain,tisp_ae_manual_set,tiziano_deflicker_expt_tune
+python3 dolift.py $1 $ADR,$AE ae_ev_init_strict > lift_all2.c 2> lift_all2.err; tail -2 lift_all2.err | cut -c1-3000

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Lift MIPS32 functions from a relocatable .ko into C (one register file per
 function, explicit delay slots, relocations resolved to C symbols)."""
-import struct, sys
+import struct, sys, re
 
 def s16(x): return x - 0x10000 if x & 0x8000 else x
 
@@ -61,6 +61,11 @@ class Lifter:
         self.need = []
         self.fnids = {}
         self.alias = {}
+        self.undef = set()
+        self.shared = {}
+        self.fnaddr = set()
+        self.cfuncs = set()
+        self.callbacks = set()
     def symexpr(self, sym, addend):
         """C expression (uint32) for symbol address + addend."""
         e = self.e
@@ -75,15 +80,20 @@ class Lifter:
                 raise Exception('no symbol in %s at %#x' % (sec, addend))
             return self.namedexpr(t, addend - t['val'])
         if sym['shndx'] == e.text or sym['shndx'] == 0:
-            fid = self.fnids.setdefault(sym['name'], 0xF0000000 + 0x10 * len(self.fnids))
-            return '0x%xu /* &%s */' % (fid, sym['name'])
+            n_ = sym['name']
+            self.fnaddr.add(n_)
+            if sym['shndx'] == 0 or n_ in self.extern_c or n_ in self.callbacks:
+                return '((uint32_t)(uintptr_t)&%s + %d)' % (n_, addend)
+            self.need.append(n_)
+            return '((uint32_t)(uintptr_t)&%s%s + %d)' % (self.prefix, n_, addend)
         return self.namedexpr(sym, addend)
     def namedexpr(self, t, off):
         name = self.alias.get('%s@%x' % (t['name'], t['val']), self.alias.get(t['name'], t['name']))
         if name in self.ours or name in self.alias.values():
             cname = name
+            self.shared[name] = t['size']
         else:
-            cname = 'oem_' + name
+            cname = 'oem_' + re.sub(r'[^A-Za-z0-9_]', '_', name)
             sec = self.e.secname[t['shndx']]
             if sec.startswith('.bss') or sec.startswith('.sbss'):
                 data = bytes(t['size'])
@@ -137,7 +147,7 @@ class Lifter:
                 targets.add(t // 4)
         for i, w in enumerate(ins):
             op = w >> 26; rt = (w >> 16) & 31
-            if (op in (20, 21, 22, 23) or (op == 1 and rt in (2, 3))) and (i + 1) in targets:
+            if (op in (4, 5, 6, 7, 20, 21, 22, 23) or (op == 1 and rt in (0, 1, 2, 3))) and (i + 1) in targets:
                 targets.add(i + 2)
         out = []
         P = lambda s: out.append('\t' + s)
@@ -157,14 +167,34 @@ class Lifter:
                 full = self.symexpr(r[1], lo_add[i])
                 return '((int32_t)(int16_t)(%s & 0xffff))' % full
             return str(default)
+        def writes_reg(w):
+            op = w >> 26
+            if op == 0:
+                fn = w & 63
+                if fn in (8, 24, 25, 26, 27, 17, 19, 13, 15, 52): return None
+                return (w >> 11) & 31
+            if op == 28:
+                return (w >> 11) & 31 if (w & 63) in (2, 32) else None
+            if op == 31:
+                return (w >> 16) & 31 if (w & 63) in (0, 4) else (w >> 11) & 31
+            if op in (8, 9, 10, 11, 12, 13, 14, 15, 32, 33, 34, 35, 36, 37, 38):
+                return (w >> 16) & 31
+            if op == 3: return 31
+            return None
         def last_set_sym(i, rr):
-            for j in range(i - 1, max(-1, i - 12), -1):
+            for j in range(i - 1, max(-1, i - 40), -1):
                 w = ins[j]; r = rel[j]
                 rt = (w >> 16) & 31; op = w >> 26
                 if r and r[0] == 6 and op == 9 and rt == rr:
-                    return r[1]
+                    s_ = r[1]
+                    return s_ if (s_['type'] == 2 or s_['shndx'] == 0) else None
                 if r and r[0] == 5 and op == 15 and rt == rr:
-                    return r[1]
+                    s_ = r[1]
+                    return s_ if (s_['type'] == 2 or s_['shndx'] == 0) else None
+                if writes_reg(w) == rr:
+                    return None
+                if j in targets:
+                    return None
             return None
         def emit(i, in_delay=False):
             w = ins[i]
@@ -233,7 +263,7 @@ class Lifter:
                 elif op == 41: P('*(uint16_t *)(uintptr_t)%s = (uint16_t)%s;' % (a, reg(rt)))
                 elif op == 43: P('*(uint32_t *)(uintptr_t)%s = %s;' % (a, reg(rt)))
             elif op == 28:
-                if fn == 2: W(rd, '(int32_t)%s * (int32_t)%s' % (reg(rs), reg(rt)))
+                if fn == 2: W(rd, '%s * %s' % (reg(rs), reg(rt)))
                 elif fn == 0: P('{ int64_t p = (int64_t)(((uint64_t)r_hi << 32) | r_lo) + (int64_t)(int32_t)%s * (int32_t)%s; r_lo = (uint32_t)p; r_hi = (uint32_t)((uint64_t)p >> 32); }' % (reg(rs), reg(rt)))
                 elif fn == 1: P('{ uint64_t p = (((uint64_t)r_hi << 32) | r_lo) + (uint64_t)%s * %s; r_lo = (uint32_t)p; r_hi = (uint32_t)(p >> 32); }' % (reg(rs), reg(rt)))
                 elif fn == 4: P('{ int64_t p = (int64_t)(((uint64_t)r_hi << 32) | r_lo) - (int64_t)(int32_t)%s * (int32_t)%s; r_lo = (uint32_t)p; r_hi = (uint32_t)((uint64_t)p >> 32); }' % (reg(rs), reg(rt)))
@@ -267,15 +297,19 @@ class Lifter:
                 sym = last_set_sym(i, (w >> 21) & 31)
             if not sym:
                 self.dispatch_used = True
-                P('r_v0 = %sdispatch(%s, r_a0, r_a1, r_a2, r_a3, sp_base);' % (self.prefix, reg((w >> 21) & 31)))
+                P('{ uint64_t q_ = %sdispatch(%s, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }' % (self.prefix, reg((w >> 21) & 31)))
                 return
             name = sym['name']
+            if sym['shndx'] == 0 and name not in self.extern_c:
+                self.undef.add(name)
+                P('r_v0 = LIFT_EXTERN_%s(r_a0, r_a1, r_a2, r_a3);' % name)
+                return
             if name in self.extern_c:
                 P(self.extern_c[name])
             else:
                 self.need.append(name)
-                P('r_v0 = %s%s(r_a0, r_a1, r_a2, r_a3, sp_base);' % (self.prefix, name))
-        out.append('static uint32_t %s%s(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, uint32_t r_a3, uint32_t csp)' % (self.prefix, fname))
+                P('{ uint64_t q_ = %s%s(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }' % (self.prefix, name))
+        out.append('static uint64_t %s%s(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, uint32_t r_a3, uint32_t csp)' % (self.prefix, fname))
         out.append('{')
         if frame > 256:
             P('/* large stock frame: static (single caller context, not reentrant) */')
@@ -301,7 +335,9 @@ class Lifter:
                 else:
                     P('{ int c_ = (%s);' % cond(w, i)); emit(i + 1); P('if (c_) goto L_%x; }' % tgt)
                 if i + 1 in targets:
-                    raise Exception('delay slot is a branch target at %x' % (start + 4 * i + 4))
+                    P('goto L_%x;' % (start + 4 * (i + 2)))
+                    out.append('L_%x:' % (start + 4 * (i + 1)))
+                    emit(i + 1)
                 i += 2; continue
             if islikely:
                 tgt = start + 4 * (i + 1 + s16(w & 0xffff))
@@ -316,13 +352,15 @@ class Lifter:
                 emit(i + 1); P('goto L_%x;' % tgt); i += 2; continue
             if op == 0 and fn == 8:  # jr
                 emit(i + 1)
-                if rs != 31: raise Exception('jr reg')
-                P('return r_v0;'); i += 2; continue
+                if rs == 25:
+                    call(i); P('return ((uint64_t)r_v1 << 32) | r_v0;'); i += 2; continue
+                if rs != 31: raise Exception('jr reg in %s at %x' % (fname, start + 4 * i))
+                P('return ((uint64_t)r_v1 << 32) | r_v0;'); i += 2; continue
             if (op == 0 and fn == 9) or op == 3:
                 emit(i + 1); call(i); i += 2; continue
             emit(i)
             i += 1
-        out.append('\treturn r_v0;')
+        out.append('\treturn ((uint64_t)r_v1 << 32) | r_v0;')
         out.append('}')
         self.lifted.add(fname)
         return '\n'.join(out)
