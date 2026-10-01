@@ -1097,6 +1097,7 @@ int ispcore_video_s_stream(struct tx_isp_subdev *sd, int enable)
     int channel_count;
     int ch;
 
+    int v0_3;
     pr_info("*** ispcore_video_s_stream: EXACT Binary Ninja MCP implementation - enable=%d ***\n", enable);
 
     if (!sd) {
@@ -1152,7 +1153,7 @@ int ispcore_video_s_stream(struct tx_isp_subdev *sd, int enable)
     vic_dev->active_buffer_count = 0;
 
     /* Binary Ninja: int32_t $v0_3 = *($s0 + 0xe8) */
-    int v0_3 = vic_state;
+    v0_3 = vic_state;
 
     /* Binary Ninja: void* $s3_1 */
     /* Binary Ninja: if (arg2 == 0) */
@@ -1859,6 +1860,7 @@ EXPORT_SYMBOL_GPL(isp_ch1_frame_dequeue_delay);
 /* Initialize memory mappings for ISP subsystems */
 int tx_isp_init_memory_mappings(struct tx_isp_dev *isp)
 {
+    extern void __iomem *isp_reg_base;
     pr_info("Initializing ISP memory mappings\n");
 
     /* Map the full isp-m0 resource window.
@@ -1873,7 +1875,6 @@ int tx_isp_init_memory_mappings(struct tx_isp_dev *isp)
     pr_info("ISP core registers mapped at 0x13300000 size 0x100000\n");
 
     /* Set global ISP register base for tuning subsystem */
-    extern void __iomem *isp_reg_base;
     isp_reg_base = isp->core_regs;
     pr_info("Global isp_reg_base set to %p for tuning subsystem\n", isp_reg_base);
 
@@ -2755,6 +2756,8 @@ int ispcore_core_ops_init(struct tx_isp_subdev *sd, int on)
         if (on == 1) {
             const char *reset_name = (sd->module.name) ? sd->module.name : "tx-isp";
 
+            struct tx_isp_subdev *init_sensor;
+            struct tisp_sensor_info_blob sensor_info;
             pr_info("*** ispcore_core_ops_init: INITIALIZING CORE (on=1) ***");
             pr_info("*** ispcore_core_ops_init: Current vic_state (VIC state): %d ***", vic_state);
 
@@ -2785,8 +2788,7 @@ int ispcore_core_ops_init(struct tx_isp_subdev *sd, int on)
 
             pr_info("*** ispcore_core_ops_init: VIC state check passed, proceeding with initialization ***");
 
-            struct tx_isp_subdev *init_sensor = isp_dev->sensor;
-            struct tisp_sensor_info_blob sensor_info;
+            init_sensor = isp_dev->sensor;
 
             (void)init_sensor;
 
@@ -3237,21 +3239,41 @@ int tisp_channel_attr_set(uint32_t channel_id, void* attr)
     extern uint32_t data_b2d80, data_b2d84;
 
     int32_t tispinfo_1;
+    int32_t var_34;
+    int32_t tispinfo_2;
+    int32_t tispinfo_4;
+    int32_t s1_2;
+    int32_t var_38;
+    int32_t s2;
+    int32_t s7_1;
+    int32_t var_3c;
+    int32_t a1_2;
+    int32_t var_40;
+    int32_t var_44;
+    int32_t var_48;
+    int32_t var_4c;
+    int32_t var_50;
+    int32_t var_54;
+    int32_t var_58;
+    int32_t var_5c;
+    int32_t var_60;
+    int32_t var_64;
+    int32_t var_68;
     memcpy(&tispinfo_1, tispinfo, sizeof(tispinfo_1)); /* OEM: read *(int32_t*)tispinfo = ISP width */
-    int32_t var_34 = arg2[2];
-    int32_t var_38 = arg2[1];
-    int32_t var_3c = *arg2;
-    int32_t var_40 = arg2[7];
-    int32_t var_44 = arg2[6];
-    int32_t var_48 = arg2[5];
-    int32_t var_4c = arg2[4];
-    int32_t var_50 = arg2[3];
-    int32_t var_54 = arg2[0xc];
-    int32_t var_58 = arg2[0xb];
-    int32_t var_5c = arg2[0xa];
-    int32_t var_60 = arg2[9];
-    int32_t var_64 = arg2[8];
-    int32_t var_68 = data_b2f34;
+    var_34 = arg2[2];
+    var_38 = arg2[1];
+    var_3c = *arg2;
+    var_40 = arg2[7];
+    var_44 = arg2[6];
+    var_48 = arg2[5];
+    var_4c = arg2[4];
+    var_50 = arg2[3];
+    var_54 = arg2[0xc];
+    var_58 = arg2[0xb];
+    var_5c = arg2[0xa];
+    var_60 = arg2[9];
+    var_64 = arg2[8];
+    var_68 = data_b2f34;
 
     pr_info("T31 ATTR_SET entry: ch=%u isp=%dx%d fcrop=%u/%ux%u+%u+%u attr=%d/%dx%d crop=%d/%dx%d+%d+%d\n",
             channel_id, tispinfo_1, data_b2f34,
@@ -3274,9 +3296,8 @@ int tisp_channel_attr_set(uint32_t channel_id, void* attr)
         memcpy(ds2_attr, arg2, 0x34);
     }
 
-    int32_t tispinfo_2 = tispinfo_1;
-    int32_t s2 = data_b2f34;
-    int32_t a1_2;
+    tispinfo_2 = tispinfo_1;
+    s2 = data_b2f34;
 
     /* In the stock object, the globals originally reconstructed as
      * data_b2e04..data_b2e14 are ds0_attr words 8..12.  All channels use
@@ -3314,8 +3335,6 @@ int tisp_channel_attr_set(uint32_t channel_id, void* attr)
     system_reg_write(0x9860, a1_2);
     system_reg_write(0x9864, (tispinfo_2 << 0x10) | s2);
 
-    int32_t tispinfo_4;
-    int32_t s7_1;
 
     if (*arg2 == 0) {
         arg2[1] = tispinfo_2;
@@ -3341,7 +3360,7 @@ int tisp_channel_attr_set(uint32_t channel_id, void* attr)
         data_b2d84 = s7_1;
     }
 
-    int32_t s1_2 = ((channel_id + 0x99) << 8);
+    s1_2 = ((channel_id + 0x99) << 8);
     system_reg_write(s1_2, (tispinfo_4 << 0x10) | s7_1);
     system_reg_write(s1_2 + 4, (((tispinfo_2 << 9) / (uint32_t)tispinfo_4) << 0x10) |
                                (uint16_t)(((s2 << 9) / (uint32_t)s7_1)));
@@ -3525,21 +3544,27 @@ int tisp_s_fcrop_control(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4,
                           tisp_channel_sensor_height(g_ispcore);
     int32_t arg_0 = arg1;
 
+    int32_t arg_4;
+    uint32_t msca_ch_en_4;
+    uint32_t a1_15;
+    int32_t arg_8;
+    int32_t arg_c;
     if (!(msca_ch_en_1 != 0)) {
         msca_ch_en_1 = 0;
     }
 
-    int32_t arg_4 = arg2;
-    int32_t arg_8 = arg3;
-    int32_t arg_c = arg4;
+    arg_4 = arg2;
+    arg_8 = arg3;
+    arg_c = arg4;
 
     msca_ch_en = msca_ch_en_1;
-    uint32_t msca_ch_en_4;
 
     if ((arg1 & 0xff) == 0) {
         isp_printf(2, "The parameter is invalid!\n");
         msca_ch_en_4 = msca_ch_en;
     } else {
+        uint32_t msca_ch_en_2;
+        uint32_t msca_ch_en_3;
         data_b2e08 = arg3;
         data_b2e0c = arg2;
         data_b2e10 = arg4;
@@ -3555,7 +3580,7 @@ int tisp_s_fcrop_control(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4,
         system_reg_write(0x9860, arg3 << 0x10 | arg2);
         system_reg_write(0x9864, arg4 << 0x10 | arg5);
 
-        uint32_t msca_ch_en_2 = msca_ch_en;
+        msca_ch_en_2 = msca_ch_en;
 
         if ((msca_ch_en & 1) != 0) {
             if (!channel0_width || !channel0_height) {
@@ -3568,7 +3593,7 @@ int tisp_s_fcrop_control(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4,
             msca_ch_en_2 = msca_ch_en;
         }
 
-        uint32_t msca_ch_en_3 = msca_ch_en;
+        msca_ch_en_3 = msca_ch_en;
 
         if ((msca_ch_en_2 & 2) != 0) {
             if (!data_b2db4 || !data_b2db8)
@@ -3591,7 +3616,7 @@ int tisp_s_fcrop_control(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4,
         }
     }
 
-    uint32_t a1_15 = 0xf0000 | msca_ch_en_4;
+    a1_15 = 0xf0000 | msca_ch_en_4;
     msca_ch_en = a1_15;
     system_reg_write(0x9804, a1_15);
     return 0;
@@ -3608,12 +3633,12 @@ int tisp_g_fcrop_control(char* arg1)
     int32_t result;
 
     if (v1 != 1) {
-        *arg1 = 0;
         extern uint8_t tispinfo[];
+        extern uint32_t data_b2f34;
         int32_t tispinfo_1;
+        *arg1 = 0;
         memcpy(&tispinfo_1, tispinfo, sizeof(tispinfo_1)); /* OEM: read ISP width */
         *(arg1 + 4) = 0;
-        extern uint32_t data_b2f34;
         result = data_b2f34;
         *(arg1 + 8) = 0;
         *(arg1 + 0xc) = tispinfo_1;
@@ -3955,6 +3980,7 @@ static int tx_isp_create_framechan_devices(struct tx_isp_dev *isp_dev)
         struct miscdevice *fs_miscdev = &frame_channels[i].miscdev;
 
         /* Set up device name */
+        extern const struct file_operations frame_channel_fops;
         snprintf(dev_name, sizeof(dev_name), "framechan%d", i);
         memset(&frame_channels[i], 0, sizeof(frame_channels[i]));
         /* The memset wiped buffer_mutex (a zeroed mutex reads as locked);
@@ -3968,7 +3994,6 @@ static int tx_isp_create_framechan_devices(struct tx_isp_dev *isp_dev)
         fs_miscdev->minor = MISC_DYNAMIC_MINOR;
 
         /* Use the existing frame_channel_fops from tx_isp_module.c */
-        extern const struct file_operations frame_channel_fops;
         fs_miscdev->fops = &frame_channel_fops;
         frame_channels[i].channel_num = i;
         frame_channels[i].buffer_type = 1;
@@ -4041,10 +4066,15 @@ int tx_isp_core_probe(struct platform_device *pdev)
     void *channel_array;
     void *tuning_dev;
 
+    extern struct tx_isp_dev *ourISPdev;
+    extern struct platform_device tx_isp_csi_platform_device;
+    extern struct platform_device tx_isp_vic_platform_device;
+    extern struct platform_device tx_isp_vin_platform_device;
+    extern struct platform_device tx_isp_fs_platform_device;
+    extern struct platform_device tx_isp_core_platform_device;
     pr_info("*** tx_isp_core_probe: SAFE implementation using proper struct member access ***\n");
 
     /* CRITICAL: Use existing ourISPdev instead of allocating a new one! */
-    extern struct tx_isp_dev *ourISPdev;
 
     if (!ourISPdev) {
         pr_err("*** tx_isp_core_probe: ourISPdev is NULL! ***\n");
@@ -4062,11 +4092,6 @@ int tx_isp_core_probe(struct platform_device *pdev)
     pr_info("*** tx_isp_core_probe: SAFE platform device setup ***\n");
 
     /* Get the actual registered platform devices from the module */
-    extern struct platform_device tx_isp_csi_platform_device;
-    extern struct platform_device tx_isp_vic_platform_device;
-    extern struct platform_device tx_isp_vin_platform_device;
-    extern struct platform_device tx_isp_fs_platform_device;
-    extern struct platform_device tx_isp_core_platform_device;
 
     /* The child platform drivers have already probed and installed their
      * allocated runtime objects with platform_set_drvdata().  Do not replace
@@ -4167,11 +4192,16 @@ int tx_isp_core_probe(struct platform_device *pdev)
         /* Binary Ninja: Channel array allocation */
         channel_array = kzalloc(channel_count * 0xc4, GFP_KERNEL);
         if (channel_array != NULL) {
+            int channel_idx;
+            void *tuning_dev;
+            uint32_t isp_clk_1;
+            extern int tisp_code_create_tuning_node(void);
+            struct tx_isp_frame_channel *current_channel;
             memset(channel_array, 0, channel_count * 0xc4);
 
             /* SAFE: Channel initialization loop using proper struct access */
-            int channel_idx = 0;
-            struct tx_isp_frame_channel *current_channel = (struct tx_isp_frame_channel *)channel_array;
+            channel_idx = 0;
+            current_channel = (struct tx_isp_frame_channel *)channel_array;
 
             while (channel_idx < channel_count) {
                 /* SAFE: Initialize channel using proper struct members from tx_isp_device.h */
@@ -4227,7 +4257,7 @@ int tx_isp_core_probe(struct platform_device *pdev)
             tx_isp_core_bind_event_dispatch_tables(isp_dev);
 
             /* DEFERRED: Tuning initialization moved AFTER memory mappings */
-            void *tuning_dev = NULL;
+            tuning_dev = NULL;
 
             /* Set basic platform data first */
             platform_set_drvdata(pdev, isp_dev);
@@ -4237,7 +4267,7 @@ int tx_isp_core_probe(struct platform_device *pdev)
             sensor_early_init(isp_dev);
 
             /* Binary Ninja: Clock initialization */
-            uint32_t isp_clk_1 = 0; /* get_isp_clk() would be called here */
+            isp_clk_1 = 0; /* get_isp_clk() would be called here */
             if (isp_clk_1 == 0)
                 isp_clk_1 = isp_clk;
             isp_clk = isp_clk_1;
@@ -4330,7 +4360,6 @@ int tx_isp_core_probe(struct platform_device *pdev)
 
                 /* CRITICAL: Create the ISP M0 tuning device node /dev/isp-m0 */
                 pr_info("*** tx_isp_core_probe: Creating ISP M0 tuning device node ***\n");
-                extern int tisp_code_create_tuning_node(void);
                 result = tisp_code_create_tuning_node();
                 if (result == 0) {
                     pr_info("*** tx_isp_core_probe: ISP M0 tuning device node created successfully ***\n");

@@ -354,6 +354,7 @@ static int tx_isp_init_sink_subdev(struct tx_isp_dev *isp,
     void *driver_data = platform_get_drvdata(desc->pdev);
     void *src_subdev;
 
+    int ret;
     if (!driver_data) {
         pr_warn("tx_isp_init_sink_subdev: No driver data for %s\n", desc->name);
         return 0;
@@ -374,7 +375,7 @@ static int tx_isp_init_sink_subdev(struct tx_isp_dev *isp,
     }
 
     /* Create link: source -> sink */
-    int ret = tx_isp_create_subdev_link(src_subdev, driver_data, desc);
+    ret = tx_isp_create_subdev_link(src_subdev, driver_data, desc);
     if (ret < 0) {
         pr_err("tx_isp_init_sink_subdev: Failed to create link for %s: %d\n",
                desc->name, ret);

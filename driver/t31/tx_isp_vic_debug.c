@@ -167,6 +167,7 @@ EXPORT_SYMBOL(tx_isp_vic_stop_streaming);
  */
 int tx_isp_mipi_phy_status_check(struct tx_isp_dev *isp_dev)
 {
+    uint32_t phy_config;
     void __iomem *phy_regs;
     uint32_t lane_status, clock_status, error_status;
     int i;
@@ -226,7 +227,7 @@ int tx_isp_mipi_phy_status_check(struct tx_isp_dev *isp_dev)
     }
     
     /* Check PHY configuration registers */
-    uint32_t phy_config = readl(phy_regs + 0x160);
+    phy_config = readl(phy_regs + 0x160);
     pr_info("MIPI PHY Configuration: 0x%08x\n", phy_config);
     pr_info("  - PHY frequency setting: %d\n", phy_config & 0xf);
     
@@ -269,6 +270,7 @@ EXPORT_SYMBOL(tx_isp_vic_register_dump);
  */
 void tx_isp_debug_frame_capture_status(struct tx_isp_dev *isp_dev)
 {
+    uint32_t vic_status;
     void __iomem *vic_regs;
     uint32_t frame_count_reg, buffer_status;
     
@@ -292,7 +294,7 @@ void tx_isp_debug_frame_capture_status(struct tx_isp_dev *isp_dev)
     pr_info("Buffer status: 0x%08x\n", buffer_status);
     
     /* Check if VIC is actually receiving data */
-    uint32_t vic_status = readl(vic_regs + 0x4);
+    vic_status = readl(vic_regs + 0x4);
     pr_info("VIC status register: 0x%08x\n", vic_status);
     
     if (vic_status & 0x1) {

@@ -1921,12 +1921,13 @@ dvp_apply:
 
     } else if (interface_type == TX_SENSOR_DATA_INTERFACE_BT601) {
         /* BT601 - Binary Ninja 00010688-000107d4 */
+        int gpio_mode;
+        u32 bt601_config;
         pr_info("BT601 interface configuration\n");
 
         writel(1, vic_regs + 0xc);
 
-        int gpio_mode = sensor_attr->bt601bus.gpio;
-        u32 bt601_config;
+        gpio_mode = sensor_attr->bt601bus.gpio;
 
         if (gpio_mode == 0) {
             bt601_config = 0x800c8000;

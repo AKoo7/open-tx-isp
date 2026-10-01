@@ -188,9 +188,10 @@ static int __maybe_unused csi_wait_w01_ready(int timeout_ms)
     int stable = (prev != 0) ? 1 : 0;
     int waited = 0;
     while (waited < timeout_ms) {
+        u32 cur;
         private_msleep(1);
         waited += 1;
-        u32 cur = vic_read32(0x14);
+        cur = vic_read32(0x14);
         if (cur != 0 && cur == prev) {
             stable++;
             if (stable >= 2) {
@@ -220,10 +221,12 @@ static int __maybe_unused csi_wait_w01_phase(int timeout_ms)
     int stable = 0;
     int waited = 0;
     while (waited < timeout_ms) {
+        u32 cur;
+        int match;
         private_msleep(1);
         waited += 1;
-        u32 cur = vic_read32(0x14);
-        int match = (cur == t0) || (cur == t1) || (cur == t2) || (cur == t3);
+        cur = vic_read32(0x14);
+        match = (cur == t0) || (cur == t1) || (cur == t2) || (cur == t3);
         if (match && cur == prev) {
             stable++;
             if (stable >= 2) {
