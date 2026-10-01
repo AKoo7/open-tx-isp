@@ -14407,6 +14407,8 @@ static long regtrace_isp_m0_control(unsigned int cmd, unsigned long arg)
  *                              defers the bank switch to the next frame
  *                              interrupt; like the custom-mode control on
  *                              isp-m0, this driver applies it directly.
+ *   0x80000e7 custom mode      tisp_cust_mode_s_ctrl/g_ctrl, the handler
+ *                              the G/S_CTRL form of this control uses
  *
  * Returns 1 when the control was handled (its result in *ret), 0 when the
  * caller should look further.  The driver has one sensor; other sensor
@@ -14423,6 +14425,7 @@ static int regtrace_isp_m0_value_control(
     case REGTRACE_TISP_CTRL_AE_LUMA:
     case REGTRACE_TISP_CTRL_SINTER:
     case REGTRACE_TISP_CTRL_RUNNING_MODE:
+    case REGTRACE_TISP_CTRL_CUSTOM_MODE:
         break;
     default:
         return 0;
@@ -14474,6 +14477,14 @@ static int regtrace_isp_m0_value_control(
         } else if ((uint32_t)tisp_day_or_night_g_ctrl(0) != value) {
             *ret = (long)tisp_day_or_night_s_ctrl(0, value);
         }
+        break;
+    case REGTRACE_TISP_CTRL_CUSTOM_MODE:
+        if (get)
+            ctrl->value_or_ptr = tisp_cust_mode_g_ctrl();
+        else if (value > 1U)
+            *ret = -EINVAL;
+        else
+            *ret = tisp_cust_mode_s_ctrl(0, value);
         break;
     }
     return 1;
