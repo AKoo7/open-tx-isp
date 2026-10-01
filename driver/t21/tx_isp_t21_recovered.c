@@ -4506,6 +4506,20 @@ MODULE_PARM_DESC(ae_step_shift, "T21 AE: step by (target/luma)^(1/2^n) (0 = full
 static int ae_hold_pct = 15;
 module_param(ae_hold_pct, int, 0644);
 MODULE_PARM_DESC(ae_hold_pct, "T21 AE: hold the exposure while luma is within this percent of the target");
+/* Read-only AE diagnostics (/sys/module/tx_isp_t21/parameters/ae_dbg_*):
+ * the AE statistics IRQ count, the last weighted mean luma, the target,
+ * the update_luma result and the centre zone raw sums d/m/s/dc/sc. */
+static uint ae_dbg_stat_irqs;
+module_param(ae_dbg_stat_irqs, uint, 0444);
+static uint ae_dbg_luma;
+module_param(ae_dbg_luma, uint, 0444);
+static uint ae_dbg_target;
+module_param(ae_dbg_target, uint, 0444);
+static int ae_dbg_ret;
+module_param(ae_dbg_ret, int, 0444);
+static uint ae_dbg_zone[5];
+static int ae_dbg_zone_n = 5;
+module_param_array(ae_dbg_zone, uint, &ae_dbg_zone_n, 0444);
 static uint32_t t21_ae_scene_cfg[11];
 static uint32_t nodes_num;
 static unsigned char af_array_fird0[900];
@@ -42571,6 +42585,12 @@ int32_t ae_interrupt_static(void)
 		return IRQ_HANDLED;
 	dma_cache_sync(NULL, (void *)(uintptr_t)(base + offset), 0x1000, 0);
 	tisp_ae_get_statistics((u32 *)(uintptr_t)(base + offset), 0xf001f001);
+	ae_dbg_stat_irqs++;
+	ae_dbg_zone[0] = ((u32 *)ae_array_d)[112];
+	ae_dbg_zone[1] = ((u32 *)ae_array_m)[112];
+	ae_dbg_zone[2] = ((u32 *)ae_array_s)[112];
+	ae_dbg_zone[3] = ((u32 *)ae_array_dc)[112];
+	ae_dbg_zone[4] = ((u32 *)ae_array_sc)[112];
 	return IRQ_HANDLED;
 }
 
@@ -42590,7 +42610,7 @@ static int t21_ae_update_luma(void)
 
 	if (!params[1] || !params[3] ||
 	    params[1] > 15 || params[3] > 15)
-		return -EINVAL;
+		return ae_dbg_ret = -EINVAL;
 
 	/* Match the OEM scene-mode selection.  These channel multipliers are
 	 * supplied by the active tuning bank; they account for the Bayer channel
@@ -42619,9 +42639,11 @@ static int t21_ae_update_luma(void)
 			      (u32 *)_AePointPos, mix_r, mix_b,
 			      &mean, fractions, &zone_sum,
 			      &roi_mean, &roui_mean);
+	ae_dbg_ret = ret;
 	if (ret < 0)
 		return 0;
 	t21_ae_measured_luma = mean;
+	ae_dbg_luma = mean;
 	pr_debug_ratelimited("tx-isp-t21: ae stats grid=%ux%u mix=%u/%u dms=%u/%u/%u luma=%u roi=%u/%u\n",
 			    params[1], params[3], mix_r, mix_b,
 			    ((u32 *)ae_array_d)[0], ((u32 *)ae_array_m)[0],
@@ -46199,6 +46221,7 @@ int32_t tisp_ae_process(void)
 	target = t21_ae_target_for_exposure(current_ev);
 	if (target < 20 || target > 160)
 		target = 64;
+	ae_dbg_target = target;
 	{
 		u32 tol = target * (u32)clamp_t(int, ae_hold_pct, 0, 50) / 100;
 		u32 shift = (u32)clamp_t(int, ae_step_shift, 0, 4);
