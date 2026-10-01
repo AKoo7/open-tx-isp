@@ -3567,6 +3567,9 @@ int tisp_event_process(void);
 /* Additional function declarations needed for Binary Ninja reference */
 int tisp_get_ae_comp(uint32_t *value);
 int tisp_g_aeroi_weight(void *buffer);
+int tisp_s_aeroi_weight(uint32_t *roi);
+static int apical_isp_expr_s_ctrl(void __user *uptr);
+static int apical_isp_ae_s_roi(void __user *uptr);
 int tisp_ae_param_array_get(int param_type, void *buffer, int *size);
 int tisp_ae_get_hist_custome(void *buffer);
 int apical_isp_max_again_g_ctrl(struct tx_isp_dev *dev, struct isp_core_ctrl *ctrl);
@@ -3790,6 +3793,10 @@ static DECLARE_COMPLETION(ae_algo_comp);
 
 /* AE histogram data — must be before tisp_ae_get_hist_custome usage */
 static uint8_t tisp_ae_hist[0x42c];
+/* Histogram record: 256 bins, five bucket sums at +0x400, the four
+ * SetAeHist bucket edges at +0x414 (OEM 0xc4b80) and the node counts at
+ * +0x424, defaults set by tiziano_ae_init.  Each frame only refreshes the
+ * bins and buckets. */
 static uint8_t tisp_ae_hist_last[0x42c];
 static DEFINE_SPINLOCK(ae_hist_lock);  /* OEM: protects tisp_ae_hist_last access */
 static uint32_t ae_hist_bins[256];
@@ -5135,14 +5142,28 @@ static int tisp_ae0_get_hist(void *buffer, int mode, int flag)
     uint32_t mid2_sum = 0;
     uint32_t mid3_sum = 0;
     uint32_t bright_sum = 0;
-    uint32_t dark_end = 0x0d;
-    uint32_t mid1_end = 0x40;
-    uint32_t mid2_end = 0x90;
-    uint32_t mid3_end = 0xc0;
+    uint32_t edge[4];
+    uint32_t dark_end, mid1_end, mid2_end, mid3_end;
     int i;
 
     if (!buffer)
         return -EINVAL;
+
+    /* OEM 0x4f344 takes the bucket edges from the SetAeHist block each
+     * frame (memcpy 0xc4b80 under the histogram lock). */
+    spin_lock_irqsave(&ae_hist_lock, irq_flags);
+    memcpy(edge, tisp_ae_hist_last + 0x414, sizeof(edge));
+    spin_unlock_irqrestore(&ae_hist_lock, irq_flags);
+    for (i = 0; i < 4; i++) {
+        if (edge[i] > 256)
+            edge[i] = 256;
+        if (i && edge[i] < edge[i - 1])
+            edge[i] = edge[i - 1];
+    }
+    dark_end = edge[0];
+    mid1_end = edge[1];
+    mid2_end = edge[2];
+    mid3_end = edge[3];
 
     memset(tisp_ae_hist, 0, sizeof(tisp_ae_hist));
 
@@ -5195,8 +5216,10 @@ static int tisp_ae0_get_hist(void *buffer, int mode, int flag)
         hist_words[0x104] = 0;
     }
 
+    /* bins and bucket sums only (OEM copies 0x400 + 0x14): the SetAeHist
+     * edges at +0x414 and the node counts stay as set */
     spin_lock_irqsave(&ae_hist_lock, irq_flags);
-    memcpy(tisp_ae_hist_last, tisp_ae_hist, sizeof(tisp_ae_hist));
+    memcpy(tisp_ae_hist_last, tisp_ae_hist, 0x414);
     spin_unlock_irqrestore(&ae_hist_lock, irq_flags);
 
     pr_debug("AE0 histogram unpacked from DMA: mode=%d flag=%d total=%u\n",
@@ -7779,7 +7802,9 @@ static int tisp_g_ev_attr(uint32_t *ev_buffer, struct isp_tuning_data *tuning)
 	/* Applied gains, followed by their combined linear Q10 gain. */
 	ev_buffer[4] = tisp_log2_fixed_to_fixed(data_c46a0, 10, 5);
 	ev_buffer[5] = tisp_log2_fixed_to_fixed(data_c46ac, 10, 5);
-	ev_buffer[6] = data_c46c4 & 0xffff;
+	/* OEM: zx.d(data_c46c4:2.w), the integer part of the Q16 log2 total
+	 * gain ("ISP Tgain DB"); the low half is only the fraction */
+	ev_buffer[6] = data_c46c4 >> 16;
 	total = fix_point_mult2_32(10, data_c46a0, data_c46ac);
 	ev_buffer[7] = total >> 2;
 
@@ -7787,7 +7812,10 @@ static int tisp_g_ev_attr(uint32_t *ev_buffer, struct isp_tuning_data *tuning)
 	ev_buffer[8] = tisp_log2_fixed_to_fixed(data_c46b0 + 4, 10, 5);
 	ev_buffer[9] = tisp_log2_fixed_to_fixed(data_c46bc + 4, 10, 5);
 	ev_buffer[10] = tisp_log2_fixed_to_fixed(data_c46a4, 10, 5);
-	ev_buffer[11] = tisp_log2_fixed_to_fixed(0x400, 10, 5);
+	/* OEM: log2 of data_c46b4, the AE0 sensor digital gain limit (Q10),
+	 * which this driver keeps in tisp_ae_ctrls[6] */
+	ev_buffer[11] = tisp_log2_fixed_to_fixed(tisp_ae_ctrls[6] ?
+						 tisp_ae_ctrls[6] : 0x400, 10, 5);
 	ev_buffer[12] = data_c46d0;
 
 	/* Preserve the OEM sparse halfword layout at offsets 0x6c/0x6e/0x7c.
@@ -8123,39 +8151,42 @@ static int tiziano_bcsh_update(struct isp_tuning_data *tuning)
     return 0;
 }
 
-/* OEM-aligned: set/get RGB offset coefficients for BCSH */
-int tisp_bcsh_s_rgb_coefft(const int32_t *coeff)
+/* OEM-aligned: set/get RGB offset coefficients for BCSH.
+ * OEM 0x2bae0/0x2bb10: the ABI is int16_t[3] (6 bytes). The setter
+ * zero-extends each halfword into the u32 OffsetRGB_now slots, the getter
+ * returns the low halfword of each slot. */
+int tisp_bcsh_s_rgb_coefft(const int16_t *coeff)
 {
     uint32_t *dst;
     if (!coeff)
         return -EINVAL;
     dst = bcsh_OffsetRGB_now;
-    dst[0] = (uint32_t)coeff[0];
-    dst[1] = (uint32_t)coeff[1];
-    dst[2] = (uint32_t)coeff[2];
+    dst[0] = (uint16_t)coeff[0];
+    dst[1] = (uint16_t)coeff[1];
+    dst[2] = (uint16_t)coeff[2];
     return tiziano_bcsh_update(ourISPdev ? ourISPdev->tuning_data : NULL);
 }
 
-int tisp_bcsh_g_rgb_coefft(int32_t *out)
+int tisp_bcsh_g_rgb_coefft(int16_t *out)
 {
     uint32_t *src;
     if (!out)
         return -EINVAL;
     src = bcsh_OffsetRGB_now;
-    out[0] = (int32_t)src[0];
-    out[1] = (int32_t)src[1];
-    out[2] = (int32_t)src[2];
+    out[0] = (int16_t)src[0];
+    out[1] = (int16_t)src[1];
+    out[2] = (int16_t)src[2];
     return out[2];
 }
 
 /* OEM EXACT: tisp_s_rgb_coefft / tisp_g_rgb_coefft — thin wrappers.
  * OEM at 0x6642c / 0x6643c: tail-call to tisp_bcsh_s/g_rgb_coefft. */
-int tisp_s_rgb_coefft(const int32_t *coeff)
+int tisp_s_rgb_coefft(const int16_t *coeff)
 {
     return tisp_bcsh_s_rgb_coefft(coeff);
 }
 
-int tisp_g_rgb_coefft(int32_t *out)
+int tisp_g_rgb_coefft(int16_t *out)
 {
     return tisp_bcsh_g_rgb_coefft(out);
 }
@@ -8872,7 +8903,7 @@ static int apical_isp_core_ops_g_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
         /* ---- OEM g_ctrl commands added for parity ---- */
 
         case 0x8000008: { /* OEM: tisp_g_rgb_coefft — get RGB coefficients (6 bytes) */
-            int32_t rgb_buf[3];
+            int16_t rgb_buf[3];
             tisp_g_rgb_coefft(rgb_buf);
             if (copy_to_user((void __user *)(unsigned long)ctrl->value, rgb_buf, 6))
                 ret = -EFAULT;
@@ -9026,9 +9057,18 @@ static int apical_isp_core_ops_g_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
             break;
         }
 
-        case 0x8000045: { /* OEM: copies a 20-byte AF record to userspace */
-            uint32_t af_rec[5] = {0};
-            if (copy_to_user((void __user *)(unsigned long)ctrl->value, af_rec, 0x14))
+        case 0x8000045: { /* OEM GetSensorAttr (0x80e4): IMPISPSENSORAttr */
+            /* {hts, vts, fps, width, height}: the OEM reads the u16 total
+             * size from the sensor attribute (+0xb0/+0xb2), the packed fps
+             * (+0x12c) and the output size (+0x124/+0x128) */
+            uint32_t attr[5];
+
+            attr[0] = tisp_si_total_width(&sensor_info);
+            attr[1] = tisp_si_total_height(&sensor_info);
+            attr[2] = tisp_si_fps(&sensor_info);
+            attr[3] = tisp_si_width(&sensor_info);
+            attr[4] = tisp_si_height(&sensor_info);
+            if (copy_to_user((void __user *)(unsigned long)ctrl->value, attr, sizeof(attr)))
                 ret = -EFAULT;
             break;
         }
@@ -9545,7 +9585,7 @@ static int apical_isp_core_ops_s_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
         /* ---- OEM commands added for parity (previously missing) ---- */
 
         case 0x8000008: { /* OEM: tisp_s_rgb_coefft — set RGB coefficients (6 bytes) */
-            int32_t rgb_buf[3] = { 0 };	/* only 6 of 12 bytes come from user */
+            int16_t rgb_buf[3];	/* OEM ABI: int16_t[3], 6 bytes */
             if (copy_from_user(rgb_buf, (void __user *)(unsigned long)ctrl->value, 6)) {
                 ret = -EFAULT;
                 goto out;
@@ -9599,11 +9639,11 @@ static int apical_isp_core_ops_s_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
         }
 
         case 0x8000024: /* OEM: apical_isp_ae_s_roi */
-            ret = 0; /* OEM routes through isra helper */
+            ret = apical_isp_ae_s_roi((void __user *)(unsigned long)ctrl->value);
             break;
 
         case 0x8000025: /* OEM: apical_isp_expr_s_ctrl */
-            ret = 0; /* OEM routes through isra helper */
+            ret = apical_isp_expr_s_ctrl((void __user *)(unsigned long)ctrl->value);
             break;
 
         case 0x800002a: /* OEM: tisp_s_Hilightdepress */
@@ -10738,16 +10778,11 @@ int apical_isp_ae_g_roi(struct tx_isp_dev *dev, struct isp_core_ctrl *ctrl)
     result = tisp_g_aeroi_weight(buffer);
 
     if (result == 0) {
-        /* Binary Ninja: Complex nested loop to copy data */
-        int a2_1 = 0;
-
+        /* 15x15 u32 weights to 15x15 bytes; OEM 0x71c8 steps the source
+         * row offset after advancing i, so row r reads words r*15.. */
         for (i = 0; i != 0xe1; i += 0xf) {
-            for (j = 0; j != 0xf; j++) {
-                /* Binary Ninja: char $a0_4 = (*($v0 + (j << 2) + $a2_1)).b */
-                char byte_val = *((char*)buffer + (j << 2) + a2_1);
-                var_f8[j + i] = byte_val;
-            }
-            a2_1 = i << 2;
+            for (j = 0; j != 0xf; j++)
+                var_f8[j + i] = (char)((uint32_t *)buffer)[i + j];
         }
 
         /* Binary Ninja: private_copy_to_user(*arg1, &var_f8, 0xe1) */
@@ -15978,18 +16013,87 @@ static int tiziano_isp_ae_manual_attr_g_ctrl(void __user *uptr)
     return 0;
 }
 
-/* OEM EXACT: apical_isp_expr_s_ctrl — set exposure control.
- * Decompiled from OEM at 0x566c. Parses user exposure params and calls tisp_s_ae_attr. */
-static int apical_isp_expr_s_ctrl(void *sd, void __user *uptr)
+/* tisp_s_ae_attr_it - OEM tisp_s_ae_attr (0x63e4c): the current AE
+ * control object with word 3 (integration time) and word 13 (pin the
+ * integration time) replaced, applied through tisp_ae_manual_set. */
+static int tisp_s_ae_attr_it(uint32_t it, uint32_t manual)
 {
-    uint32_t params[3]; /* mode, unit, value */
-    if (private_copy_from_user(params, uptr, 0xc))
-        return -EFAULT;
+    uint32_t w[0x98 / 4];
 
-    /* OEM builds an AE attr struct from the params and calls tisp_s_ae_attr.
-     * Pass the raw params buffer — tisp_s_ae_attr handles the struct internally. */
-    tisp_s_ae_attr(params);
-    return 0;
+    memcpy(w, tisp_ae_ctrls, sizeof(w));
+    w[3] = it;
+    w[13] = manual;
+    return tisp_ae_manual_set(w);
+}
+
+/* apical_isp_expr_s_ctrl - SetExpr (0x8000025), OEM 0x566c.
+ * IMPISPExpr.s_attr: { mode (0 auto, 1 manual), unit (0 lines, 1 us),
+ * uint16 time }.  Microseconds are converted with the sensor's
+ * one_line_expr_in_us. */
+static int apical_isp_expr_s_ctrl(void __user *uptr)
+{
+    struct {
+        uint32_t mode;
+        uint32_t unit;
+        uint16_t time;
+        uint16_t pad;
+    } expr;
+    uint32_t it = tisp_ae_ctrls[3];
+
+    if (copy_from_user(&expr, uptr, sizeof(expr)))
+        return -EFAULT;
+    if (expr.mode > 1) {
+        pr_err("Err:%s,%d can not support this mode\n", __func__, __LINE__);
+        return -EINVAL;
+    }
+    if (expr.mode == 1) {
+        if (expr.unit == 1) {
+            uint32_t line_us = tisp_si_one_line_expr_in_us(&sensor_info);
+
+            if (!line_us) {
+                pr_err("err: %s,%d one_line_expr_in_us = %d\n", __func__,
+                       __LINE__, 0);
+                return -EINVAL;
+            }
+            it = expr.time / line_us;
+        } else if (expr.unit == 0) {
+            it = expr.time;
+        } else {
+            pr_err("Err:%s,%d can not support this unit\n", __func__,
+                   __LINE__);
+            return -EINVAL;
+        }
+    }
+    return tisp_s_ae_attr_it(it, expr.mode);
+}
+
+/* apical_isp_ae_s_roi - SetAeROI (0x8000024), OEM 0x57b0: 15x15 bytes of
+ * weights 0..8 widened to u32 for tisp_s_aeroi_weight. */
+static int apical_isp_ae_s_roi(void __user *uptr)
+{
+    uint8_t in[0xe1];
+    uint32_t *roi;
+    int i, ret = 0;
+
+    if (!uptr)
+        return -EINVAL;
+    if (copy_from_user(in, uptr, sizeof(in)))
+        return -EFAULT;
+    roi = kmalloc(0x384, GFP_KERNEL);
+    if (!roi)
+        return -ENOMEM;
+    for (i = 0; i < 0xe1; i++) {
+        if (in[i] >= 9) {
+            pr_err("%s:%d::ae weight overflow!!!\n", __func__, __LINE__);
+            ret = -EINVAL;
+            goto out;
+        }
+        roi[i] = in[i];
+    }
+    tisp_s_aeroi_weight(roi);
+out:
+    kfree(roi);
+    return ret;
 }
 
 /* OEM EXACT: subsection_up — LSC mesh subsection interpolation.
@@ -17029,7 +17133,6 @@ static void (*irq_func_cb[32])(void) = {NULL};
 
 /* AE parameter addresses - Safe structure-based access */
 static uint32_t *data_d04b8 = &data_b0cfc;
-static uint32_t data_d04bc[6] = {0x0d0b00, 0x040d0b00, 0x080d0b00, 0x0c0d0b00, 0x100d0b00, 0x140d0b00};
 static uint32_t *data_d04c4 = &data_afcd4;
 
 /* AE exposure threshold parameters */
@@ -17428,8 +17531,10 @@ int tiziano_ae_init(uint32_t height, uint32_t width,
     /* Binary Ninja EXACT: memset(&tisp_ae_hist, 0, 0x42c) */
     memset(&tisp_ae_hist, 0, 0x42c);
 
-    /* Binary Ninja EXACT: __builtin_memcpy(&data_d4fbc, "\x0d\x00\x00\x00\x40\x00\x00\x00\x90\x00\x00\x00\xc0\x00\x00\x00\x0f\x00\x00\x00\x0f\x00\x00\x00", 0x18) */
-    memcpy(&data_d04bc, init_data, 0x18);
+    /* Binary Ninja EXACT: __builtin_memcpy(&data_d4fbc, "\x0d\x00\x00\x00\x40\x00\x00\x00\x90\x00\x00\x00\xc0\x00\x00\x00\x0f\x00\x00\x00\x0f\x00\x00\x00", 0x18)
+     * data_d4fbc is tisp_ae_hist + 0x414: default bucket edges 13/64/144/192
+     * and 15x15 nodes, copied into the published record below. */
+    memcpy(tisp_ae_hist + 0x414, init_data, 0x18);
 
     /* Binary Ninja EXACT: memcpy(&tisp_ae_hist_last, &tisp_ae_hist, 0x42c) */
     memcpy(&tisp_ae_hist_last, &tisp_ae_hist, 0x42c);
@@ -35544,8 +35649,9 @@ int tisp_g_ae_attr(uint32_t *out)
 {
     uint32_t buf[40];
     tisp_get_ae_attr(buf);
-    out[0] = buf[3];  /* ae mode */
-    out[0xc] = buf[12]; /* additional attr */
+    /* OEM 0x63f00: integration time (word 3) and its pin flag (word 13) */
+    out[0] = buf[3];
+    out[0xc] = buf[13];
     return 0;
 }
 
