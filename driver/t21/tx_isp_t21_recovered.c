@@ -1121,7 +1121,9 @@ struct t21_isp_core_info_view {
     uint32_t height;
     uint32_t raw_pattern;
     uint8_t pad_sensor_name[0x28];
-    const char *sensor_name;
+    /* Sensor attribute record; its first word is the name pointer (as
+     * ispcore_core_ops_init reads it), not the name itself. */
+    const char *const *sensor_attr;
     uint8_t pad_fps[0x08];
     uint32_t fps;
     uint8_t pad_tuning[0x6c];
@@ -51179,7 +51181,7 @@ int32_t isp_info_show(struct seq_file *m)
 	BUILD_BUG_ON(offsetof(struct t21_isp_core_info_view, width) != 0xec);
 	BUILD_BUG_ON(offsetof(struct t21_isp_core_info_view, height) != 0xf0);
 	BUILD_BUG_ON(offsetof(struct t21_isp_core_info_view, raw_pattern) != 0xf4);
-	BUILD_BUG_ON(offsetof(struct t21_isp_core_info_view, sensor_name) != 0x120);
+	BUILD_BUG_ON(offsetof(struct t21_isp_core_info_view, sensor_attr) != 0x120);
 	BUILD_BUG_ON(offsetof(struct t21_isp_core_info_view, fps) != 0x12c);
 	BUILD_BUG_ON(offsetof(struct t21_isp_core_info_view, tuning) != 0x19c);
 
@@ -51191,7 +51193,9 @@ int32_t isp_info_show(struct seq_file *m)
 		return ret + private_seq_printf(m, "sensor doesn't work, please enable sensor\n");
 	isp_data = isp_ctrl->tuning;
 	ret += private_seq_printf(m, "SENSOR NAME : %s\n",
-				  isp_ctrl->sensor_name ?: "unknown");
+				  t21_isp_valid_ptr(isp_ctrl->sensor_attr) &&
+				  t21_isp_valid_ptr(*isp_ctrl->sensor_attr)
+					? *isp_ctrl->sensor_attr : "unknown");
 	ret += private_seq_printf(m, "SENSOR OUTPUT WIDTH : %d\n",
 				  isp_ctrl->width);
 	ret += private_seq_printf(m, "SENSOR OUTPUT HEIGHT : %d\n",
@@ -51363,7 +51367,7 @@ int32_t isp_info_show(struct seq_file *m)
 
 	ret += private_seq_printf(m, "Software Version : %s\n", "H20200509a");
 	ret += private_seq_printf(m, "Firmware Version : %s\n", "H01-380");
-	ret += private_seq_printf(m, "SENSOR NAME : %s\n", isp_ctrl->sensor_name);
+	ret += private_seq_printf(m, "SENSOR NAME : %s\n", *isp_ctrl->sensor_attr);
 	ret += private_seq_printf(m, "SENSOR OUTPUT WIDTH : %d\n", isp_ctrl->width);
 	ret += private_seq_printf(m, "SENSOR OUTPUT HEIGHT : %d\n", isp_ctrl->height);
 	fps_val = isp_ctrl->fps;
