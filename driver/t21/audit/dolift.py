@@ -31,10 +31,10 @@ for _n in [x for x in _os.environ.get('CUSE','').split(',') if x]:
     _c=_n.replace('.','_')
     ext[_n]='r_v0 = (uint32_t)((uint32_t (*)(uint32_t, uint32_t, uint32_t, uint32_t))LIFT_FNADDR(%s))(r_a0, r_a1, r_a2, r_a3);' % _c
 L=Lifter(oem, ournames, ext)
-L.alias={'ev_changed@143d8':'tisp_adr_ev_changed','ev_now@143dc':'tisp_adr_ev_now','ev_changed@133ac':'tisp_defog_ev_changed','ev_now@133b0':'tisp_defog_ev_now'}
+L.alias={'_ev@41d3c':'awb_ev','ev_changed@143d8':'tisp_adr_ev_changed','ev_now@143dc':'tisp_adr_ev_now','ev_changed@133ac':'tisp_defog_ev_changed','ev_now@133b0':'tisp_defog_ev_now'}
 ournames|={'defog_fpga_para'}
 import re as _re
-_src=open('/mnt/NVMe/git/open-tx-isp-t21img/driver/t21/tx_isp_t21_recovered.c').read()
+_src=open(_os.path.join(_os.path.dirname(_os.path.abspath(__file__)), '..', 'tx_isp_t21_recovered.c')).read()
 _decl=set(_re.findall(r'^static\s+(?:volatile\s+)?(?:const\s+)?(?:unsigned\s+char|uint32_t|uintptr_t|int32_t|u32|int|uint8_t|char|uint16_t)\s+(?:__attribute__\(\(aligned\(4\)\)\)\s+)?\**([A-Za-z_][A-Za-z0-9_]*)\s*[\[;=]', _src, _re.M))
 _ovr=set(sys.argv[3].split(',')) if len(sys.argv)>3 else set()
 ournames|=(_decl-_ovr)

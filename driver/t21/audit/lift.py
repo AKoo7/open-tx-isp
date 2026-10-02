@@ -173,7 +173,9 @@ class Lifter:
         for i in range(n):
             r = rel[i]
             if r and r[0] == 5:
-                for j in range(i + 1, n):
+                # the paired LO16 usually follows; gcc may also schedule it
+                # before the HI16 across a branch (func_zone_ct_weight)
+                for j in list(range(i + 1, n)) + list(range(i - 1, -1, -1)):
                     rj = rel[j]
                     if rj and rj[0] == 6 and rj[1] is r[1]:
                         hi_add[i] = ((ins[i] & 0xffff) << 16) + s16(ins[j] & 0xffff)

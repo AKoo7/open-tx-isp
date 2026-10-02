@@ -1,5 +1,6 @@
 ADR=tisp_adr_process,tiziano_adr_interrupt_static,tisp_adr_ev_update,tiziano_adr_get_data,tisp_s_adr_str_internal,tisp_defog_process,tiziano_defog_interrupt_static,tisp_defog_ev_update,tiziano_defog_get_data
 AE=tisp_ae_process,tiziano_ae_init,tiziano_ae_dn_params_refresh,tiziano_ae_params_refresh,tisp_ae_s_min,tisp_ae_g_min,tiziano_ae_compensation_set,tiziano_ae_s_ev_start,tiziano_ae_s_max_again,tiziano_ae_s_max_isp_dgain,tisp_ae_manual_set,tiziano_deflicker_expt_tune
 CTL=apical_isp_core_ops_s_ctrl,apical_isp_core_ops_g_ctrl
+AWB=JZ_Isp_Awb,awb_interrupt_static,JZ_Isp_Get_Awb_Statistics,tisp_awb_ev_update
 export CUSE=tisp_set_saturation,tisp_set_contrast,tisp_set_sharpness,tisp_s_3dns_ratio,tisp_s_module_control,tisp_g_module_control,apical_isp_gamma_s_attr.isra.44,apical_isp_gamma_g_attr.isra.63,tisp_s_wb_attr,tisp_g_wb_attr,apical_isp_wb_g_ctrl.isra.65,tisp_s_af_attr,apical_isp_af_hist_g_attr.isra.73,tisp_g_af_metric,tisp_g_ncuinfo,apical_isp_ev_g_attr.isra.62,apical_isp_max_again_g_ctrl.isra.60,apical_isp_max_dgain_g_ctrl.isra.61,tisp_g_ev_attr,tisp_g_ae_luma,tisp_s_Gamma,private_copy_from_user,private_copy_to_user,private_kmalloc,private_kfree
-python3 dolift.py $1 $ADR,$AE,$CTL ae_ev_init_strict > lift_all2.c 2> lift_all2.err; tail -2 lift_all2.err | cut -c1-4000
+python3 dolift.py $1 $ADR,$AE,$CTL,$AWB ae_ev_init_strict > lift_all2.c 2> lift_all2.err; tail -2 lift_all2.err | cut -c1-4000
