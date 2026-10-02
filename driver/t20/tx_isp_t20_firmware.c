@@ -679,6 +679,8 @@ MODULE_PARM_DESC(isp_clk, "isp core clock");
 /* Temporary bring-up aid: identify the last completed FSM before a
  * recovered handler stalls the non-preemptible T20 kernel. */
 static int t20_trace_events;
+/* OEM AWB progress counters, printed with the T20AWB cmos trace line */
+static unsigned int t20_awb_ev[20], t20_awb_irq4, t20_awb_switch[12];
 module_param(t20_trace_events, int, 0644);
 MODULE_PARM_DESC(t20_trace_events, "trace T20 firmware event dispatch");
 static unsigned int t20_fsm_irq_allow_mask = 0xff;
@@ -717,6 +719,12 @@ static bool t20_simple_awb = true;
 module_param(t20_simple_awb, bool, 0644);
 MODULE_PARM_DESC(t20_simple_awb,
 	"use bounded metering feedback instead of the recovered OEM AWB state graph");
+
+bool tx_isp_t20_simple_awb_enabled(void)
+{
+	return t20_simple_awb;
+}
+
 static bool t20_simple_awb_static_only;
 module_param(t20_simple_awb_static_only, bool, 0644);
 MODULE_PARM_DESC(t20_simple_awb_static_only,
@@ -2195,13 +2203,14 @@ uint32_t luts_fetch(uint32_t arg1, uint32_t arg2, uint32_t arg3, uint32_t arg4, 
 uint32_t fifo_push(uint32_t arg1, uint32_t arg2);
 uint16_t * get_point(uint16_t *arg1);
 int32_t interpl(int32_t x0, int32_t x1, int32_t y0, int32_t x2, int32_t y1);
-int16_t * init_interp_2d_point(int16_t *arg1, int32_t arg2, int32_t arg3, void *arg4, int16_t *arg5, int16_t *arg6);
+struct t20_awb_point;
+struct t20_awb_point *init_interp_2d_point(struct t20_awb_point *arg1, int32_t arg2, int32_t arg3, void *arg4, int16_t *arg5, int16_t *arg6);
 int32_t get_index(int32_t arg1, void *arg2);
 #ifndef REGTRACE_KERNEL_TREE_BUILD
 int32_t AWB_mesh_isra_1(uint32_t arg1, uint32_t arg2, int16_t *arg3, int16_t *arg4, void *arg5) __asm__("AWB_mesh.isra.1");
 #endif
 int32_t AWB_mesh_isra_1(uint32_t arg1, uint32_t arg2, int16_t *arg3, int16_t *arg4, void *arg5);
-int16_t * init_interp_2d_point_LUT(int16_t *arg1, int32_t arg2, int32_t arg3, int32_t arg4, int16_t arg5, int16_t arg6, int16_t arg7, int16_t arg8, int16_t arg9, void *arg10);
+struct t20_awb_point *init_interp_2d_point_LUT(struct t20_awb_point *arg1, int32_t arg2, int32_t arg3, int32_t arg4, int16_t arg5, int16_t arg6, int16_t arg7, int16_t arg8, int16_t arg9, void *arg10);
 int32_t AWB_mesh_LUT(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int16_t arg5, int16_t arg6, int16_t arg7, int16_t arg8, int16_t arg9, void *arg10);
 int32_t mesh_AWB_getKnownSourceLight_weight_LUT(int32_t arg1, int16_t arg2, int16_t arg3, int32_t arg4, int32_t arg5);
 int32_t awb_coeffs_write(void);
@@ -10624,19 +10633,29 @@ uint32_t cmos_fsm_process_interrupt(int32_t *arg1, char arg2)
 		APICAL_WRITE_32(0x1a0,
 			(APICAL_READ_32(0x1a0) & 0xfffff000) | (value & 0xfff));
 
+		/*
+		 * Firmware cmos_func.c.o 0xd18..0xd8c: the AWB output gains
+		 * (AWB fsm at +0x748, gains +0x760..+0x76c) become the four
+		 * channel gains in that order (gain 0 -> 0x300), with 17 bits of
+		 * fraction in sensor modes 1 and 2 (16 otherwise), like the
+		 * exposure gain above. The recovered loop reversed the order
+		 * and the precision.
+		 */
 		for (i = 4; i != 0; i--) {
 			int32_t table_value = *(int32_t *)((char *)sensor +
 				0x748 + i * -4 + 0x770);
 			uint32_t mode = *(uint8_t *)((char *)sensor + 0x1524);
 
 			value = math_exp2(table_value,
-				(mode - 1) < 2 ? 0x10 : 0x11, 8);
-			exposure_table[i - 1] = value >= 0x1000 ?
+				(mode - 1) < 2 ? 0x11 : 0x10, 8);
+			exposure_table[4 - i] = value >= 0x1000 ?
 				0xfff : (int16_t)value;
 		}
 
 		sensor_mode = *(uint8_t *)((char *)sensor + 0x1524);
-		if (2 <= (sensor_mode - 1)) {
+		/* black-level compensation in sensor modes 1..3 (firmware
+		 * 0xd90: skipped when mode - 1 > 2) */
+		if ((sensor_mode - 1) <= 2) {
 			int16_t modulation[4];
 
 			modulation[0] = APICAL_READ_32(0x310) & 0xfff;
@@ -10674,6 +10693,27 @@ uint32_t cmos_fsm_process_interrupt(int32_t *arg1, char arg2)
 			((uint16_t)exposure_table[2] & 0xfff));
 		APICAL_WRITE_32(0x30c, (APICAL_READ_32(0x30c) & 0xfffff000) |
 			((uint16_t)exposure_table[3] & 0xfff));
+		if (t20_trace_events) {
+			static unsigned int wb_calls, wb_prints;
+
+			if (wb_calls++ % 64 == 0 && wb_prints++ < 40)
+			{
+				int32_t *awb = (int32_t *)((char *)sensor + 0x748);
+
+				printk(KERN_INFO "T20AWB cmos wb=%03x/%03x/%03x/%03x mode=%u awb state=%d req=%08x pend=%08x irq4=%u ev4=%u ev11=%u ev15=%u ev16=%u sw4=%u sw7=%u sw8=%u sw11=%u sensor state=%d\n",
+				       APICAL_READ_32(0x300) & 0xfff,
+				       APICAL_READ_32(0x304) & 0xfff,
+				       APICAL_READ_32(0x308) & 0xfff,
+				       APICAL_READ_32(0x30c) & 0xfff,
+				       *(uint8_t *)((char *)sensor + 0x1524),
+				       awb[1], awb[2], awb[3], t20_awb_irq4,
+				       t20_awb_ev[4], t20_awb_ev[11], t20_awb_ev[15],
+				       t20_awb_ev[16], t20_awb_switch[4],
+				       t20_awb_switch[7], t20_awb_switch[8],
+				       t20_awb_switch[11],
+				       *(int32_t *)((char *)sensor + 0xc + 4));
+			}
+		}
 
 		if (sensor_mode == 1 || sensor_mode == 3) {
 			int32_t field_5c = *(int32_t *)((char *)arg1 + 0x5c);
@@ -15667,6 +15707,8 @@ int32_t AWB_fsm_switch_state(int32_t *arg1, int32_t arg2)
 		return cur_state;
 
 	((void **)arg1)[1] = arg2;
+	if ((uint32_t)arg2 < 12)
+		t20_awb_switch[arg2]++;
 
 	switch (arg2) {
 	case 0:
@@ -15725,6 +15767,9 @@ int32_t AWB_fsm_process_state(int32_t *arg1)
 int32_t AWB_fsm_process_event(int32_t *arg1, int32_t arg2)
 {
 	int32_t result;
+
+	if ((uint32_t)arg2 < 20)
+		t20_awb_ev[arg2]++;
 
 	if (arg2 == 0xb) {
 		result = 0;
@@ -16023,108 +16068,38 @@ int32_t noise_reduction_fsm_process_state(void *arg1)
     return noise_reduction_fsm_switch_state(arg1, 0);
 }
 
-/* WHOLE_DRIVER_CANDIDATE fn_0000000000028a40 origin=fragment_seed original=noise_reduction_fsm_process_event */
+/* WHOLE_DRIVER_CANDIDATE fn_0000000000028a40 origin=model_output original=noise_reduction_fsm_process_event */
+/*
+ * libt20-firmware 3.12.0 noise_reduction_fsm.c.o 0xf0. The machine
+ * translation had lost its conditional branches: every event but 15 ran
+ * the frame-end update, event 16 never initialised the FSM and
+ * switch_state was called without its state argument.
+ */
 int32_t noise_reduction_fsm_process_event(uintptr_t a0, uint32_t a1)
 {
-    uint32_t *local_10 = 0;
-    uint32_t local_14 = 0;
-    uint32_t ra = 0;
-    uintptr_t *s0 = 0;
-    uintptr_t v0 = 0;
-    uint32_t v1 = 0;
+	int32_t *fsm = (int32_t *)a0;
 
-    /* fragment 0: Prologue */
-    /* function prologue: stack frame and callee-saved register setup */
-
-    /* fragment 1: Arithmetic */
-    v0 = 15;
-
-    /* fragment 2: StackAccess */
-    local_10 = s0;
-    local_14 = ra;
-
-    /* fragment 3: Branch */
-    s0 = a0;
-    if (a1 == v0) { goto noise_reduction_fsm_process_event0x38; }
-
-    /* fragment 4: Arithmetic */
-    v0 = 16;
-
-    /* fragment 5: Unknown */
-    /* unmatched fragment 5 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 28a5c:	50a20015 	beql	a1,v0,28ab4 <noise_reduction_fsm_process_event+0x74> */
-
-    /* fragment 6: MemoryAccess */
-    v1 = *(uint32_t *)((char *)a0 + 4);
-    v0 = 11;
-
-    /* fragment 7: Unknown */
-    /* unmatched fragment 7 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 28a68:	54a2001f 	bnel	a1,v0,28ae8 <noise_reduction_fsm_process_event+0xa8> */
-
-    /* fragment 8: Arithmetic */
-    v0 = 0;
-
-    /* fragment 9: Branch */
-    a1 = *(uint32_t *)((char *)(a0) + 4);
-    goto noise_reduction_fsm_process_event0x50;
-
-noise_reduction_fsm_process_event0x38:
-    /* fragment 10: MemoryAccess */
-    a0 = *(uint32_t *)((char *)a0 + 4);
-    v1 = 1;
-
-    /* fragment 11: Branch */
-    v0 = 0;
-    if (a0 != v1) { goto noise_reduction_fsm_process_event0xa8; }
-
-    /* fragment 12: Branch */
-    *(uint32_t *)((char *)s0 + 4) = 0;
-    goto noise_reduction_fsm_process_event0x94;
-
-noise_reduction_fsm_process_event0x50:
-    /* fragment 13: Arithmetic */
-    v1 = 1;
-
-    /* fragment 14: Branch */
-    v0 = 0;
-    if (a1 != v1) { goto noise_reduction_fsm_process_event0xa8; }
-
-    /* fragment 15: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)noise_reduction_update)(a0); /* jalr target resolved by relocation */
-
-    /* fragment 16: Branch */
-    a0 = s0;
-    goto noise_reduction_fsm_process_event0x7c;
-
-    /* fragment 17: Branch */
-    v0 = 0;
-    if (v1 != 0) { goto noise_reduction_fsm_process_event0xa8; }
-
-noise_reduction_fsm_process_event0x7c:
-    /* fragment 18: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)noise_reduction_fsm_switch_state)(a0); /* jalr target resolved by relocation */
-
-    /* fragment 19: Branch */
-    v0 = (uintptr_t)&noise_reduction_fsm_process_state;
-    goto noise_reduction_fsm_process_event0x98;
-
-noise_reduction_fsm_process_event0x94:
-    /* fragment 20: CallSetup */
-    v0 = (uintptr_t)&noise_reduction_fsm_process_state;
-
-noise_reduction_fsm_process_event0x98:
-    /* fragment 21: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)noise_reduction_fsm_process_state)(s0); /* jalr target resolved by relocation */
-
-    /* fragment 22: Arithmetic */
-    v0 = 1;
-
-noise_reduction_fsm_process_event0xa8:
-    /* fragment 23: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    return 0;
+	if (a1 == 15) {
+		/* sensor reconfiguration: back to idle */
+		if (fsm[1] != 1)
+			return 0;
+		fsm[1] = 0;
+	} else if (a1 == 16) {
+		/* sensor running: initialise */
+		if (fsm[1] != 0)
+			return 0;
+		noise_reduction_fsm_switch_state(fsm, 1);
+	} else if (a1 == 11) {
+		/* frame end: update */
+		if (fsm[1] != 1)
+			return 0;
+		noise_reduction_update((struct tx_isp_t20_nr_state *)fsm);
+		noise_reduction_fsm_switch_state(fsm, 1);
+	} else {
+		return 0;
+	}
+	noise_reduction_fsm_process_state(fsm);
+	return 1;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000028b00 origin=fragment_seed original=sharpening_fsm_clear */
@@ -19067,75 +19042,63 @@ int32_t ae_exposure_correction(uintptr_t a0, uint32_t a1)
     return 0;
 }
 
+/*
+ * awb_mesh_NBP_func helpers, written from libt20-firmware 3.12.0
+ * (awb_mesh_NBP_func.c.o 0x0..0xb44).  A mesh point is {u16 x; u16 y;
+ * s32 value}, as on the firmware's stack.
+ */
+struct t20_awb_point {
+	uint16_t x;
+	uint16_t y;
+	int32_t value;
+};
+
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002bed0 origin=model_output original=luts_fetch */
 uint32_t luts_fetch(uint32_t arg1, uint32_t arg2, uint32_t arg3, uint32_t arg4, uint16_t *arg5, uint16_t arg6)
 {
-    if (arg4 == 0)
-        return arg1;
-
-    if (arg1 < arg2)
-        return (uint32_t)*arg5;
-
-    if (arg3 >= arg1) {
-        if (arg4 == 0)
-            return arg1;
-        return (uint32_t)*(arg5 + (((arg1 - arg2) / arg4) << 1));
-    }
-
-    return (uint32_t)*(arg5 + (((uint32_t)arg6 - 1) << 1));
+	if (arg4 == 0)
+		return arg1;
+	if (arg1 < arg2)
+		return arg5[0];
+	if (arg3 < arg1)
+		return arg5[arg6 - 1];
+	return arg5[(int32_t)(arg1 - arg2) / (int32_t)arg4];
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002bf2c origin=model_output original=fifo_push */
 uint32_t fifo_push(uint32_t arg1, uint32_t arg2)
 {
-	uint32_t *s0 = arg1 & 0xffff;
-	uint32_t *s1 = arg2 & 0xffff;
-	uint32_t count = *(uint8_t *)(uintptr_t)_GET_UCHAR_PTR(262);
-	uint32_t rg_avg = fifo_rg_avg;
-	uint32_t gb_avg = fifo_gb_avg;
+	uint32_t rg = arg1 & 0xffff;
+	uint32_t bg = arg2 & 0xffff;
+	uint32_t depth = *(uint8_t *)(uintptr_t)_GET_UCHAR_PTR(262);
 
-	if (count == 0) {
-		fifo_rg_avg = s0;
-		fifo_gb_avg = s1;
-		return count;
+	if (depth == 0) {
+		fifo_rg_avg = rg;
+		fifo_gb_avg = bg;
+	} else if (fifo_rg_avg == 0 && fifo_gb_avg == 0) {
+		fifo_rg_avg = depth * rg;
+		fifo_gb_avg = depth * bg;
+	} else {
+		fifo_rg_avg = rg + fifo_rg_avg - fifo_rg_avg / depth;
+		fifo_gb_avg = bg + fifo_gb_avg - fifo_gb_avg / depth;
 	}
-
-	if (rg_avg == 0 && gb_avg == 0) {
-		fifo_rg_avg = count * (uintptr_t)s0;
-		fifo_gb_avg = count * (uintptr_t)s1;
-		return count;
-	}
-
-	fifo_rg_avg = (uintptr_t)s0 + rg_avg - rg_avg / count;
-	fifo_gb_avg = (uintptr_t)s1 + gb_avg - gb_avg / count;
-	return count;
+	return depth;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002bfdc origin=model_output original=get_point */
 uint16_t *get_point(uint16_t *arg1)
 {
-	uint32_t rg_avg;
-	uint32_t gb_avg;
-	uint8_t *ptr;
-	uint32_t val;
-	uint32_t *base;
+	struct t20_awb_point *point = (struct t20_awb_point *)arg1;
+	uint32_t depth = *(uint8_t *)(uintptr_t)_GET_UCHAR_PTR(262);
 
-	ptr = (uint8_t *)_GET_UCHAR_PTR(262);
-	val = *ptr;
-	base = (uint32_t *)&__key_0;
-
-	if (val == 0) {
-		rg_avg = *(uint16_t *)(base + 3);
-		gb_avg = *(uint16_t *)(base + 4);
+	if (depth) {
+		point->x = (uint16_t)(fifo_rg_avg / depth);
+		point->y = (uint16_t)(fifo_gb_avg / depth);
 	} else {
-		rg_avg = base[3] / val;
-		gb_avg = base[4] / val;
+		point->x = (uint16_t)fifo_rg_avg;
+		point->y = (uint16_t)fifo_gb_avg;
 	}
-
-	((uint32_t *)arg1)[1] = (uint16_t)gb_avg;
-	*arg1 = (uint16_t)rg_avg;
-	*(uint32_t *)(arg1 + 2) = 0;
-
+	point->value = 0;
 	return arg1;
 }
 
@@ -19148,75 +19111,51 @@ int32_t interpl(int32_t x0, int32_t x1, int32_t y0, int32_t x2, int32_t y1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002c09c origin=model_output original=init_interp_2d_point */
-int16_t *init_interp_2d_point(int16_t *arg1, int32_t arg2, int32_t arg3, void *arg4, int16_t *arg5, int16_t *arg6)
+struct t20_awb_point *init_interp_2d_point(struct t20_awb_point *arg1, int32_t arg2, int32_t arg3, void *arg4, int16_t *arg5, int16_t *arg6)
 {
-	int32_t x = arg2;
-	int32_t y = arg3;
-	int32_t len = _GET_LEN(226);
-	int32_t cx, cy;
-	int16_t vx, vy;
+	uint32_t len = _GET_LEN(226);
+	/* 0: below the axis, 1: on it, 2: above it.  As in the firmware a
+	 * negative index compares as unsigned and lands above the axis. */
+	uint32_t where_x = len < (uint32_t)arg2 ? 2 : arg2 >= 0;
+	uint32_t where_y = len < (uint32_t)arg3 ? 2 : arg3 >= 0;
+	uint16_t x;
+	uint16_t y;
 
-	if ((uint32_t)len < (uint32_t)x) {
-		cx = 0;
-		cy = 2;
+	if (where_x == 0) {
+		arg2 = 0;
+		x = (uint16_t)arg5[0] - 20;
+	} else if (where_x == 2) {
+		arg2 = len - 1;
+		x = (uint16_t)arg5[arg2] + 20;
 	} else {
-		cx = ((~x) >> 31) & 1;
-		cy = 0;
+		x = (uint16_t)arg5[arg2];
 	}
-	cx += cy;
-
-	if ((uint32_t)len < (uint32_t)y) {
-		cy = 0;
-		cx = 2;
+	if (where_y == 0) {
+		arg3 = 0;
+		y = (uint16_t)arg6[0] - 20;
+	} else if (where_y == 2) {
+		arg3 = len - 1;
+		y = (uint16_t)arg6[arg3] + 20;
 	} else {
-		cy = ((~y) >> 31) & 1;
-		cx = 0;
+		y = (uint16_t)arg6[arg3];
 	}
-	cy += cx;
-
-	if (cx == 0) {
-		x = 0;
-		vx = *arg5 - 20;
-	} else if (cx != 2) {
-		vx = arg5[x];
-	} else {
-		x = len - 1;
-		vx = arg5[x] + 20;
-	}
-
-	if (cy == 0) {
-		y = 0;
-		vy = *arg6 - 20;
-	} else if (cy != 2) {
-		vy = arg6[y];
-	} else {
-		y = len - 1;
-		vy = arg6[y] + 20;
-	}
-
-	*(int32_t *)(arg1 + 4) = *(int16_t *)((char *)arg4 + ((y * len + x) << 1));
-	*arg1 = vx;
-	((void **)arg1)[1] = vy;
+	arg1->value = ((int16_t *)arg4)[arg3 * len + arg2];
+	arg1->x = x;
+	arg1->y = y;
 	return arg1;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002c1fc origin=model_output original=get_index */
 int32_t get_index(int32_t arg1, void *arg2)
 {
-	int32_t len = _GET_LEN(226);
-	int32_t *i = 1;
-	int16_t *p = (int16_t *)arg2;
+	uint32_t len = _GET_LEN(226);
+	int16_t *axis = arg2;
+	uint32_t i;
 
-	while (i < len) {
-		if (arg1 < p[(uintptr_t)i])
-			break;
-		i++;
-	}
-
-	if (i >= len)
-		return len - 2;
-
-	return i - 1;
+	for (i = 1; i < len; i++)
+		if (arg1 < axis[i])
+			return i - 1;
+	return len - 2;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002c26c origin=model_output original=AWB_mesh.isra.1 */
@@ -19225,203 +19164,128 @@ int32_t AWB_mesh_isra_1(uint32_t arg1, uint32_t arg2, int16_t *arg3, int16_t *ar
 #endif
 int32_t AWB_mesh(uint32_t arg1, uint32_t arg2, int16_t *arg3, int16_t *arg4, void *arg5)
 {
-	int32_t idx_x = get_index((int32_t)arg1, arg3);
-	int32_t idx_y = get_index((int32_t)arg2, arg4);
-	int32_t idx_x1 = idx_x + 1;
-	int32_t idx_y1 = idx_y + 1;
-	int16_t pt00[4];
-	int16_t pt10[4];
-	int16_t pt01[4];
-	int16_t pt11[4];
-	uint32_t x = arg1;
-	uint32_t y = arg2;
-	int32_t lut_x_ptr;
-	int32_t lut_y_ptr;
-	int32_t len_x;
-	int32_t len_y;
-	int32_t x_min;
-	int32_t x_max;
-	int32_t y_min;
-	int32_t y_max;
-	int32_t x0;
-	int32_t x1;
-	int32_t y0;
-	int32_t y1;
-	int32_t inner_x;
-	int32_t inner_y;
-	int32_t result;
+	int32_t ix = get_index(arg1, arg3);
+	int32_t iy = get_index(arg2, arg4);
+	struct t20_awb_point p00, p10, p01, p11;
+	uint16_t *axis;
+	uint32_t len;
+	int32_t r0;
+	int32_t r1;
 
-	init_interp_2d_point(pt00, idx_x, idx_y, arg5, arg3, arg4);
-	init_interp_2d_point(pt10, idx_x1, idx_y, arg5, arg3, arg4);
-	init_interp_2d_point(pt01, idx_x, idx_y1, arg5, arg3, arg4);
-	init_interp_2d_point(pt11, idx_x1, idx_y1, arg5, arg3, arg4);
+	init_interp_2d_point(&p00, ix, iy, arg5, arg3, arg4);
+	init_interp_2d_point(&p10, ix + 1, iy, arg5, arg3, arg4);
+	init_interp_2d_point(&p01, ix, iy + 1, arg5, arg3, arg4);
+	init_interp_2d_point(&p11, ix + 1, iy + 1, arg5, arg3, arg4);
 
-	lut_x_ptr = _GET_USHORT_PTR(226);
-	x_min = (int32_t)(uint16_t)*(uint16_t *)lut_x_ptr;
-	if (x < (uint32_t)x_min)
-		x = (uint32_t)x_min;
-	len_x = _GET_LEN(226);
-	x_max = (int32_t)(uint16_t)*(uint16_t *)(lut_x_ptr + ((len_x - 1) << 1));
-	if (x >= (uint32_t)x_max)
-		x = (uint32_t)x_max;
+	axis = (uint16_t *)(uintptr_t)_GET_USHORT_PTR(226);
+	len = _GET_LEN(226);
+	if (arg1 < axis[0])
+		arg1 = axis[0];
+	if (!(arg1 < axis[len - 1]))
+		arg1 = axis[len - 1];
+	axis = (uint16_t *)(uintptr_t)_GET_USHORT_PTR(251);
+	len = _GET_LEN(251);
+	if (arg2 < axis[0])
+		arg2 = axis[0];
+	if (!(arg2 < axis[len - 1]))
+		arg2 = axis[len - 1];
 
-	lut_y_ptr = _GET_USHORT_PTR(251);
-	y_min = (int32_t)(uint16_t)*(uint16_t *)lut_y_ptr;
-	if (y < (uint32_t)y_min)
-		y = (uint32_t)y_min;
-	len_y = _GET_LEN(251);
-	y_max = (int32_t)(uint16_t)*(uint16_t *)(lut_y_ptr + ((len_y - 1) << 1));
-	if (y >= (uint32_t)y_max)
-		y = (uint32_t)y_max;
-
-	x0 = (int32_t)(uint16_t)pt00[0];
-	x1 = (int32_t)(uint16_t)pt10[0];
-	y0 = (int32_t)(uint16_t)pt01[0];
-	y1 = (int32_t)(uint16_t)pt11[0];
-
-	inner_x = interpl((int32_t)x, x0, *(int32_t *)(pt00 + 4), x1, *(int32_t *)(pt10 + 4));
-	inner_y = interpl((int32_t)x, y0, *(int32_t *)(pt01 + 4), y1, *(int32_t *)(pt11 + 4));
-	result = interpl((int32_t)y, (int32_t)(uint16_t)pt00[2], inner_x, (int32_t)(uint16_t)pt01[2], inner_y);
-	return result;
+	r0 = interpl(arg1, p00.x, p00.value, p10.x, p10.value);
+	r1 = interpl(arg1, p01.x, p01.value, p11.x, p11.value);
+	return interpl(arg2, p00.y, r0, p01.y, r1);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002c4ec origin=model_output original=init_interp_2d_point_LUT */
-int16_t *init_interp_2d_point_LUT(int16_t *arg1, int32_t arg2, int32_t arg3, int32_t arg4, int16_t arg5, int16_t arg6, int16_t arg7, int16_t arg8, int16_t arg9, void *arg10)
+struct t20_awb_point *init_interp_2d_point_LUT(struct t20_awb_point *arg1, int32_t arg2, int32_t arg3, int32_t arg4, int16_t arg5, int16_t arg6, int16_t arg7, int16_t arg8, int16_t arg9, void *arg10)
 {
-	int32_t x = arg2;
-	int32_t y = arg3;
-	int16_t base = (int16_t)(arg4 << 16 >> 16);
-	int32_t len = _GET_LEN(226);
-	int16_t vx;
-	int16_t vy;
+	uint32_t len = _GET_LEN(226);
+	int16_t x0 = (int16_t)arg4;
+	uint16_t x;
+	uint16_t y;
 
-	if (x < 0) {
-		vx = base - 20;
-		x = 0;
-	} else if (x < len) {
-		vx = arg6 * x + base;
+	if (arg2 < 0) {
+		x = x0 - 20;
+		arg2 = 0;
+	} else if ((uint32_t)arg2 < len) {
+		x = arg6 * arg2 + x0;
 	} else {
-		x = len - 1;
-		vx = arg5 + 20;
+		arg2 = len - 1;
+		x = arg5 + 20;
 	}
-
-	if (y < 0) {
-		vy = arg7 - 20;
-		y = 0;
-	} else if (y < len) {
-		vy = arg9 * y + arg7;
+	if (arg3 < 0) {
+		y = arg7 - 20;
+		arg3 = 0;
+	} else if ((uint32_t)arg3 < len) {
+		y = arg9 * arg3 + arg7;
 	} else {
-		y = len - 1;
-		vy = arg8 + 20;
+		arg3 = len - 1;
+		y = arg8 + 20;
 	}
-
-	((void **)arg1)[2] = *(int32_t *)(arg10 + ((y * len + x) << 1));
-	((void **)arg1)[0] = vx;
-	((void **)arg1)[1] = vy;
+	arg1->value = ((int16_t *)arg10)[arg3 * len + arg2];
+	arg1->x = x;
+	arg1->y = y;
 	return arg1;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002c600 origin=model_output original=AWB_mesh_LUT */
 int32_t AWB_mesh_LUT(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int16_t arg5, int16_t arg6, int16_t arg7, int16_t arg8, int16_t arg9, void *arg10)
 {
-	int32_t len = _GET_LEN(0xe2);
-	int32_t x_base = arg4 << 16 >> 16;
-	int32_t x_val = arg2;
-	int32_t y_val = arg3;
-	int32_t x_idx;
-	int32_t y_idx;
-	int16_t pt00[4];
-	int16_t pt10[4];
-	int16_t pt01[4];
-	int16_t pt11[4];
+	uint32_t last = _GET_LEN(226) - 1;
+	int16_t x0 = (int16_t)arg4;
+	struct t20_awb_point p00, p10, p01, p11;
+	int32_t ix;
+	int32_t iy;
 	int32_t r0;
 	int32_t r1;
-	int32_t result = arg2;
 
+	(void)arg1;
 	if (arg6 == 0 || arg9 == 0)
-		goto out;
+		return arg2;
 
-	{
-		int32_t x_div = (arg2 - x_base) / arg6;
-		if (x_div < 0) {
-			x_val = x_base;
-			x_idx = 0;
-		} else {
-			if ((uint32_t)(len - 1) < (uint32_t)x_div) {
-				x_idx = len - 1;
-				x_val = (int32_t)arg5;
-			} else {
-				x_idx = x_div;
-			}
-		}
+	ix = (arg2 - x0) / arg6;
+	if (ix < 0) {
+		arg2 = x0;
+		ix = 0;
+	} else if (last < (uint32_t)ix) {
+		ix = last;
+		arg2 = arg5;
+	}
+	iy = (arg3 - arg7) / arg9;
+	if (iy < 0) {
+		arg3 = arg7;
+		iy = 0;
+	} else if (last < (uint32_t)iy) {
+		iy = last;
+		arg3 = arg8;
 	}
 
-	{
-		int32_t y_div = (arg3 - (int32_t)arg7) / (int32_t)arg9;
-		if (y_div < 0) {
-			y_val = (int32_t)arg7;
-			y_idx = 0;
-		} else {
-			if ((uint32_t)(len - 1) < (uint32_t)y_div) {
-				y_idx = len - 1;
-				y_val = (int32_t)arg8;
-			} else {
-				y_idx = y_div;
-			}
-		}
-	}
+	init_interp_2d_point_LUT(&p00, ix, iy, x0, arg5, arg6, arg7, arg8, arg9, arg10);
+	init_interp_2d_point_LUT(&p10, ix + 1, iy, x0, arg5, arg6, arg7, arg8, arg9, arg10);
+	init_interp_2d_point_LUT(&p01, ix, iy + 1, x0, arg5, arg6, arg7, arg8, arg9, arg10);
+	init_interp_2d_point_LUT(&p11, ix + 1, iy + 1, x0, arg5, arg6, arg7, arg8, arg9, arg10);
 
-	init_interp_2d_point_LUT(pt00, x_idx, y_idx, x_base, arg5, arg6, arg7, arg8, arg9, arg10);
-	init_interp_2d_point_LUT(pt10, x_idx + 1, y_idx, x_base, arg5, arg6, arg7, arg8, arg9, arg10);
-	init_interp_2d_point_LUT(pt01, x_idx, y_idx + 1, x_base, arg5, arg6, arg7, arg8, arg9, arg10);
-	init_interp_2d_point_LUT(pt11, x_idx + 1, y_idx + 1, x_base, arg5, arg6, arg7, arg8, arg9, arg10);
-
-	r0 = interpl(x_val, (uint16_t)pt00[0], (int32_t)pt00[2], (uint16_t)pt10[0], (int32_t)pt10[2]);
-	r1 = interpl(x_val, (uint16_t)pt01[0], (int32_t)pt01[2], (uint16_t)pt11[0], (int32_t)pt11[2]);
-	result = interpl(y_val, (uint16_t)pt00[1], r0, (uint16_t)pt01[1], r1);
-
-out:
-	return result;
+	r0 = interpl(arg2, p00.x, p00.value, p10.x, p10.value);
+	r1 = interpl(arg2, p01.x, p01.value, p11.x, p11.value);
+	return interpl(arg3, p00.y, r0, p01.y, r1);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002c8e0 origin=model_output original=mesh_AWB_getKnownSourceLight_weight_LUT */
 int32_t mesh_AWB_getKnownSourceLight_weight_LUT(int32_t arg1, int16_t arg2, int16_t arg3, int32_t arg4, int32_t arg5)
 {
-	uint32_t x = (uint32_t)(uint16_t)arg2;
-	uint32_t y = (uint32_t)(uint16_t)arg3;
-	int32_t len = _GET_LEN(0xe2);
-	int32_t flag = 0;
-	int32_t x_lo;
-	int32_t x_hi;
-	int32_t y_lo;
-	int32_t y_hi;
-	int32_t step;
-	int32_t *lut_ptr;
-	int32_t result;
+	int32_t rg = (uint16_t)arg2;
+	int32_t bg = (uint16_t)arg3;
+	uint32_t len = _GET_LEN(226);
+	uint32_t step;
 
-	if (x >= (uint32_t)(arg4 - 0x1e) && (uint32_t)(arg4 + 0x1e) >= x && y >= (uint32_t)(arg5 - 0x1e)) {
-		if ((uint32_t)(arg5 + 0x1e) < y)
-			flag = 1;
-		else
-			flag = 0;
-		flag ^= 1;
-	}
-
-	if (flag == 0)
+	/* only within +-30 of the known light source */
+	if (rg < arg4 - 30 || arg4 + 30 < rg || bg < arg5 - 30 || arg5 + 30 < bg)
 		return 0;
-
-	step = 0x3c / (len - 1);
-	lut_ptr = _GET_USHORT_PTR(0xd9);
-
-	x_lo = (int32_t)((int16_t)((arg4 - 0x1e) << 16 >> 16));
-	x_hi = (int32_t)((int16_t)((arg4 + 0x1e) << 16 >> 16));
-	y_lo = (int32_t)((int16_t)((arg5 - 0x1e) << 16 >> 16));
-	y_hi = (int32_t)((int16_t)((arg5 + 0x1e) << 16 >> 16));
-
-	result = AWB_mesh_LUT(arg1, (int32_t)x, (int32_t)y, (int32_t)((int16_t)((arg4 - 0x1e) << 16 >> 16)),
-			  (int16_t)x_lo, (int16_t)x_hi, (int16_t)y_lo, (int16_t)y_hi, (int16_t)step,
-			  (void *)lut_ptr);
-	return result;
+	step = 60u / (len - 1);
+	return AWB_mesh_LUT(arg1, rg, bg, (int16_t)(arg4 - 30),
+			    (int16_t)(arg4 + 30), (int16_t)step,
+			    (int16_t)(arg5 - 30), (int16_t)(arg5 + 30),
+			    (int16_t)step,
+			    (void *)(uintptr_t)_GET_USHORT_PTR(217));
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002ca14 origin=model_output original=awb_coeffs_write */
@@ -19578,13 +19442,15 @@ int32_t awb_read_statistics(void *arg1)
     *(uint32_t *)(base + 10) = 0;
 
     while (i < count) {
-        raw = APICAL_READ_32((((uintptr_t)i << 1) + 0x1d0) << 2);
-        val1 = ((raw & 0xfff) * *(uint16_t *)((uintptr_t)base + 12)) >> 8;
+        /* firmware 0xe4c: statistics bank at 0x8000 */
+        raw = APICAL_READ_32(((((uintptr_t)i << 1) + 0x1d0) << 2) + 0x8000);
+        /* firmware 0xe60/0xe74: R/B scales are the u16 at bytes 24/26 */
+        val1 = ((raw & 0xfff) * *(uint16_t *)((uintptr_t)base + 24)) >> 8;
         val1 &= 0xffff;
         if (val1 == 0)
             val1 = 1;
 
-        val2 = ((raw >> 16 & 0xfff) * *(uint16_t *)((uintptr_t)base + 13)) >> 8;
+        val2 = ((raw >> 16 & 0xfff) * *(uint16_t *)((uintptr_t)base + 26)) >> 8;
         val2 &= 0xffff;
         if (val2 == 0)
             val2 = 1;
@@ -19593,7 +19459,7 @@ int32_t awb_read_statistics(void *arg1)
         dst[0] = (uint16_t)(0xffff / val1);
         dst[1] = (uint16_t)(0xffff / val2);
 
-        raw2 = APICAL_READ_32((((uintptr_t)i << 1) + 0x1d1) << 2);
+        raw2 = APICAL_READ_32(((((uintptr_t)i << 1) + 0x1d1) << 2) + 0x8000);
         sum = *(uint32_t *)(base + 10);
         *(uint32_t *)(dst + 2) = raw2;
         *(uint32_t *)(base + 10) = sum + raw2;
@@ -20000,6 +19866,7 @@ int32_t AWB_fsm_process_interrupt(int32_t *arg1, char arg2)
 
 	if ((arg2 & 0xff) != 4)
 		return 4;
+	t20_awb_irq4++;
 	if (t20_simple_awb) {
 		tx_isp_t20_simple_awb_update(arg1);
 		return AWB_request_interrupt(arg1, 1 << 4);
@@ -20024,2181 +19891,457 @@ int32_t awb_zones_calculate(void)
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002ce54 origin=model_output original=compute_weight */
 int32_t compute_weight(int32_t arg1, int32_t arg2, void *arg3, int32_t *arg4, void *arg5, void *arg6)
 {
-    uint16_t count = *(uint16_t *)((char *)arg6 + 0x10);
-    int32_t result = 0;
-    int32_t diff = arg1 - 0x100;
-    int32_t denom = 0x100 - arg2;
+	uint16_t count = *(uint16_t *)((char *)arg6 + 16);
+	uint16_t *zone = (uint16_t *)((char *)arg6 + 88);
+	uint8_t *valid = arg3;
+	uint8_t *factor = arg5;
+	int32_t i;
 
-    while ((uint16_t)result < count) {
-        uint16_t val_58 = *(uint16_t *)((char *)arg6 + 0x58);
+	for (i = 0; (uint16_t)i < count; i++, zone += 4, arg4++) {
+		int32_t product;
+		int32_t sign;
+		int32_t limit;
 
-        if (val_58 == 0) {
-            result += 1;
-        } else {
-            uint16_t val_5a = *(uint16_t *)((char *)arg6 + 0x5a);
-
-            if (val_5a == 0) {
-                result += 1;
-            } else {
-                if (arg2 != 0x100) {
-                    int32_t prod = (val_58 - arg1) * diff;
-                    int32_t sign = (prod < 0) ? -1 : 1;
-
-                    if (*(uint8_t *)((char *)arg3 + result) == 0) {
-                        *arg4 = 0;
-                    } else {
-                        int32_t abs_val = (prod ^ sign) - sign;
-                        int32_t quot = abs_val / denom;
-                        int32_t threshold = sign * quot + arg2;
-
-                        if ((uint16_t)val_5a < (uint32_t)threshold) {
-                            *arg4 = 0;
-                        } else {
-                            *arg4 *= *(uint8_t *)((char *)arg5 + result);
-                        }
-                    }
-                }
-                result += 1;
-            }
-        }
-
-        arg6 = (char *)arg6 + 8;
-        arg4 = arg4 + 1;
-    }
-
-    return result;
+		if (zone[0] == 0 || zone[1] == 0 || arg2 == 0x100)
+			continue;
+		product = (zone[0] - arg1) * (arg1 - 0x100);
+		sign = product < 0 ? -1 : 1;
+		if (!valid[i]) {
+			*arg4 = 0;
+			continue;
+		}
+		/* firmware 0xff8: |product| / (256 - arg2), unsigned */
+		limit = sign * (int32_t)((uint32_t)((product ^ (product >> 31)) -
+				(product >> 31)) / (uint32_t)(0x100 - arg2)) + arg2;
+		if ((uint32_t)zone[1] < (uint32_t)limit)
+			*arg4 = 0;
+		else
+			*arg4 *= factor[i];
+	}
+	return i;
 }
 
-/* WHOLE_DRIVER_CANDIDATE fn_000000000002cf34 origin=fragment_seed original=awb_calc_avg_weighted_gr_gb_mesh */
+/*
+ * awb_calc_avg_weighted_gr_gb_mesh, written from libt20-firmware 3.12.0
+ * (0x1064..0x2588).  The firmware keeps the per-zone arrays in a 3 KiB
+ * stack frame; they live here in static storage (the AWB state machine
+ * runs in the single firmware event worker), indexed and initialised
+ * exactly like the firmware's.
+ */
+static uint32_t t20_awb_weight[225];		/* sp+24 */
+static uint16_t t20_awb_zone_bg[225];		/* sp+924 */
+static uint16_t t20_awb_zone_rg[225];		/* sp+1376 */
+static uint8_t t20_awb_in_box[225];		/* sp+1828 */
+static uint8_t t20_awb_share_b[225];		/* sp+2056 */
+static uint8_t t20_awb_share_a[225];		/* sp+2284 */
+static uint8_t t20_awb_near_source0[225];	/* sp+2512 */
+static uint8_t t20_awb_valid[225];		/* sp+2740 */
+
+static inline uint16_t *t20_awb_lut16(int32_t id)
+{
+	return (uint16_t *)(uintptr_t)_GET_USHORT_PTR(id);
+}
+
+/* WHOLE_DRIVER_CANDIDATE fn_000000000002cf34 origin=model_output original=awb_calc_avg_weighted_gr_gb_mesh */
 int32_t awb_calc_avg_weighted_gr_gb_mesh(uintptr_t a0)
 {
-    uint32_t *local_10 = 0;
-    uint32_t local_14 = 0;
-    uint32_t local_18 = 0;
-    uint32_t local_39c = 0;
-    uint32_t local_560 = 0;
-    uint32_t local_724 = 0;
-    uint32_t local_808 = 0;
-    uint32_t local_8ec = 0;
-    uint32_t local_9d0 = 0;
-    uint32_t local_ab4 = 0;
-    uint32_t local_b98 = 0;
-    uint32_t local_b9a = 0;
-    uint32_t local_ba0 = 0;
-    uint32_t local_ba4 = 0;
-    uint32_t local_ba8 = 0;
-    uint32_t local_bac = 0;
-    uint32_t local_bb0 = 0;
-    uint32_t local_bb4 = 0;
-    uint32_t local_bb8 = 0;
-    uint32_t local_bbc = 0;
-    uint32_t local_bc0 = 0;
-    uint32_t local_bc4 = 0;
-    uint32_t local_bc8 = 0;
-    uint32_t local_bcc = 0;
-    uint32_t local_bd0 = 0;
-    uint32_t local_bd4 = 0;
-    uint32_t local_bd8 = 0;
-    uint32_t local_be0 = 0;
-    uint32_t local_be4 = 0;
-    uint32_t local_be8 = 0;
-    uint32_t local_bec = 0;
-    uint32_t local_bf0 = 0;
-    uint32_t local_bf4 = 0;
-    uint32_t local_bf8 = 0;
-    uint32_t local_bfc = 0;
-    uint32_t local_c00 = 0;
-    uint32_t local_c04 = 0;
-    uintptr_t a1 = 0;
-    uintptr_t a2 = 0;
-    uintptr_t *a3 = 0;
-    uint32_t ra = 0;
-    uintptr_t *s0 = 0;
-    uintptr_t *s1 = 0;
-    uint32_t *s2 = 0;
-    uintptr_t *s3 = 0;
-    uintptr_t s4 = 0;
-    uintptr_t s5 = 0;
-    uintptr_t s6 = 0;
-    uintptr_t s7 = 0;
-    uintptr_t s8 = 0;
-    uintptr_t t0 = 0;
-    uintptr_t t1 = 0;
-    uintptr_t t2 = 0;
-    uintptr_t t3 = 0;
-    uint32_t t4 = 0;
-    uintptr_t v0 = 0;
-    uintptr_t v1 = 0;
-
-    /* fragment 0: Prologue */
-    /* function prologue: stack frame and callee-saved register setup */
-
-    /* fragment 1: CallSetup */
-    s3 = *(uint32_t *)((char *)(a0) + 0);
-    s0 = a0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)APICAL_READ_32)(2160); /* jalr target resolved by relocation */
-
-    /* fragment 2: CallSetup */
-    s2 = v0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)APICAL_READ_32)(2160); /* jalr target resolved by relocation */
-
-    /* fragment 3: CallSetup */
-    s2 = (uintptr_t)s2 & 255;
-    s2 = ((v0 & 65280) >> 8) * (uintptr_t)s2;
-    *(uint16_t *)((char *)s0 + 16) = s2;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_COLS)(239); /* jalr target resolved by relocation */
-
-    /* fragment 4: CallSetup */
-    s2 = (uint32_t *)&_GET_USHORT_PTR;
-    local_ba4 = v0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(239); /* jalr target resolved by relocation */
-
-    /* fragment 5: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(239); /* jalr target resolved by relocation */
-
-    /* fragment 6: MemoryAccess */
-    v1 = *(uint16_t *)((char *)s0 + 16);
-    s1 = v0;
-    v0 = v1 < 226;
-
-    /* fragment 7: Branch */
-    if (v0 == 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x14f8; }
-
-    /* fragment 8: Arithmetic */
-    v0 = 0;
-
-    /* fragment 9: Branch */
-    a1 = 1;
-    goto awb_calc_avg_weighted_gr_gb_mesh0xfc;
-
-    /* fragment 10: Arithmetic */
-    a2 = (uintptr_t)&local_18;
-    a0 = a2 + a0;
-    a3 = (uint32_t *)&local_ab4;
-
-    /* fragment 11: MemoryAccess */
-    *(uint32_t *)((char *)a0 + 0) = 0;
-    t0 = (uintptr_t)&local_9d0;
-    a0 = a3 + v0;
-    *(uint8_t *)((char *)&frame_delay_10468) = 0;
-    t1 = (uintptr_t)&local_724;
-    a0 = t0 + v0;
-    *(uint8_t *)((char *)&frame_delay_10468) = 0;
-    t2 = (uintptr_t)&local_808;
-    a0 = t1 + v0;
-    *(uint8_t *)((char *)&frame_delay_10468) = a1;
-    t3 = (uintptr_t)&local_8ec;
-    a0 = t2 + v0;
-    *(uint8_t *)((char *)&frame_delay_10468) = 0;
-    a0 = t3 + v0;
-    *(uint8_t *)((char *)&frame_delay_10468) = 0;
-    v0 = v0 + 1;
-
-awb_calc_avg_weighted_gr_gb_mesh0xfc:
-    /* fragment 12: CallSetup */
-    s3 = *(uint32_t *)((char *)(s3) + 284);
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)_GET_HDR_TABLE_INDEX)(151, *(uint8_t *)((char *)(*(uint32_t *)((char *)(s0) + 0)) + 5412)); /* jalr target resolved by relocation */
-
-    /* fragment 13: CallSetup */
-    s4 = v0 & 255;
-    s7 = (uintptr_t)&_GET_UINT_PTR;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_UINT_PTR)(v0 & 255); /* jalr target resolved by relocation */
-
-    /* fragment 14: Arithmetic */
-    s5 = v0;
-
-    /* fragment 15: MemoryAccess */
-    v0 = *(uint32_t *)((char *)v0 + 0);
-    v0 = s3 < v0;
-
-    /* fragment 16: Branch */
-    s2 = (uint32_t *)&_GET_LEN;
-    if (v0 == 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x160; }
-
-    /* fragment 17: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_UINT_PTR)(243); /* jalr target resolved by relocation */
-
-    /* fragment 18: Branch */
-    v0 = *(uint16_t *)((char *)(v0) + 0);
-    goto awb_calc_avg_weighted_gr_gb_mesh0x23c;
-
-awb_calc_avg_weighted_gr_gb_mesh0x160:
-    /* fragment 19: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_LEN)(s4); /* jalr target resolved by relocation */
-
-    /* fragment 20: Arithmetic */
-    v0 = v0 - 1;
-    v0 = v0 << 2;
-    v0 = s5 + v0;
-
-    /* fragment 21: MemoryAccess */
-    v0 = *(uint32_t *)((char *)v0 + 0);
-    v0 = s3 < v0;
-
-    /* fragment 22: Branch */
-    s8 = 1;
-    if (v0 != 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x248; }
-
-    /* fragment 23: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_UINT_PTR)(243); /* jalr target resolved by relocation */
-
-    /* fragment 24: CallSetup */
-    s3 = v0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_LEN)(s4); /* jalr target resolved by relocation */
-
-    /* fragment 25: Arithmetic */
-    v0 = v0 - 1;
-    v0 = v0 << 2;
-    s3 = s3 + v0;
-
-    /* fragment 26: MemoryAccess */
-    s3 = *(uint16_t *)((char *)s3 + 0);
-
-    /* fragment 27: Branch */
-    goto awb_calc_avg_weighted_gr_gb_mesh0x268;
-
-awb_calc_avg_weighted_gr_gb_mesh0x1c0:
-    /* fragment 28: CallSetup */
-    v0 = s5 + v0;
-    v0 = *(uint32_t *)((char *)v0 + 0);
-    v0 = s3 < v0;
-    s8 = s8 + 1;
-    s4 = s8 - 1;
-
-awb_calc_avg_weighted_gr_gb_mesh0x1d8:
-    /* fragment 29: CallSetup */
-    s4 = s4 << 2;
-    local_bd8 = *(uint32_t *)((char *)(s5 + s4) + 0);
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)_GET_UINT_PTR)(243, *(uint32_t *)((char *)(s5 + (s4 << 2)) + 0)); /* jalr target resolved by relocation */
-
-    /* fragment 30: CallSetup */
-    s8 = s8 << 2;
-    s4 = *(uint32_t *)((char *)(s5 + s8) + 0);
-    s6 = *(uint32_t *)((char *)(v0 + s4) + 0);
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_UINT_PTR)(243); /* jalr target resolved by relocation */
-
-    /* fragment 31: CallSetup */
-    local_10 = *(uint32_t *)((char *)(v0 + s8) + 0);
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))(uintptr_t)interpl)(s3, local_bd8, s6, s4); /* jalr target resolved by relocation */
-
-    /* fragment 32: Arithmetic */
-    v0 = v0 & 65535;
-
-awb_calc_avg_weighted_gr_gb_mesh0x23c:
-    /* fragment 33: Branch */
-    local_ba0 = v0;
-    goto awb_calc_avg_weighted_gr_gb_mesh0x268;
-
-    /* fragment 34: CallSetup */
-    s8 = s8 & 65535;
-
-awb_calc_avg_weighted_gr_gb_mesh0x248:
-    /* fragment 35: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_LEN)(s4); /* jalr target resolved by relocation */
-
-    /* fragment 36: Arithmetic */
-    v0 = s8 < v0;
-
-    /* fragment 37: Branch */
-    int _bc_v0_37 = v0 != 0;
-    v0 = s8 << 2;
-    if (_bc_v0_37) { goto awb_calc_avg_weighted_gr_gb_mesh0x1c0; }
-
-    /* fragment 38: Branch */
-    s4 = s8 - 1;
-    goto awb_calc_avg_weighted_gr_gb_mesh0x1d8;
-
-awb_calc_avg_weighted_gr_gb_mesh0x268:
-    /* fragment 39: StackAccess */
-    t0 = local_ba0;
-    v0 = t0 < 5001;
-
-    /* fragment 40: Branch */
-    t2 = 99;
-    if (v0 == 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x350; }
-
-    /* fragment 41: CallSetup */
-    t1 = (uintptr_t)&_GET_USHORT_PTR;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(250); /* jalr target resolved by relocation */
-
-    /* fragment 42: CallSetup */
-    s8 = *(uint16_t *)((char *)(v0) + 0);
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(252); /* jalr target resolved by relocation */
-
-    /* fragment 43: CallSetup */
-    s7 = *(uint16_t *)((char *)(v0) + 0);
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(244); /* jalr target resolved by relocation */
-
-    /* fragment 44: CallSetup */
-    s4 = *(uint16_t *)((char *)(v0) + 0);
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(253); /* jalr target resolved by relocation */
-
-    /* fragment 45: CallSetup */
-    local_bc8 = v0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_LEN)(253); /* jalr target resolved by relocation */
-
-    /* fragment 46: CallSetup */
-    local_10 = local_bc8;
-    local_14 = v0 & 65535;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))(uintptr_t)luts_fetch)(local_ba0, s8, s7, s4); /* jalr target resolved by relocation */
-
-    /* fragment 47: CallSetup */
-    local_bc0 = v0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(231); /* jalr target resolved by relocation */
-
-    /* fragment 48: CallSetup */
-    local_bd8 = *(uint16_t *)((char *)(v0) + 0);
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)_GET_USHORT_PTR)(246, *(uint16_t *)((char *)(v0) + 0)); /* jalr target resolved by relocation */
-
-    /* fragment 49: CallSetup */
-    s8 = *(uint16_t *)((char *)(v0) + 0);
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(227); /* jalr target resolved by relocation */
-
-    /* fragment 50: CallSetup */
-    s7 = *(uint16_t *)((char *)(v0) + 0);
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(212); /* jalr target resolved by relocation */
-
-    /* fragment 51: CallSetup */
-    s3 = v0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_LEN)(212); /* jalr target resolved by relocation */
-
-    /* fragment 52: CallSetup */
-    local_14 = v0 & 65535;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))(uintptr_t)luts_fetch)(local_ba0, local_bd8, s8, s7); /* jalr target resolved by relocation */
-
-    /* fragment 53: Branch */
-    local_bbc = v0;
-    goto awb_calc_avg_weighted_gr_gb_mesh0x35c;
-
-awb_calc_avg_weighted_gr_gb_mesh0x350:
-    /* fragment 54: CallSetup */
-    t3 = 1;
-    local_bc0 = t2;
-    local_bbc = t3;
-
-awb_calc_avg_weighted_gr_gb_mesh0x35c:
-    /* fragment 55: CallSetup */
-    t4 = (uintptr_t)&_GET_USHORT_PTR;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(226); /* jalr target resolved by relocation */
-
-    /* fragment 56: MemoryAccess */
-    v0 = *(uint16_t *)((char *)v0 + 0);
-    v1 = *(uint16_t *)((char *)s1 + 0);
-    v0 = v0 < v1;
-
-    /* fragment 57: Branch */
-    if (v0 != 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x388; }
-
-    /* fragment 58: Branch */
-    local_ba8 = v1;
-    goto awb_calc_avg_weighted_gr_gb_mesh0x398;
-
-awb_calc_avg_weighted_gr_gb_mesh0x388:
-    /* fragment 59: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(226); /* jalr target resolved by relocation */
-
-    /* fragment 60: CallSetup */
-    v0 = *(uint16_t *)((char *)v0 + 0);
-    local_ba8 = v0;
-
-awb_calc_avg_weighted_gr_gb_mesh0x398:
-    /* fragment 61: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(251); /* jalr target resolved by relocation */
-
-    /* fragment 62: MemoryAccess */
-    v0 = *(uint16_t *)((char *)v0 + 0);
-    s8 = *(uint16_t *)((char *)s1 + 2);
-    v0 = v0 < s8;
-
-    /* fragment 63: Branch */
-    v1 = (uintptr_t)&_GET_USHORT_PTR;
-    if (v0 == 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x3cc; }
-
-    /* fragment 64: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(251); /* jalr target resolved by relocation */
-
-    /* fragment 65: CallSetup */
-    s8 = *(uint16_t *)((char *)v0 + 0);
-    v1 = (uintptr_t)&_GET_USHORT_PTR;
-
-awb_calc_avg_weighted_gr_gb_mesh0x3cc:
-    /* fragment 66: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(226); /* jalr target resolved by relocation */
-
-    /* fragment 67: CallSetup */
-    s6 = v0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_LEN)(226); /* jalr target resolved by relocation */
-
-    /* fragment 68: Arithmetic */
-    v0 = v0 - 1;
-    v0 = v0 << 1;
-    s6 = s6 + v0;
-
-    /* fragment 69: MemoryAccess */
-    s7 = *(uint16_t *)((char *)s1 + 0);
-    v0 = *(uint16_t *)((char *)s6 + 0);
-    v0 = v0 < s7;
-
-    /* fragment 70: Branch */
-    a1 = (uintptr_t)&_GET_USHORT_PTR;
-    if (v0 != 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x430; }
-
-    /* fragment 71: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(226); /* jalr target resolved by relocation */
-
-    /* fragment 72: CallSetup */
-    s4 = v0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_LEN)(226); /* jalr target resolved by relocation */
-
-    /* fragment 73: CallSetup */
-    v0 = v0 - 1;
-    v0 = v0 << 1;
-    s4 = s4 + v0;
-    s7 = *(uint16_t *)((char *)s4 + 0);
-    a1 = (uintptr_t)&_GET_USHORT_PTR;
-
-awb_calc_avg_weighted_gr_gb_mesh0x430:
-    /* fragment 74: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(251); /* jalr target resolved by relocation */
-
-    /* fragment 75: CallSetup */
-    local_bc8 = v0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_LEN)(251); /* jalr target resolved by relocation */
-
-    /* fragment 76: Arithmetic */
-    v0 = v0 - 1;
-
-    /* fragment 77: StackAccess */
-    v1 = local_bc8;
-    v0 = v0 << 1;
-    v1 = v1 + v0;
-    s4 = *(uint16_t *)((char *)s1 + 2);
-    v0 = *(uint16_t *)((char *)v1 + 0);
-    v0 = v0 < s4;
-
-    /* fragment 78: Branch */
-    if (v0 != 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x498; }
-
-    /* fragment 79: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(251); /* jalr target resolved by relocation */
-
-    /* fragment 80: CallSetup */
-    s4 = v0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_LEN)(251); /* jalr target resolved by relocation */
-
-    /* fragment 81: Arithmetic */
-    v0 = v0 - 1;
-    v0 = v0 << 1;
-    s4 = s4 + v0;
-
-    /* fragment 82: MemoryAccess */
-    s4 = *(uint16_t *)((char *)s4 + 0);
-    local_bac = s4;
-
-awb_calc_avg_weighted_gr_gb_mesh0x498:
-    /* fragment 83: StackAccess */
-    t0 = local_ba4;
-    s3 = 1;
-    t0 = t0 << 1;
-    local_bc4 = t0;
-
-    /* fragment 84: Branch */
-    s5 = (uintptr_t)&_GET_ROWS;
-    goto awb_calc_avg_weighted_gr_gb_mesh0x4f8;
-
-awb_calc_avg_weighted_gr_gb_mesh0x4b0:
-    /* fragment 85: CallSetup */
-    t0 = local_ba8;
-    a0 = (uintptr_t)s3 * v1;
-    t1 = local_bac;
-    v0 = a0 + (uintptr_t)s1;
-    v1 = *(uint16_t *)((char *)v0 + 0);
-    v0 = *(uint16_t *)((char *)v0 + 2);
-    a0 = v1 < t0;
-    a0 = v0 < s8;
-    a0 = s7 < v1;
-    v1 = t1 < v0;
-    s3 = s3 + 1;
-    local_ba8 = t0;
-    local_bac = t1;
-    s3 = (uintptr_t)s3 & 65535;
-
-awb_calc_avg_weighted_gr_gb_mesh0x4f8:
-    /* fragment 86: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_ROWS)(239); /* jalr target resolved by relocation */
-
-    /* fragment 87: Arithmetic */
-    v0 = s3 < v0;
-
-    /* fragment 88: Branch */
-    v1 = local_bc4;
-    if (v0 != 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x4b0; }
-
-    /* fragment 89: StackAccess */
-    local_ba4 = 0;
-    s4 = 0;
-    local_bb8 = 0;
-
-    /* fragment 90: Branch */
-    local_bb4 = 0;
-    goto awb_calc_avg_weighted_gr_gb_mesh0x860;
-
-awb_calc_avg_weighted_gr_gb_mesh0x524:
-    /* fragment 91: Arithmetic */
-    v0 = v0 << 3;
-    v0 = s0 + v0;
-
-    /* fragment 92: MemoryAccess */
-    s3 = *(uint16_t *)((char *)v0 + 0);
-    t2 = local_ba8;
-    s5 = *(uint16_t *)((char *)v0 + 2);
-    a0 = s3 < t2;
-
-    /* fragment 93: Branch */
-    v0 = 0;
-    if (a0 != 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x54c; }
-
-    /* fragment 94: Arithmetic */
-    v0 = s7 < s3;
-    v0 = v0 ^ 1;
-
-awb_calc_avg_weighted_gr_gb_mesh0x54c:
-    /* fragment 95: Arithmetic */
-    a1 = v0 & 255;
-    v0 = s5 < s8;
-
-    /* fragment 96: Branch */
-    a0 = 0;
-    if (v0 != 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x568; }
-
-    /* fragment 97: StackAccess */
-    t3 = local_bac;
-    a0 = t3 < s5;
-    a0 = a0 ^ 1;
-
-awb_calc_avg_weighted_gr_gb_mesh0x568:
-    /* fragment 98: Branch */
-    v0 = 0;
-    if (a1 == 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x590; }
-
-    /* fragment 99: Branch */
-    t4 = (uintptr_t)&local_18;
-    if (a0 == 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x594; }
-
-    /* fragment 100: Arithmetic */
-    v0 = s4 + 11;
-    v0 = v0 << 3;
-    v0 = s0 + v0;
-
-    /* fragment 101: MemoryAccess */
-    v0 = *(uint32_t *)((char *)v0 + 4);
-    v0 = v0 < 257;
-    v0 = v0 ^ 1;
-
-awb_calc_avg_weighted_gr_gb_mesh0x590:
-    /* fragment 102: Arithmetic */
-    t4 = (uintptr_t)&local_18;
-
-awb_calc_avg_weighted_gr_gb_mesh0x594:
-    /* fragment 103: Arithmetic */
-    v0 = v0 & 255;
-    t2 = t4 + s4;
-
-    /* fragment 104: Branch */
-    int _bc_v0_104 = v0 == 0;
-    *(uint8_t *)((char *)t2 + 2716) = v0;
-    if (_bc_v0_104) { goto awb_calc_avg_weighted_gr_gb_mesh0x858; }
-
-    /* fragment 105: CallSetup */
-    local_bc8 = t2;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(226); /* jalr target resolved by relocation */
-
-    /* fragment 106: CallSetup */
-    local_bd0 = v0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(251); /* jalr target resolved by relocation */
-
-    /* fragment 107: CallSetup */
-    local_bcc = v0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(238); /* jalr target resolved by relocation */
-
-    /* fragment 108: CallSetup */
-    local_10 = v0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))(uintptr_t)AWB_mesh_isra_1)(s3, s5, local_bd0, local_bcc); /* jalr target resolved by relocation */
-
-    /* fragment 109: StackAccess */
-    t2 = local_bc8;
-    s6 = v0;
-    t0 = 0;
-
-    /* fragment 110: Branch */
-    local_bb0 = t2;
-    goto awb_calc_avg_weighted_gr_gb_mesh0x66c;
-
-awb_calc_avg_weighted_gr_gb_mesh0x604:
-    /* fragment 111: CallSetup */
-    t1 = (uintptr_t)&mesh_AWB_getKnownSourceLight_weight_LUT;
-    local_10 = *(uint16_t *)((char *)((t0 * v1) + (uintptr_t)s1) + 2);
-    local_bd4 = t0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))(uintptr_t)mesh_AWB_getKnownSourceLight_weight_LUT)((uintptr_t)s0, (uintptr_t)s3, s5, *(uint16_t *)((char *)((t0 * v1) + (uintptr_t)s1) + 0)); /* jalr target resolved by relocation */
-
-    /* fragment 112: Arithmetic */
-    a0 = v0 < 20;
-
-    /* fragment 113: Branch */
-    t0 = local_bd4;
-    if (a0 != 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x664; }
-
-    /* fragment 114: Arithmetic */
-    a0 = s6 + 15;
-    a0 = a0 < v0;
-
-    /* fragment 115: Unknown */
-    /* unmatched fragment 115 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 2d57c:	50800007 	beqzl	a0,2d59c <awb_calc_avg_weighted_gr_gb_mesh+0x668> */
-
-    /* fragment 116: Arithmetic */
-    t0 = t0 + 1;
-
-    /* fragment 117: Branch */
-    s6 = v0;
-    if (t0 != 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x664; }
-
-    /* fragment 118: CallSetup */
-    t2 = local_bb0;
-    t3 = 1;
-    *(uint8_t *)((char *)t2 + 2488) = t3;
-
-awb_calc_avg_weighted_gr_gb_mesh0x664:
-    /* fragment 119: CallSetup */
-    t0 = t0 + 1;
-    t0 = t0 & 65535;
-
-awb_calc_avg_weighted_gr_gb_mesh0x66c:
-    /* fragment 120: CallSetup */
-    t4 = (uintptr_t)&_GET_ROWS;
-    local_bd4 = t0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_ROWS)(239); /* jalr target resolved by relocation */
-
-    /* fragment 121: StackAccess */
-    t0 = local_bd4;
-    v0 = t0 < v0;
-
-    /* fragment 122: Branch */
-    v1 = local_bc4;
-    if (v0 != 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x604; }
-
-    /* fragment 123: Arithmetic */
-    v0 = s6 < 0;
-    t1 = 0;
-    if (v0 == 0) { t1 = s6; }
-    v0 = t1 < 60;
-
-    /* fragment 124: Branch */
-    v1 = (uintptr_t)&local_18;
-    if (v0 == 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x6b4; }
-
-    /* fragment 125: Arithmetic */
-    v0 = v1 + s4;
-
-    /* fragment 126: Branch */
-    *(uint8_t *)((char *)v0 + 2716) = 0;
-    goto awb_calc_avg_weighted_gr_gb_mesh0x858;
-
-awb_calc_avg_weighted_gr_gb_mesh0x6b4:
-    /* fragment 127: CallSetup */
-    *(uint32_t *)((char *)(&local_18 + (s4 << 2)) + 0) = t1;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)_GET_USHORT_PTR)(215, &_GET_USHORT_PTR); /* jalr target resolved by relocation */
-
-    /* fragment 128: CallSetup */
-    local_bd8 = *(uint16_t *)((char *)(v0) + 0);
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)_GET_USHORT_PTR)(225, *(uint16_t *)((char *)(v0) + 0)); /* jalr target resolved by relocation */
-
-    /* fragment 129: CallSetup */
-    local_bd0 = *(uint16_t *)((char *)(v0) + 0);
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(254); /* jalr target resolved by relocation */
-
-    /* fragment 130: CallSetup */
-    s6 = *(uint16_t *)((char *)(v0) + 0);
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(245); /* jalr target resolved by relocation */
-
-    /* fragment 131: CallSetup */
-    local_bd4 = (uintptr_t)&_GET_LEN;
-    local_bcc = v0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_LEN)(245); /* jalr target resolved by relocation */
-
-    /* fragment 132: CallSetup */
-    t1 = 196608;
-    local_10 = local_bcc;
-    local_14 = v0 & 65535;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))(uintptr_t)luts_fetch)(s3, local_bd8, local_bd0, s6); /* jalr target resolved by relocation */
-
-    /* fragment 133: CallSetup */
-    local_bc8 = v0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(236); /* jalr target resolved by relocation */
-
-    /* fragment 134: CallSetup */
-    local_bd8 = *(uint16_t *)((char *)(v0) + 0);
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)_GET_USHORT_PTR)(240, *(uint16_t *)((char *)(v0) + 0)); /* jalr target resolved by relocation */
-
-    /* fragment 135: CallSetup */
-    local_bd0 = *(uint16_t *)((char *)(v0) + 0);
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(229); /* jalr target resolved by relocation */
-
-    /* fragment 136: CallSetup */
-    local_bcc = *(uint16_t *)((char *)(v0) + 0);
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(248); /* jalr target resolved by relocation */
-
-    /* fragment 137: CallSetup */
-    s5 = v0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_LEN)(248); /* jalr target resolved by relocation */
-
-    /* fragment 138: CallSetup */
-    local_14 = v0 & 65535;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))(uintptr_t)luts_fetch)(s3, local_bd8, local_bd0, local_bcc); /* jalr target resolved by relocation */
-
-    /* fragment 139: StackAccess */
-    t1 = local_bc8;
-    a0 = 50;
-    a2 = t1 * a0;
-    v1 = local_bc0;
-    v0 = v0 * a0;
-    a2 = a2 * v1;
-    v1 = local_bbc;
-    a3 = (uint32_t *)&local_18;
-    v0 = v0 * v1;
-    a0 = v0 + a2;
-
-    /* fragment 140: Branch */
-    a1 = a3 + s4;
-    if (a0 == 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x80c; }
-
-    /* fragment 141: Arithmetic */
-    a3 = 100;
-    a2 = a2 * (uintptr_t)a3;
-
-    /* fragment 142: Unknown */
-    /* unmatched fragment 142 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 2d718:	00c4001b 	divu	zero,a2,a0 */
-
-    /* fragment 143: Arithmetic */
-    /* trap/BUG_ON check */
-    v0 = v0 * (uintptr_t)a3;
-
-    /* fragment 144: MemoryAccess */
-    *(uint8_t *)((char *)a1 + 2260) = v1;
-
-    /* fragment 145: Unknown */
-    /* unmatched fragment 145 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 2d72c:	0044001b 	divu	zero,v0,a0 */
-
-    /* fragment 146: Arithmetic */
-    /* trap/BUG_ON check */
-
-    /* fragment 147: Branch */
-    *(uint8_t *)((char *)a1 + 2032) = v1;
-    goto awb_calc_avg_weighted_gr_gb_mesh0x820;
-
-awb_calc_avg_weighted_gr_gb_mesh0x80c:
-    /* fragment 148: Arithmetic */
-    a0 = 100;
-    a2 = a2 * a0;
-    v0 = v0 * a0;
-
-    /* fragment 149: MemoryAccess */
-    *(uint8_t *)((char *)a1 + 2260) = a2;
-    *(uint8_t *)((char *)a1 + 2032) = v0;
-
-awb_calc_avg_weighted_gr_gb_mesh0x820:
-    /* fragment 150: Arithmetic */
-    v1 = (uintptr_t)&local_18;
-    v0 = v1 + s4;
-
-    /* fragment 151: MemoryAccess */
-    a0 = *(uint8_t *)((char *)v0 + 2260);
-    t1 = local_bb4;
-    v0 = *(uint8_t *)((char *)v0 + 2032);
-    t2 = local_ba4;
-    t0 = local_bb8;
-    t1 = t1 + v0;
-    v0 = t2 + 1;
-    t0 = t0 + a0;
-    v0 = v0 & 65535;
-    local_bb8 = t0;
-    local_bb4 = t1;
-    local_ba4 = v0;
-
-awb_calc_avg_weighted_gr_gb_mesh0x858:
-    /* fragment 152: Arithmetic */
-    v1 = s4 + 1;
-    s4 = v1 & 65535;
-
-awb_calc_avg_weighted_gr_gb_mesh0x860:
-    /* fragment 153: MemoryAccess */
-    v0 = *(uint16_t *)((char *)s0 + 16);
-    v0 = s4 < v0;
-
-    /* fragment 154: Branch */
-    int _bc_v0_154 = v0 != 0;
-    v0 = s4 + 11;
-    if (_bc_v0_154) { goto awb_calc_avg_weighted_gr_gb_mesh0x524; }
-
-    /* fragment 155: StackAccess */
-    t3 = local_ba4;
-
-    /* fragment 156: Unknown */
-    /* unmatched fragment 156 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 2d7a8:	5160000c 	beqzl	t3,2d7dc <awb_calc_avg_weighted_gr_gb_mesh+0x8a8> */
-
-    /* fragment 157: Arithmetic */
-    s2 = 50;
-
-    /* fragment 158: StackAccess */
-    v1 = local_bb8;
-
-    /* fragment 159: Unknown */
-    /* unmatched fragment 159 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 2d7b4:	006b001b 	divu	zero,v1,t3 */
-
-    /* fragment 160: Arithmetic */
-    /* trap/BUG_ON check */
-    s1 = v1 & 255;
-
-    /* fragment 161: StackAccess */
-    v1 = local_bb4;
-
-    /* fragment 162: Unknown */
-    /* unmatched fragment 162 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 2d7c8:	006b001b 	divu	zero,v1,t3 */
-
-    /* fragment 163: Arithmetic */
-    /* trap/BUG_ON check */
-
-    /* fragment 164: Branch */
-    s2 = v1 & 255;
-    goto awb_calc_avg_weighted_gr_gb_mesh0x8ac;
-
-    /* fragment 165: CallSetup */
-    s1 = 50;
-
-awb_calc_avg_weighted_gr_gb_mesh0x8ac:
-    /* fragment 166: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_UCHAR_PTR)(267); /* jalr target resolved by relocation */
-
-    /* fragment 167: MemoryAccess */
-    v0 = *(uint8_t *)((char *)v0 + 0);
-    v1 = 50;
-    t0 = local_ba0;
-    v1 = 500;
-    v0 = s1 < s2;
-    local_ba0 = t0;
-    *(uint8_t *)((char *)s0 + 28) = s1;
-
-    /* fragment 168: Branch */
-    *(uint8_t *)((char *)s0 + 29) = s2;
-    if (v0 != 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x904; }
-
-    /* fragment 169: Arithmetic */
-    v0 = (uintptr_t)s1 - (uintptr_t)s2;
-    v0 = v0 < 15;
-
-    /* fragment 170: Branch */
-    t1 = local_ba0;
-    if (v0 != 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x918; }
-
-    /* fragment 171: Branch */
-    v1 = (uintptr_t)&_GET_USHORT_PTR;
-    goto awb_calc_avg_weighted_gr_gb_mesh0xb44;
-
-awb_calc_avg_weighted_gr_gb_mesh0x904:
-    /* fragment 172: Arithmetic */
-    v0 = (uintptr_t)s2 - (uintptr_t)s1;
-    v0 = v0 < 15;
-
-    /* fragment 173: Branch */
-    int _bc_v0_173 = v0 == 0;
-    v0 = s1 < s2;
-    if (_bc_v0_173) { goto awb_calc_avg_weighted_gr_gb_mesh0xae4; }
-
-    /* fragment 174: StackAccess */
-    t1 = local_ba0;
-
-awb_calc_avg_weighted_gr_gb_mesh0x918:
-    /* fragment 175: Arithmetic */
-    v0 = t1 < 80;
-
-    /* fragment 176: Branch */
-    s3 = 0;
-    if (v0 != 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x9e8; }
-
-    /* fragment 177: Branch */
-    t0 = local_ba0;
-    goto awb_calc_avg_weighted_gr_gb_mesh0xa00;
-
-awb_calc_avg_weighted_gr_gb_mesh0x92c:
-    /* fragment 178: Arithmetic */
-    s5 = t2 + (uintptr_t)s3;
-
-    /* fragment 179: MemoryAccess */
-    v0 = *(uint8_t *)((char *)s5 + 2716);
-
-    /* fragment 180: Branch */
-    int _bc_v0_180 = v0 == 0;
-    v0 = (uintptr_t)s3 << 2;
-    if (_bc_v0_180) { goto awb_calc_avg_weighted_gr_gb_mesh0x9d4; }
-
-    /* fragment 181: CallSetup */
-    s6 = s3 + 11;
-    t3 = (uintptr_t)&_GET_USHORT_PTR;
-    s6 = s6 << 3;
-    s6 = s0 + s6;
-    s7 = *(uint16_t *)((char *)(s6) + 0);
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(224); /* jalr target resolved by relocation */
-
-    /* fragment 182: CallSetup */
-    s8 = v0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(221); /* jalr target resolved by relocation */
-
-    /* fragment 183: MemoryAccess */
-    v0 = *(uint16_t *)((char *)v0 + 0);
-    v0 = v0 << 1;
-    s8 = s8 + v0;
-    v0 = *(uint16_t *)((char *)s8 + 0);
-    s7 = s7 < v0;
-
-    /* fragment 184: Branch */
-    v0 = (uintptr_t)s3 << 2;
-    if (s7 != 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x9d4; }
-
-    /* fragment 185: CallSetup */
-    s6 = *(uint16_t *)((char *)(s6) + 2);
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(228); /* jalr target resolved by relocation */
-
-    /* fragment 186: CallSetup */
-    s7 = v0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(221); /* jalr target resolved by relocation */
-
-    /* fragment 187: MemoryAccess */
-    v0 = *(uint16_t *)((char *)v0 + 0);
-    v0 = v0 << 1;
-    s7 = s7 + v0;
-    v0 = *(uint16_t *)((char *)s7 + 0);
-    s6 = v0 < s6;
-
-    /* fragment 188: Branch */
-    v0 = (uintptr_t)s3 << 2;
-    if (s6 != 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x9d4; }
-
-    /* fragment 189: Arithmetic */
-    t4 = (uintptr_t)&local_18;
-    v0 = t4 + v0;
-
-    /* fragment 190: MemoryAccess */
-    a0 = *(uint32_t *)((char *)v0 + 0);
-    v1 = *(uint8_t *)((char *)s5 + 2032);
-    v1 = a0 * v1;
-
-    /* fragment 191: Branch */
-    *(uint32_t *)((char *)v0 + 0) = v1;
-    goto awb_calc_avg_weighted_gr_gb_mesh0x9e0;
-
-awb_calc_avg_weighted_gr_gb_mesh0x9d4:
-    /* fragment 192: Arithmetic */
-    v1 = (uintptr_t)&local_18;
-    v0 = v1 + v0;
-
-    /* fragment 193: MemoryAccess */
-    *(uint32_t *)((char *)v0 + 0) = 0;
-
-awb_calc_avg_weighted_gr_gb_mesh0x9e0:
-    /* fragment 194: Arithmetic */
-    s3 = s3 + 1;
-    s3 = (uintptr_t)s3 & 65535;
-
-awb_calc_avg_weighted_gr_gb_mesh0x9e8:
-    /* fragment 195: MemoryAccess */
-    v0 = *(uint16_t *)((char *)s0 + 16);
-    v0 = s3 < v0;
-
-    /* fragment 196: Branch */
-    t2 = (uintptr_t)&local_18;
-    if (v0 != 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x92c; }
-
-    /* fragment 197: Branch */
-    s4 = 0;
-    goto awb_calc_avg_weighted_gr_gb_mesh0xebc;
-
-awb_calc_avg_weighted_gr_gb_mesh0xa00:
-    /* fragment 198: Arithmetic */
-    v0 = t0 < 1851;
-
-    /* fragment 199: Branch */
-    a2 = 100;
-    if (v0 == 0) { goto awb_calc_avg_weighted_gr_gb_mesh0xa1c; }
-
-    /* fragment 200: MemoryAccess */
-    a1 = *(uint16_t *)((char *)s0 + 16);
-    v1 = (uintptr_t)&local_18;
-
-    /* fragment 201: Branch */
-    v0 = 0;
-    goto awb_calc_avg_weighted_gr_gb_mesh0xacc;
-
-awb_calc_avg_weighted_gr_gb_mesh0xa1c:
-    /* fragment 202: CallSetup */
-    t1 = (uintptr_t)&_GET_USHORT_PTR;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(224); /* jalr target resolved by relocation */
-
-    /* fragment 203: CallSetup */
-    s4 = v0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(241); /* jalr target resolved by relocation */
-
-    /* fragment 204: CallSetup */
-    s4 = s4 + ((*(uint16_t *)((char *)(v0) + 0)) << 1);
-    s4 = *(uint16_t *)((char *)(s4) + 0);
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(228); /* jalr target resolved by relocation */
-
-    /* fragment 205: CallSetup */
-    s5 = v0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(241); /* jalr target resolved by relocation */
-
-    /* fragment 206: CallSetup */
-    s4 = s4 + 256;
-    s5 = s5 + ((*(uint16_t *)((char *)(v0) + 0)) << 1);
-    s4 = (int32_t)s4 >> 1;
-    local_10 = (uint32_t *)&local_8ec;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))(uintptr_t)compute_weight)((int32_t)(s4 + 256) >> 1, ((*(uint16_t *)((char *)(s5) + 0)) + 256) >> 1, &local_ab4, &local_18); /* jalr target resolved by relocation */
-
-    /* fragment 207: Branch */
-    s4 = 0;
-    goto awb_calc_avg_weighted_gr_gb_mesh0xebc;
-
-awb_calc_avg_weighted_gr_gb_mesh0xaa8:
-    /* fragment 208: Arithmetic */
-    a0 = t2 + v0;
-
-    /* fragment 209: MemoryAccess */
-    a3 = *(uint8_t *)((char *)a0 + 0);
-
-    /* fragment 210: Branch */
-    a0 = 0;
-    if (a3 == 0) { goto awb_calc_avg_weighted_gr_gb_mesh0xac0; }
-
-    /* fragment 211: MemoryAccess */
-    a0 = *(uint32_t *)((char *)v1 + 0);
-    a0 = a2 * a0;
-
-awb_calc_avg_weighted_gr_gb_mesh0xac0:
-    /* fragment 212: MemoryAccess */
-    *(uint32_t *)((char *)v1 + 0) = a0;
-    v0 = v0 + 1;
-    v1 = v1 + 4;
-
-awb_calc_avg_weighted_gr_gb_mesh0xacc:
-    /* fragment 213: Arithmetic */
-    a0 = v0 & 65535;
-    a0 = a0 < a1;
-
-    /* fragment 214: Branch */
-    t2 = (uintptr_t)&local_ab4;
-    if (a0 != 0) { goto awb_calc_avg_weighted_gr_gb_mesh0xaa8; }
-
-    /* fragment 215: Branch */
-    s4 = 0;
-    goto awb_calc_avg_weighted_gr_gb_mesh0xebc;
-
-awb_calc_avg_weighted_gr_gb_mesh0xae4:
-    /* fragment 216: Unknown */
-    /* unmatched fragment 216 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 2da18:	50400017 	beqzl	v0,2da78 <awb_calc_avg_weighted_gr_gb_mesh+0xb44> */
-
-    /* fragment 217: Arithmetic */
-    v1 = (uintptr_t)&_GET_USHORT_PTR;
-
-    /* fragment 218: MemoryAccess */
-    a1 = *(uint16_t *)((char *)s0 + 16);
-    v1 = (uintptr_t)&local_18;
-
-    /* fragment 219: Branch */
-    v0 = 0;
-    goto awb_calc_avg_weighted_gr_gb_mesh0xb2c;
-
-awb_calc_avg_weighted_gr_gb_mesh0xafc:
-    /* fragment 220: Arithmetic */
-    a0 = a2 + v0;
-
-    /* fragment 221: MemoryAccess */
-    a2 = *(uint8_t *)((char *)a0 + 0);
-
-    /* fragment 222: Branch */
-    a0 = 0;
-    if (a2 == 0) { goto awb_calc_avg_weighted_gr_gb_mesh0xb20; }
-
-    /* fragment 223: Arithmetic */
-    a3 = (uint32_t *)&local_808;
-    a0 = a3 + v0;
-
-    /* fragment 224: MemoryAccess */
-    a2 = *(uint8_t *)((char *)a0 + 0);
-    a0 = *(uint32_t *)((char *)v1 + 0);
-    a0 = a2 * a0;
-
-awb_calc_avg_weighted_gr_gb_mesh0xb20:
-    /* fragment 225: MemoryAccess */
-    *(uint32_t *)((char *)v1 + 0) = a0;
-    v0 = v0 + 1;
-    v1 = v1 + 4;
-
-awb_calc_avg_weighted_gr_gb_mesh0xb2c:
-    /* fragment 226: Arithmetic */
-    a0 = v0 & 65535;
-    a0 = a0 < a1;
-
-    /* fragment 227: Branch */
-    a2 = (uintptr_t)&local_ab4;
-    if (a0 != 0) { goto awb_calc_avg_weighted_gr_gb_mesh0xafc; }
-
-    /* fragment 228: Branch */
-    s4 = 0;
-    goto awb_calc_avg_weighted_gr_gb_mesh0xebc;
-
-awb_calc_avg_weighted_gr_gb_mesh0xb44:
-    /* fragment 229: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(247); /* jalr target resolved by relocation */
-
-    /* fragment 230: MemoryAccess */
-    s4 = *(uint16_t *)((char *)v0 + 0);
-    t0 = local_ba0;
-    a0 = *(uint16_t *)((char *)s0 + 16);
-    s4 = s4 < t0;
-    v1 = s0;
-    v0 = 0;
-
-    /* fragment 231: Branch */
-    s3 = 0;
-    goto awb_calc_avg_weighted_gr_gb_mesh0xb80;
-
-awb_calc_avg_weighted_gr_gb_mesh0xb70:
-    /* fragment 232: MemoryAccess */
-    a1 = *(uint16_t *)((char *)v1 + 82);
-    v0 = v0 + 1;
-    s3 = s3 + a1;
-    v0 = v0 & 65535;
-
-awb_calc_avg_weighted_gr_gb_mesh0xb80:
-    /* fragment 233: Branch */
-    v1 = v1 + 8;
-    if (v0 != a0) { goto awb_calc_avg_weighted_gr_gb_mesh0xb70; }
-
-    /* fragment 234: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(247); /* jalr target resolved by relocation */
-
-    /* fragment 235: MemoryAccess */
-    v0 = *(uint16_t *)((char *)v0 + 0);
-    v1 = local_ba0;
-    v0 = v0 < v1;
-
-    /* fragment 236: Branch */
-    int _bc_v0_236 = v0 == 0;
-    v0 = v1 < 1851;
-    if (_bc_v0_236) { goto awb_calc_avg_weighted_gr_gb_mesh0xddc; }
-
-    /* fragment 237: Arithmetic */
-    s3 = s3 < 257;
-
-    /* fragment 238: Branch */
-    if (s3 != 0) { goto awb_calc_avg_weighted_gr_gb_mesh0xddc; }
-
-    /* fragment 239: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(224); /* jalr target resolved by relocation */
-
-    /* fragment 240: CallSetup */
-    s3 = v0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(221); /* jalr target resolved by relocation */
-
-    /* fragment 241: CallSetup */
-    v0 = *(uint16_t *)((char *)v0 + 0);
-    s6 = 975;
-    v0 = v0 << 1;
-    s3 = s3 + v0;
-    s3 = *(uint16_t *)((char *)s3 + 0);
-    s5 = 1000;
-    local_ba4 = s3;
-    s7 = 1;
-    a1 = (uintptr_t)&_GET_USHORT_PTR;
-
-awb_calc_avg_weighted_gr_gb_mesh0xc04:
-    /* fragment 242: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(224); /* jalr target resolved by relocation */
-
-    /* fragment 243: CallSetup */
-    s8 = v0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(241); /* jalr target resolved by relocation */
-
-    /* fragment 244: MemoryAccess */
-    v0 = *(uint16_t *)((char *)v0 + 0);
-    a0 = 228;
-    v0 = v0 << 1;
-    s8 = s8 + v0;
-    v0 = *(uint16_t *)((char *)s8 + 0);
-    v0 = v0 + 256;
-    v0 = (int32_t)v0 >> 1;
-    v0 = s6 * v0;
-
-    /* fragment 245: Unknown */
-    /* unmatched fragment 245 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 2db70:	0055001a 	div	zero,v0,s5 */
-
-    /* fragment 246: Arithmetic */
-    /* trap/BUG_ON check */
-    v0 = s6 - 950;
-    v0 = v0 < 51;
-
-    /* fragment 247: Branch */
-    s8 = v1 & 65535;
-    if (v0 != 0) { goto awb_calc_avg_weighted_gr_gb_mesh0xc84; }
-
-    /* fragment 248: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(a0); /* jalr target resolved by relocation */
-
-    /* fragment 249: CallSetup */
-    local_bd8 = v0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(221); /* jalr target resolved by relocation */
-
-    /* fragment 250: MemoryAccess */
-    v0 = *(uint16_t *)((char *)v0 + 0);
-    a1 = local_bd8;
-    v0 = v0 << 1;
-    a1 = a1 + v0;
-
-    /* fragment 251: Branch */
-    t0 = *(uint16_t *)((char *)(a1) + 0);
-    goto awb_calc_avg_weighted_gr_gb_mesh0xcc0;
-
-awb_calc_avg_weighted_gr_gb_mesh0xc84:
-    /* fragment 252: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(a0); /* jalr target resolved by relocation */
-
-    /* fragment 253: CallSetup */
-    local_bd8 = v0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(221); /* jalr target resolved by relocation */
-
-    /* fragment 254: MemoryAccess */
-    v0 = *(uint16_t *)((char *)v0 + 0);
-    a1 = local_bd8;
-    v0 = v0 << 1;
-    a1 = a1 + v0;
-    v0 = *(uint16_t *)((char *)a1 + 0);
-    v0 = s6 * v0;
-
-    /* fragment 255: Unknown */
-    /* unmatched fragment 255 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 2dbe4:	0055001a 	div	zero,v0,s5 */
-
-    /* fragment 256: Arithmetic */
-    /* trap/BUG_ON check */
-    t0 = v1 & 65535;
-
-awb_calc_avg_weighted_gr_gb_mesh0xcc0:
-    /* fragment 257: MemoryAccess */
-    a3 = *(uint16_t *)((char *)s0 + 16);
-    a0 = (uintptr_t)&local_724;
-    a1 = s0;
-    v0 = 0;
-
-    /* fragment 258: Branch */
-    a2 = 0;
-    goto awb_calc_avg_weighted_gr_gb_mesh0xd50;
-
-    /* fragment 259: StackAccess */
-    t3 = local_ba4;
-    t2 = t1 < t3;
-
-    /* fragment 260: Unknown */
-    /* unmatched fragment 260 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 2dc14:	55400009 	bnezl	t2,2dc3c <awb_calc_avg_weighted_gr_gb_mesh+0xd08> */
-
-    /* fragment 261: MemoryAccess */
-    *(uint8_t *)((char *)a0 + 0) = 0;
-    t1 = s8 < t1;
-
-    /* fragment 262: Unknown */
-    /* unmatched fragment 262 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 2dc20:	55200006 	bnezl	t1,2dc3c <awb_calc_avg_weighted_gr_gb_mesh+0xd08> */
-
-    /* fragment 263: MemoryAccess */
-    *(uint8_t *)((char *)a0 + 0) = 0;
-    t1 = *(uint16_t *)((char *)a1 + 90);
-    t1 = t0 < t1;
-
-    /* fragment 264: Unknown */
-    /* unmatched fragment 264 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 2dc30:	55200002 	bnezl	t1,2dc3c <awb_calc_avg_weighted_gr_gb_mesh+0xd08> */
-
-    /* fragment 265: MemoryAccess */
-    *(uint8_t *)((char *)a0 + 0) = 0;
-    *(uint8_t *)((char *)a0 + 0) = s7;
-    t1 = v0 << 2;
-    v1 = (uintptr_t)&local_ab4;
-    t4 = (uintptr_t)&local_18;
-    t2 = v1 + v0;
-    t1 = t4 + t1;
-    t1 = *(uint32_t *)((char *)t1 + 0);
-    t2 = *(uint8_t *)((char *)t2 + 0);
-    v1 = (uintptr_t)&local_8ec;
-    t2 = t2 * t1;
-    t1 = v1 + v0;
-    t1 = *(uint8_t *)((char *)t1 + 0);
-    v0 = v0 + 1;
-    t2 = t2 * t1;
-    t1 = *(uint8_t *)((char *)a0 + 0);
-    a1 = a1 + 8;
-    v1 = t2 * t1;
-    a0 = a0 + 1;
-    a2 = v1 + a2;
-
-awb_calc_avg_weighted_gr_gb_mesh0xd50:
-    /* fragment 266: Arithmetic */
-    t1 = v0 & 65535;
-    t1 = t1 < a3;
-
-    /* fragment 267: Unknown */
-    /* unmatched fragment 267 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 2dc8c:	5520ffdf 	bnezl	t1,2dc0c <awb_calc_avg_weighted_gr_gb_mesh+0xcd8> */
-
-    /* fragment 268: MemoryAccess */
-    t1 = *(uint16_t *)((char *)a1 + 88);
-
-    /* fragment 269: Unknown */
-    /* unmatched fragment 269 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 2dc94:	50c00004 	beqzl	a2,2dca8 <awb_calc_avg_weighted_gr_gb_mesh+0xd74> */
-
-    /* fragment 270: Arithmetic */
-    s6 = s6 + 20;
-    v1 = (uintptr_t)&local_18;
-
-awb_calc_avg_weighted_gr_gb_mesh0xd6c:
-    /* fragment 271: Branch */
-    v0 = 0;
-    goto awb_calc_avg_weighted_gr_gb_mesh0xdc4;
-
-    /* fragment 272: Arithmetic */
-    v0 = 1035;
-
-    /* fragment 273: Branch */
-    a1 = (uintptr_t)&_GET_USHORT_PTR;
-    if (s6 != v0) { goto awb_calc_avg_weighted_gr_gb_mesh0xc04; }
-
-    /* fragment 274: Branch */
-    v1 = (uintptr_t)&local_18;
-    goto awb_calc_avg_weighted_gr_gb_mesh0xd6c;
-
-awb_calc_avg_weighted_gr_gb_mesh0xd88:
-    /* fragment 275: Arithmetic */
-    a0 = a1 + v0;
-
-    /* fragment 276: MemoryAccess */
-    a1 = *(uint8_t *)((char *)a0 + 0);
-    a0 = *(uint32_t *)((char *)v1 + 0);
-    a2 = (uintptr_t)&local_8ec;
-    a0 = a1 * a0;
-    a1 = a2 + v0;
-    a1 = *(uint8_t *)((char *)a1 + 0);
-    a2 = (uintptr_t)&local_724;
-    a0 = a0 * a1;
-    a1 = a2 + v0;
-    a1 = *(uint8_t *)((char *)a1 + 0);
-    v0 = v0 + 1;
-    a0 = a0 * a1;
-    v1 = v1 + 4;
-    *(uint32_t *)((char *)v1 + -4) = a0;
-
-awb_calc_avg_weighted_gr_gb_mesh0xdc4:
-    /* fragment 277: Arithmetic */
-    a0 = v0 & 65535;
-    a0 = a0 < a3;
-
-    /* fragment 278: Branch */
-    a1 = (uintptr_t)&local_ab4;
-    if (a0 != 0) { goto awb_calc_avg_weighted_gr_gb_mesh0xd88; }
-
-    /* fragment 279: Branch */
-    v0 = *(uint16_t *)((char *)(s0) + 16);
-    goto awb_calc_avg_weighted_gr_gb_mesh0xec0;
-
-awb_calc_avg_weighted_gr_gb_mesh0xddc:
-    /* fragment 280: Unknown */
-    /* unmatched fragment 280 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 2dd10:	50400005 	beqzl	v0,2dd28 <awb_calc_avg_weighted_gr_gb_mesh+0xdf4> */
-
-    /* fragment 281: Arithmetic */
-    a1 = (uintptr_t)&_GET_USHORT_PTR;
-
-    /* fragment 282: MemoryAccess */
-    a1 = *(uint16_t *)((char *)s0 + 16);
-    v1 = (uintptr_t)&local_18;
-
-    /* fragment 283: Branch */
-    v0 = 0;
-    goto awb_calc_avg_weighted_gr_gb_mesh0xeac;
-
-    /* fragment 284: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(224); /* jalr target resolved by relocation */
-
-    /* fragment 285: CallSetup */
-    s5 = v0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(241); /* jalr target resolved by relocation */
-
-    /* fragment 286: CallSetup */
-    s5 = s5 + ((*(uint16_t *)((char *)(v0) + 0)) << 1);
-    s5 = *(uint16_t *)((char *)(s5) + 0);
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(228); /* jalr target resolved by relocation */
-
-    /* fragment 287: CallSetup */
-    s6 = v0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(241); /* jalr target resolved by relocation */
-
-    /* fragment 288: CallSetup */
-    s5 = s5 + 256;
-    s6 = s6 + ((*(uint16_t *)((char *)(v0) + 0)) << 1);
-    s5 = (int32_t)s5 >> 1;
-    local_10 = (uint32_t *)&local_8ec;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))(uintptr_t)compute_weight)((int32_t)(s5 + 256) >> 1, ((*(uint16_t *)((char *)(s6) + 0)) + 256) >> 1, &local_ab4, &local_18); /* jalr target resolved by relocation */
-
-    /* fragment 289: Branch */
-    v0 = *(uint16_t *)((char *)(s0) + 16);
-    goto awb_calc_avg_weighted_gr_gb_mesh0xec0;
-
-awb_calc_avg_weighted_gr_gb_mesh0xe7c:
-    /* fragment 290: Arithmetic */
-    a0 = a2 + v0;
-
-    /* fragment 291: MemoryAccess */
-    a2 = *(uint8_t *)((char *)a0 + 0);
-
-    /* fragment 292: Branch */
-    a0 = 0;
-    if (a2 == 0) { goto awb_calc_avg_weighted_gr_gb_mesh0xea0; }
-
-    /* fragment 293: Arithmetic */
-    a3 = (uint32_t *)&local_8ec;
-    a0 = a3 + v0;
-
-    /* fragment 294: MemoryAccess */
-    a2 = *(uint8_t *)((char *)a0 + 0);
-    a0 = *(uint32_t *)((char *)v1 + 0);
-    a0 = a2 * a0;
-
-awb_calc_avg_weighted_gr_gb_mesh0xea0:
-    /* fragment 295: MemoryAccess */
-    *(uint32_t *)((char *)v1 + 0) = a0;
-    v0 = v0 + 1;
-    v1 = v1 + 4;
-
-awb_calc_avg_weighted_gr_gb_mesh0xeac:
-    /* fragment 296: Arithmetic */
-    a0 = v0 & 65535;
-    a0 = a0 < a1;
-
-    /* fragment 297: Branch */
-    a2 = (uintptr_t)&local_ab4;
-    if (a0 != 0) { goto awb_calc_avg_weighted_gr_gb_mesh0xe7c; }
-
-awb_calc_avg_weighted_gr_gb_mesh0xebc:
-    /* fragment 298: MemoryAccess */
-    v0 = *(uint16_t *)((char *)s0 + 16);
-
-awb_calc_avg_weighted_gr_gb_mesh0xec0:
-    /* fragment 299: Arithmetic */
-    a0 = 0;
-
-    /* fragment 300: Branch */
-    v1 = 0;
-    goto awb_calc_avg_weighted_gr_gb_mesh0xedc;
-
-awb_calc_avg_weighted_gr_gb_mesh0xecc:
-    /* fragment 301: Arithmetic */
-    a1 = a2 + a0;
-
-    /* fragment 302: MemoryAccess */
-    a1 = *(uint8_t *)((char *)a1 + 0);
-    a0 = a0 + 1;
-    v1 = v1 + a1;
-
-awb_calc_avg_weighted_gr_gb_mesh0xedc:
-    /* fragment 303: Arithmetic */
-    a1 = a0 & 65535;
-    a1 = a1 < v0;
-
-    /* fragment 304: Branch */
-    a2 = (uintptr_t)&local_9d0;
-    if (a1 != 0) { goto awb_calc_avg_weighted_gr_gb_mesh0xecc; }
-
-    /* fragment 305: Arithmetic */
-    a0 = v0 >> 3;
-    a0 = a0 < v1;
-
-    /* fragment 306: Branch */
-    s1 = s1 < s2;
-    if (a0 == 0) { goto awb_calc_avg_weighted_gr_gb_mesh0xf9c; }
-
-    /* fragment 307: Branch */
-    t0 = local_ba0;
-    if (s1 == 0) { goto awb_calc_avg_weighted_gr_gb_mesh0xfa8; }
-
-    /* fragment 308: Arithmetic */
-    v1 = t0 < 101;
-
-    /* fragment 309: Branch */
-    a0 = s0;
-    if (v1 != 0) { goto awb_calc_avg_weighted_gr_gb_mesh0xfb4; }
-
-    /* fragment 310: Arithmetic */
-    v1 = t0 < 901;
-
-    /* fragment 311: Branch */
-    a1 = (uintptr_t)&local_18;
-    if (v1 == 0) { goto awb_calc_avg_weighted_gr_gb_mesh0xfc0; }
-
-    /* fragment 312: Branch */
-    v1 = 0;
-    goto awb_calc_avg_weighted_gr_gb_mesh0xf80;
-
-awb_calc_avg_weighted_gr_gb_mesh0xf24:
-    /* fragment 313: Arithmetic */
-    t1 = (uintptr_t)&local_9d0;
-    t2 = (uintptr_t)&local_ab4;
-    a2 = t1 + v1;
-    a3 = t2 + v1;
-
-    /* fragment 314: MemoryAccess */
-    a2 = *(uint8_t *)((char *)a2 + 0);
-    a3 = *(uint8_t *)((char *)a3 + 0);
-    t0 = v1 << 1;
-    a3 = a2 * (uintptr_t)a3;
-    t2 = (uintptr_t)&local_560;
-    t1 = t2 + t0;
-    t2 = *(uint16_t *)((char *)a0 + 80);
-    v1 = v1 + 1;
-    t2 = (uintptr_t)a3 * t2;
-    a1 = a1 + 4;
-    *(uint16_t *)((char *)t1 + 0) = t2;
-    t1 = (uintptr_t)&local_39c;
-    t0 = t1 + t0;
-    t1 = *(uint16_t *)((char *)a0 + 82);
-    a3 = (uintptr_t)a3 * t1;
-    *(uint16_t *)((char *)t0 + 0) = a3;
-    a3 = *(uint32_t *)((char *)a1 + -4);
-    a2 = (uintptr_t)a3 * a2;
-    *(uint32_t *)((char *)a1 + -4) = a2;
-
-awb_calc_avg_weighted_gr_gb_mesh0xf80:
-    /* fragment 315: Arithmetic */
-    a2 = v1 & 65535;
-    a2 = a2 < v0;
-
-    /* fragment 316: Branch */
-    a0 = a0 + 8;
-    if (a2 != 0) { goto awb_calc_avg_weighted_gr_gb_mesh0xf24; }
-
-    /* fragment 317: Arithmetic */
-    a0 = 0;
-
-awb_calc_avg_weighted_gr_gb_mesh0xf94:
-    /* fragment 318: Branch */
-    v1 = 0;
-    goto awb_calc_avg_weighted_gr_gb_mesh0x10dc;
-
-awb_calc_avg_weighted_gr_gb_mesh0xf9c:
-    /* fragment 319: Branch */
-    a0 = s0;
-    if (v1 == 0) { goto awb_calc_avg_weighted_gr_gb_mesh0xfb4; }
-
-    /* fragment 320: StackAccess */
-    t0 = local_ba0;
-
-awb_calc_avg_weighted_gr_gb_mesh0xfa8:
-    /* fragment 321: Arithmetic */
-    v1 = t0 < 901;
-
-    /* fragment 322: Branch */
-    a0 = s0;
-    if (v1 == 0) { goto awb_calc_avg_weighted_gr_gb_mesh0xfbc; }
-
-awb_calc_avg_weighted_gr_gb_mesh0xfb4:
-    /* fragment 323: Branch */
-    v1 = 0;
-    goto awb_calc_avg_weighted_gr_gb_mesh0x10b0;
-
-awb_calc_avg_weighted_gr_gb_mesh0xfbc:
-    /* fragment 324: Arithmetic */
-    a1 = (uintptr_t)&local_18;
-
-awb_calc_avg_weighted_gr_gb_mesh0xfc0:
-    /* fragment 325: Arithmetic */
-    v1 = 0;
-
-    /* fragment 326: Branch */
-    t2 = 1;
-    goto awb_calc_avg_weighted_gr_gb_mesh0x1048;
-
-awb_calc_avg_weighted_gr_gb_mesh0xfcc:
-    /* fragment 327: Arithmetic */
-    t3 = (uintptr_t)&local_724;
-    t0 = t3 + v1;
-    t1 = (uintptr_t)&local_9d0;
-    t4 = (uintptr_t)&local_ab4;
-    a2 = t1 + v1;
-
-    /* fragment 328: MemoryAccess */
-    t1 = *(uint8_t *)((char *)t0 + 0);
-    t0 = t4 + v1;
-    t0 = *(uint8_t *)((char *)t0 + 0);
-    t4 = (uintptr_t)&local_560;
-    t0 = t1 * t0;
-    t1 = v1 << 1;
-    t3 = t4 + t1;
-    t4 = *(uint16_t *)((char *)a0 + 80);
-    t0 = t0 & 65535;
-    t4 = t0 * t4;
-    a2 = *(uint8_t *)((char *)a2 + 0);
-    v1 = v1 + 1;
-    a2 = t2 - a2;
-    a3 = a2 & 65535;
-    t4 = (uintptr_t)a3 * t4;
-    a1 = a1 + 4;
-    *(uint16_t *)((char *)t3 + 0) = t4;
-    t3 = (uintptr_t)&local_39c;
-    t1 = t3 + t1;
-    t3 = *(uint16_t *)((char *)a0 + 82);
-    t0 = t0 * t3;
-    a3 = (uintptr_t)a3 * t0;
-    *(uint16_t *)((char *)t1 + 0) = a3;
-    a3 = *(uint32_t *)((char *)a1 + -4);
-    a2 = (uintptr_t)a3 * a2;
-    *(uint32_t *)((char *)a1 + -4) = a2;
-
-awb_calc_avg_weighted_gr_gb_mesh0x1048:
-    /* fragment 329: Arithmetic */
-    a2 = v1 & 65535;
-    a2 = a2 < v0;
-
-    /* fragment 330: Branch */
-    a0 = a0 + 8;
-    if (a2 != 0) { goto awb_calc_avg_weighted_gr_gb_mesh0xfcc; }
-
-    /* fragment 331: Branch */
-    a0 = 0;
-    goto awb_calc_avg_weighted_gr_gb_mesh0xf94;
-
-awb_calc_avg_weighted_gr_gb_mesh0x1060:
-    /* fragment 332: Arithmetic */
-    a2 = (uintptr_t)&local_724;
-    a1 = a2 + v1;
-    a3 = (uint32_t *)&local_ab4;
-
-    /* fragment 333: MemoryAccess */
-    a2 = *(uint8_t *)((char *)a1 + 0);
-    a1 = a3 + v1;
-    a1 = *(uint8_t *)((char *)a1 + 0);
-    t0 = (uintptr_t)&local_560;
-    a1 = a2 * a1;
-    a2 = v1 << 1;
-    a3 = t0 + a2;
-    t0 = *(uint16_t *)((char *)a0 + 80);
-    a1 = a1 & 65535;
-    t0 = a1 * t0;
-    v1 = v1 + 1;
-    *(uint16_t *)((char *)a3 + 0) = t0;
-    a3 = (uint32_t *)&local_39c;
-    a2 = a3 + a2;
-    a3 = *(uint16_t *)((char *)a0 + 82);
-    a1 = a1 * (uintptr_t)a3;
-    *(uint16_t *)((char *)a2 + 0) = a1;
-
-awb_calc_avg_weighted_gr_gb_mesh0x10b0:
-    /* fragment 334: Arithmetic */
-    a1 = v1 & 65535;
-    a1 = a1 < v0;
-
-    /* fragment 335: Branch */
-    a0 = a0 + 8;
-    if (a1 != 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x1060; }
-
-    /* fragment 336: Branch */
-    a0 = 0;
-    goto awb_calc_avg_weighted_gr_gb_mesh0xf94;
-
-    /* fragment 337: Arithmetic */
-    a2 = (uintptr_t)&local_18;
-    a1 = a2 + a1;
-
-    /* fragment 338: MemoryAccess */
-    a1 = *(uint32_t *)((char *)a1 + 0);
-    a0 = a0 + 1;
-    v1 = v1 + a1;
-
-awb_calc_avg_weighted_gr_gb_mesh0x10dc:
-    /* fragment 339: Arithmetic */
-    a1 = a0 & 65535;
-    a1 = a1 < v0;
-
-    /* fragment 340: Unknown */
-    /* unmatched fragment 340 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 2e018:	54a0fff8 	bnezl	a1,2dffc <awb_calc_avg_weighted_gr_gb_mesh+0x10c8> */
-
-    /* fragment 341: Arithmetic */
-    a1 = a0 << 2;
-
-    /* fragment 342: Unknown */
-    /* unmatched fragment 342 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 2e020:	5460003f 	bnezl	v1,2e120 <awb_calc_avg_weighted_gr_gb_mesh+0x11ec> */
-
-    /* fragment 343: Arithmetic */
-    a0 = 0;
-    a0 = s0;
-
-    /* fragment 344: Branch */
-    s1 = 0;
-    goto awb_calc_avg_weighted_gr_gb_mesh0x1110;
-
-awb_calc_avg_weighted_gr_gb_mesh0x1100:
-    /* fragment 345: MemoryAccess */
-    a1 = *(uint16_t *)((char *)a0 + 80);
-    v1 = v1 + 1;
-    s1 = s1 + a1;
-    v1 = v1 & 65535;
-
-awb_calc_avg_weighted_gr_gb_mesh0x1110:
-    /* fragment 346: Branch */
-    a0 = a0 + 8;
-    if (v1 != v0) { goto awb_calc_avg_weighted_gr_gb_mesh0x1100; }
-
-    /* fragment 347: Branch */
-    v0 = (uintptr_t)&_GET_USHORT_PTR;
-    if (v1 == 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x112c; }
-
-    /* fragment 348: CallSetup */
-    /* trap/BUG_ON check */
-
-awb_calc_avg_weighted_gr_gb_mesh0x112c:
-    /* fragment 349: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(224); /* jalr target resolved by relocation */
-
-    /* fragment 350: CallSetup */
-    s3 = v0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(216); /* jalr target resolved by relocation */
-
-    /* fragment 351: CallSetup */
-    s3 = (uintptr_t)s3 + ((*(uint16_t *)((char *)(v0) + 0)) << 1);
-    s1 = (*(uint16_t *)((char *)(s3) + 0)) < s1;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(224); /* jalr target resolved by relocation */
-
-    /* fragment 352: CallSetup */
-    s1 = v0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(216); /* jalr target resolved by relocation */
-
-    /* fragment 353: CallSetup */
-    s1 = (uintptr_t)s1 + ((*(uint16_t *)((char *)(v0) + 0)) << 1);
-    s1 = *(uint16_t *)((char *)(s1) + 0);
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(228); /* jalr target resolved by relocation */
-
-    /* fragment 354: CallSetup */
-    s3 = v0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(216); /* jalr target resolved by relocation */
-
-    /* fragment 355: MemoryAccess */
-    v0 = *(uint16_t *)((char *)v0 + 0);
-    v0 = v0 << 1;
-    s3 = s3 + v0;
-
-    /* fragment 356: Branch */
-    s2 = *(uint16_t *)((char *)(s3) + 0);
-    goto awb_calc_avg_weighted_gr_gb_mesh0x122c;
-
-awb_calc_avg_weighted_gr_gb_mesh0x11ac:
-    /* fragment 357: Arithmetic */
-    a1 = a0 << 2;
-    a3 = (uint32_t *)&local_18;
-    t0 = (uintptr_t)&local_560;
-    t1 = (uintptr_t)&local_39c;
-    a1 = a3 + a1;
-    a3 = t0 + a2;
-    a2 = t1 + a2;
-
-    /* fragment 358: MemoryAccess */
-    a1 = *(uint32_t *)((char *)a1 + 0);
-    a3 = *(uint16_t *)((char *)a3 + 0);
-    a2 = *(uint16_t *)((char *)a2 + 0);
-    t0 = (uintptr_t)a3 * a1;
-    a3 = a2 * a1;
-    s1 = t0 + (uintptr_t)s1;
-    s2 = (uintptr_t)a3 + (uintptr_t)s2;
-
-    /* fragment 359: Branch */
-    a0 = a0 + 1;
-    goto awb_calc_avg_weighted_gr_gb_mesh0x11f4;
-
-    /* fragment 360: Arithmetic */
-    s2 = 0;
-    s1 = 0;
-
-awb_calc_avg_weighted_gr_gb_mesh0x11f4:
-    /* fragment 361: Arithmetic */
-    a1 = a0 & 65535;
-    a1 = a1 < v0;
-
-    /* fragment 362: Branch */
-    a2 = a0 << 1;
-    if (a1 != 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x11ac; }
-
-    /* fragment 363: Unknown */
-    /* unmatched fragment 363 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 2e138:	0243001b 	divu	zero,s2,v1 */
-
-    /* fragment 364: Arithmetic */
-    /* trap/BUG_ON check */
-
-    /* fragment 365: Unknown */
-    /* unmatched fragment 365 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 2e144:	0223001b 	divu	zero,s1,v1 */
-
-    /* fragment 366: Arithmetic */
-    /* trap/BUG_ON check */
-
-    /* fragment 367: MemoryAccess */
-    *(uint32_t *)((char *)s0 + 60) = s2;
-
-    /* fragment 368: Branch */
-    *(uint32_t *)((char *)s0 + 56) = s1;
-    goto awb_calc_avg_weighted_gr_gb_mesh0x122c;
-
-    /* fragment 369: Arithmetic */
-    s1 = 256;
-
-awb_calc_avg_weighted_gr_gb_mesh0x122c:
-    /* fragment 370: Branch */
-    v0 = (uintptr_t)&_GET_USHORT_PTR;
-    if (s4 == 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x129c; }
-
-    /* fragment 371: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(230); /* jalr target resolved by relocation */
-
-    /* fragment 372: MemoryAccess */
-    v0 = *(uint16_t *)((char *)v0 + 4);
-
-    /* fragment 373: Branch */
-    if (v0 == 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x129c; }
-
-    /* fragment 374: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(230); /* jalr target resolved by relocation */
-
-    /* fragment 375: CallSetup */
-    s1 = (*(uint16_t *)((char *)(v0) + 0)) * (uintptr_t)s1;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(230); /* jalr target resolved by relocation */
-
-    /* fragment 376: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(230); /* jalr target resolved by relocation */
-
-    /* fragment 377: CallSetup */
-    s2 = (*(uint16_t *)((char *)(v0) + 2)) * (uintptr_t)s2;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(230); /* jalr target resolved by relocation */
-
-    /* fragment 378: MemoryAccess */
-    v0 = *(uint16_t *)((char *)v0 + 4);
-
-    /* fragment 379: Unknown */
-    /* unmatched fragment 379 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 2e1c4:	0242001b 	divu	zero,s2,v0 */
-
-    /* fragment 380: Arithmetic */
-    /* trap/BUG_ON check */
-
-awb_calc_avg_weighted_gr_gb_mesh0x129c:
-    /* fragment 381: Branch */
-    if (s1 != 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x14e4; }
-
-    /* fragment 382: Branch */
-    s1 = *(uint32_t *)((char *)(s0) + 56);
-    if (s2 != 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x14d4; }
-
-awb_calc_avg_weighted_gr_gb_mesh0x12ac:
-    /* fragment 383: Branch */
-    s2 = *(uint32_t *)((char *)(s0) + 60);
-    if (s1 == 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x12dc; }
-
-    /* fragment 384: Unknown */
-    /* unmatched fragment 384 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 2e1e8:	5240000a 	beqzl	s2,2e214 <awb_calc_avg_weighted_gr_gb_mesh+0x12e0> */
-
-    /* fragment 385: Arithmetic */
-    a1 = 0;
-    a1 = 65535;
-
-awb_calc_avg_weighted_gr_gb_mesh0x12c0:
-    /* fragment 386: Unknown */
-    /* unmatched fragment 386 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 2e1f4:	00b1001b 	divu	zero,a1,s1 */
-
-    /* fragment 387: Arithmetic */
-    /* trap/BUG_ON check */
-
-    /* fragment 388: Unknown */
-    /* unmatched fragment 388 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 2e200:	00b2001b 	divu	zero,a1,s2 */
-
-    /* fragment 389: Arithmetic */
-    /* trap/BUG_ON check */
-
-    /* fragment 390: Branch */
-    goto awb_calc_avg_weighted_gr_gb_mesh0x12e4;
-
-awb_calc_avg_weighted_gr_gb_mesh0x12dc:
-    /* fragment 391: CallSetup */
-    a1 = 0;
-
-awb_calc_avg_weighted_gr_gb_mesh0x12e0:
-    /* fragment 392: CallSetup */
-    a0 = 0;
-
-awb_calc_avg_weighted_gr_gb_mesh0x12e4:
-    /* fragment 393: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)fifo_push)(a0); /* jalr target resolved by relocation */
-
-    /* fragment 394: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)get_point)(&local_b98); /* jalr target resolved by relocation */
-
-    /* fragment 395: Arithmetic */
-    v0 = (uintptr_t)&stab;
-
-    /* fragment 396: StackAccess */
-    s2 = local_b98;
-    s1 = local_b9a;
-    v0 = *(uint8_t *)((char *)((char *)&stab + 0xc));
-    *(uint32_t *)((char *)s0 + 48) = s2;
-
-    /* fragment 397: Branch */
-    *(uint32_t *)((char *)s0 + 52) = s1;
-    if (v0 != 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x1428; }
-
-    /* fragment 398: Branch */
-    if (s2 != 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x1330; }
-
-awb_calc_avg_weighted_gr_gb_mesh0x1328:
-    /* fragment 399: Branch */
-    v0 = 0;
-    goto awb_calc_avg_weighted_gr_gb_mesh0x14bc;
-
-awb_calc_avg_weighted_gr_gb_mesh0x1330:
-    /* fragment 400: Branch */
-    v0 = 0;
-    if (s1 == 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x14bc; }
-
-    /* fragment 401: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(226); /* jalr target resolved by relocation */
-
-    /* fragment 402: CallSetup */
-    s6 = v0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(251); /* jalr target resolved by relocation */
-
-    /* fragment 403: CallSetup */
-    s5 = v0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(214); /* jalr target resolved by relocation */
-
-    /* fragment 404: CallSetup */
-    local_10 = v0;
-    local_ba0 = a0;
-    local_ba4 = a0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))(uintptr_t)AWB_mesh_isra_1)(local_ba0, a1, s6, s5); /* jalr target resolved by relocation */
-
-    /* fragment 405: Branch */
-    v1 = 983040;
-    if (v0 == 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x14c4; }
-
-    /* fragment 406: Arithmetic */
-    v1 = v1 + 16960;
-
-    /* fragment 407: Unknown */
-    /* unmatched fragment 407 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 2e2e4:	0062001a 	div	zero,v1,v0 */
-
-    /* fragment 408: Arithmetic */
-    /* trap/BUG_ON check */
-
-    /* fragment 409: Branch */
-    if (s4 == 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x13d4; }
-
-    /* fragment 410: Arithmetic */
-    v1 = v0 < 5000;
-
-    /* fragment 411: Unknown */
-    /* unmatched fragment 411 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 2e2f8:	50600004 	beqzl	v1,2e30c <awb_calc_avg_weighted_gr_gb_mesh+0x13d8> */
-
-    /* fragment 412: MemoryAccess */
-    v1 = *(uint32_t *)((char *)s0 + 1928);
-    v1 = 10000;
-    v0 = v1 - v0;
-
-awb_calc_avg_weighted_gr_gb_mesh0x13d4:
-    /* fragment 413: MemoryAccess */
-    v1 = *(uint32_t *)((char *)s0 + 1928);
-
-awb_calc_avg_weighted_gr_gb_mesh0x13d8:
-    /* fragment 414: Arithmetic */
-    a0 = v0 < v1;
-
-    /* fragment 415: Unknown */
-    /* unmatched fragment 415 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 2e310:	50800005 	beqzl	a0,2e328 <awb_calc_avg_weighted_gr_gb_mesh+0x13f4> */
-
-    /* fragment 416: MemoryAccess */
-    v1 = *(uint32_t *)((char *)s0 + 1924);
-    v0 = *(uint16_t *)((char *)s0 + 1936);
-    *(uint16_t *)((char *)s0 + 24) = v0;
-
-    /* fragment 417: Branch */
-    v0 = *(uint16_t *)((char *)(s0) + 1938);
-    goto awb_calc_avg_weighted_gr_gb_mesh0x140c;
-
-    /* fragment 418: Arithmetic */
-    a0 = v1 < v0;
-
-    /* fragment 419: Unknown */
-    /* unmatched fragment 419 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 2e32c:	50800007 	beqzl	a0,2e34c <awb_calc_avg_weighted_gr_gb_mesh+0x1418> */
-
-    /* fragment 420: MemoryAccess */
-    v1 = *(uint32_t *)((char *)s0 + 48);
-    v0 = *(uint16_t *)((char *)s0 + 1932);
-    *(uint16_t *)((char *)s0 + 24) = v0;
-    v0 = *(uint16_t *)((char *)s0 + 1934);
-
-awb_calc_avg_weighted_gr_gb_mesh0x140c:
-    /* fragment 421: MemoryAccess */
-    *(uint16_t *)((char *)s0 + 26) = v0;
-
-    /* fragment 422: Branch */
-    v0 = v1;
-    goto awb_calc_avg_weighted_gr_gb_mesh0x14bc;
-
-    /* fragment 423: MemoryAccess */
-    *(uint16_t *)((char *)s0 + 24) = v1;
-    v1 = *(uint32_t *)((char *)s0 + 52);
-
-    /* fragment 424: Branch */
-    *(uint16_t *)((char *)s0 + 26) = v1;
-    goto awb_calc_avg_weighted_gr_gb_mesh0x14bc;
-
-awb_calc_avg_weighted_gr_gb_mesh0x1428:
-    /* fragment 425: MemoryAccess */
-    v0 = *(uint16_t *)((char *)s0 + 24);
-
-    /* fragment 426: Branch */
-    s1 = 65535;
-    if (v0 == 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x1440; }
-
-    /* fragment 427: Unknown */
-    /* unmatched fragment 427 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 2e368:	0222001a 	div	zero,s1,v0 */
-
-    /* fragment 428: Arithmetic */
-    /* trap/BUG_ON check */
-
-awb_calc_avg_weighted_gr_gb_mesh0x1440:
-    /* fragment 429: MemoryAccess */
-    v0 = *(uint16_t *)((char *)s0 + 26);
-
-    /* fragment 430: Branch */
-    a1 = 65535;
-    if (v0 == 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x1458; }
-
-    /* fragment 431: CallSetup */
-    /* trap/BUG_ON check */
-
-awb_calc_avg_weighted_gr_gb_mesh0x1458:
-    /* fragment 432: CallSetup */
-    local_bd8 = a1;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)_GET_USHORT_PTR)(226, a1); /* jalr target resolved by relocation */
-
-    /* fragment 433: CallSetup */
-    s4 = v0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(251); /* jalr target resolved by relocation */
-
-    /* fragment 434: CallSetup */
-    s3 = v0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)_GET_USHORT_PTR)(214); /* jalr target resolved by relocation */
-
-    /* fragment 435: CallSetup */
-    local_10 = v0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))(uintptr_t)AWB_mesh_isra_1)(s1, local_bd8, s4, s3); /* jalr target resolved by relocation */
-
-    /* fragment 436: Branch */
-    v1 = 983040;
-    if (v0 == 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x1328; }
-
-    /* fragment 437: Arithmetic */
-    v1 = v1 + 16960;
-
-    /* fragment 438: Unknown */
-    /* unmatched fragment 438 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 2e3e4:	0062001a 	div	zero,v1,v0 */
-
-    /* fragment 439: Arithmetic */
-    /* trap/BUG_ON check */
-
-awb_calc_avg_weighted_gr_gb_mesh0x14bc:
-    /* fragment 440: Branch */
-    *(uint32_t *)((char *)s0 + 1912) = v0;
-    goto awb_calc_avg_weighted_gr_gb_mesh0x14f4;
-
-awb_calc_avg_weighted_gr_gb_mesh0x14c4:
-    /* fragment 441: Unknown */
-    /* unmatched fragment 441 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 2e3f8:	5680ffc2 	bnezl	s4,2e304 <awb_calc_avg_weighted_gr_gb_mesh+0x13d0> */
-
-    /* fragment 442: Arithmetic */
-    v1 = 10000;
-
-    /* fragment 443: Branch */
-    v1 = *(uint32_t *)((char *)(s0) + 1928);
-    goto awb_calc_avg_weighted_gr_gb_mesh0x13d8;
-
-awb_calc_avg_weighted_gr_gb_mesh0x14d4:
-    /* fragment 444: Unknown */
-    /* unmatched fragment 444 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 2e408:	5620ff7a 	bnezl	s1,2e1f4 <awb_calc_avg_weighted_gr_gb_mesh+0x12c0> */
-
-    /* fragment 445: Arithmetic */
-    a1 = 65535;
-
-    /* fragment 446: Branch */
-    a1 = 0;
-    goto awb_calc_avg_weighted_gr_gb_mesh0x12e0;
-
-awb_calc_avg_weighted_gr_gb_mesh0x14e4:
-    /* fragment 447: Branch */
-    a1 = 65535;
-    if (s2 != 0) { goto awb_calc_avg_weighted_gr_gb_mesh0x12c0; }
-
-    /* fragment 448: Branch */
-    goto awb_calc_avg_weighted_gr_gb_mesh0x12ac;
-
-awb_calc_avg_weighted_gr_gb_mesh0x14f4:
-    /* fragment 449: Epilogue */
-    /* function epilogue: restore registers and return */
-    return (int32_t)v0;
-
-awb_calc_avg_weighted_gr_gb_mesh0x14f8:
-    /* fragment 450: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    return 0;
+	uint8_t *fsm = (uint8_t *)a0;
+	uint8_t *isp = *(uint8_t **)fsm;
+	uint32_t *weight = t20_awb_weight;
+	uint8_t *valid = t20_awb_valid;
+	uint32_t stat0 = APICAL_READ_32(0x870);
+	uint32_t stat1 = APICAL_READ_32(0x870);
+	uint32_t cols = _GET_COLS(239);
+	uint16_t *sources = t20_awb_lut16(239);
+	uint32_t gain, ct, scale_a, scale_b, zones, sum_a, sum_b, sum, near0;
+	uint32_t counted;
+	uint32_t avg_a, avg_b, rg_sum, bg_sum, i, k;
+	int32_t lo_rg, lo_bg, hi_rg, hi_bg;
+	int high_ct_shift = 0;
+	int mode;
+	struct t20_awb_point point;
+	uint16_t *axis;
+	uint32_t *gains;
+	uint32_t *cts;
+	uint32_t len;
+	uint8_t idx;
+
+	*(uint16_t *)(fsm + 16) = (uint16_t)(((stat1 & 0xff00) >> 8) * (stat0 & 0xff));
+	zones = *(uint16_t *)(fsm + 16);
+	if (zones >= 226)
+		return 0;
+	for (i = 0; (uint16_t)i < zones; i++) {
+		weight[i] = 0;
+		valid[i] = 0;
+		t20_awb_near_source0[i] = 0;
+		t20_awb_in_box[i] = 1;
+		t20_awb_share_b[i] = 0;
+		t20_awb_share_a[i] = 0;
+	}
+
+	/* colour-temperature limit from the sensor gain (tables 151 -> 243) */
+	gain = *(uint32_t *)(isp + 284);
+	idx = (uint8_t)_GET_HDR_TABLE_INDEX(151, *(uint8_t *)(isp + 5412));
+	gains = (uint32_t *)(uintptr_t)_GET_UINT_PTR(idx);
+	cts = (uint32_t *)(uintptr_t)_GET_UINT_PTR(243);
+	len = _GET_LEN(idx);
+	if (gain < gains[0]) {
+		ct = (uint16_t)cts[0];
+	} else if (!(gain < gains[len - 1])) {
+		ct = (uint16_t)cts[len - 1];
+	} else {
+		for (k = 1; k < len; k = (uint16_t)(k + 1))
+			if (gain < gains[k])
+				break;
+		ct = (uint16_t)interpl(gain, gains[k - 1], cts[k - 1],
+				       gains[k], cts[k]);
+	}
+	if (ct < 5001) {
+		scale_a = luts_fetch(ct, t20_awb_lut16(250)[0],
+				     t20_awb_lut16(252)[0],
+				     t20_awb_lut16(244)[0], t20_awb_lut16(253),
+				     (uint16_t)_GET_LEN(253));
+		scale_b = luts_fetch(ct, t20_awb_lut16(231)[0],
+				     t20_awb_lut16(246)[0],
+				     t20_awb_lut16(227)[0], t20_awb_lut16(212),
+				     (uint16_t)_GET_LEN(212));
+	} else {
+		scale_a = 99;
+		scale_b = 1;
+	}
+
+	/* box around the mesh axes and the known light sources */
+	axis = t20_awb_lut16(226);
+	len = _GET_LEN(226);
+	lo_rg = axis[0] < sources[0] ? axis[0] : sources[0];
+	hi_rg = axis[len - 1] < sources[0] ? sources[0] : axis[len - 1];
+	axis = t20_awb_lut16(251);
+	len = _GET_LEN(251);
+	lo_bg = axis[0] < sources[1] ? axis[0] : sources[1];
+	hi_bg = axis[len - 1] < sources[1] ? sources[1] : axis[len - 1];
+	for (k = 1; k < _GET_ROWS(239); k = (uint16_t)(k + 1)) {
+		int32_t rg = sources[k * cols];
+		int32_t bg = sources[k * cols + 1];
+
+		if (rg < lo_rg)
+			lo_rg = rg;
+		if (bg < lo_bg)
+			lo_bg = bg;
+		if (hi_rg < rg)
+			hi_rg = rg;
+		if (hi_bg < bg)
+			hi_bg = bg;
+	}
+
+	/* per-zone mesh weight and light-source shares */
+	counted = 0;
+	sum_a = 0;
+	sum_b = 0;
+	for (i = 0; i < *(uint16_t *)(fsm + 16); i = (uint16_t)(i + 1)) {
+		uint16_t *zone = (uint16_t *)(fsm + (i + 11) * 8);
+		int32_t rg = zone[0];
+		int32_t bg = zone[1];
+		int32_t best;
+		uint32_t part_a, part_b, total;
+
+		valid[i] = rg >= lo_rg && rg <= hi_rg && bg >= lo_bg &&
+			   bg <= hi_bg && *(uint32_t *)(zone + 2) > 256;
+		if (!valid[i])
+			continue;
+		best = AWB_mesh(rg, bg, (int16_t *)t20_awb_lut16(226),
+				(int16_t *)t20_awb_lut16(251),
+				t20_awb_lut16(238));
+		for (k = 0; k < _GET_ROWS(239); k = (uint16_t)(k + 1)) {
+			int32_t known = mesh_AWB_getKnownSourceLight_weight_LUT(
+				(int32_t)a0, rg, bg, sources[k * cols],
+				sources[k * cols + 1]);
+
+			if (known >= 20 && best + 15 < known) {
+				if (k == 0)
+					t20_awb_near_source0[i] = 1;
+				best = known;
+			}
+		}
+		if (best < 0)
+			best = 0;
+		if (best < 60) {
+			valid[i] = 0;
+			continue;
+		}
+		weight[i] = best;
+		part_a = luts_fetch(rg, t20_awb_lut16(215)[0],
+				    t20_awb_lut16(225)[0],
+				    t20_awb_lut16(254)[0], t20_awb_lut16(245),
+				    (uint16_t)_GET_LEN(245)) * 50 * scale_a;
+		part_b = luts_fetch(rg, t20_awb_lut16(236)[0],
+				    t20_awb_lut16(240)[0],
+				    t20_awb_lut16(229)[0], t20_awb_lut16(248),
+				    (uint16_t)_GET_LEN(248)) * 50 * scale_b;
+		total = part_b + part_a;
+		if (total) {
+			t20_awb_share_a[i] = part_a * 100 / total;
+			t20_awb_share_b[i] = part_b * 100 / total;
+		} else {
+			t20_awb_share_a[i] = part_a * 100;
+			t20_awb_share_b[i] = part_b * 100;
+		}
+		sum_a += t20_awb_share_a[i];
+		sum_b += t20_awb_share_b[i];
+		counted = (uint16_t)(counted + 1);
+	}
+	if (counted) {
+		avg_a = (uint8_t)(sum_a / counted);
+		avg_b = (uint8_t)(sum_b / counted);
+	} else {
+		avg_a = 50;
+		avg_b = 50;
+	}
+	if (*(uint8_t *)(uintptr_t)_GET_UCHAR_PTR(267) == 0) {
+		avg_a = 50;
+		avg_b = 50;
+		ct = 500;
+	}
+	fsm[28] = avg_a;
+	fsm[29] = avg_b;
+
+	zones = *(uint16_t *)(fsm + 16);
+	if ((avg_a < avg_b ? avg_b - avg_a : avg_a - avg_b) < 15) {
+		if (ct < 80) {
+			uint16_t *lim_rg = t20_awb_lut16(224);
+			uint16_t *lim_bg = t20_awb_lut16(228);
+			uint32_t row = t20_awb_lut16(221)[0];
+
+			for (i = 0; i < zones; i++) {
+				uint16_t *zone = (uint16_t *)(fsm + (i + 11) * 8);
+
+				if (valid[i] && !(zone[0] < lim_rg[row]) &&
+				    !(lim_bg[row] < zone[1]))
+					weight[i] *= t20_awb_share_b[i];
+				else
+					weight[i] = 0;
+			}
+		} else if (ct < 1851) {
+			for (i = 0; i < zones; i++)
+				weight[i] = valid[i] ? 100 * weight[i] : 0;
+		} else {
+			uint32_t row = t20_awb_lut16(241)[0];
+
+			compute_weight((int32_t)(t20_awb_lut16(224)[row] + 256) >> 1,
+				       (t20_awb_lut16(228)[row] + 256) >> 1,
+				       valid, (int32_t *)weight,
+				       t20_awb_share_a, fsm);
+		}
+	} else if (avg_a < avg_b) {
+		for (i = 0; i < zones; i++)
+			weight[i] = valid[i] ? t20_awb_share_b[i] * weight[i] : 0;
+	} else {
+		uint32_t bg_avg = 0;
+
+		high_ct_shift = t20_awb_lut16(247)[0] < ct;
+		for (i = 0; i != zones; i = (uint16_t)(i + 1))
+			bg_avg += *(uint16_t *)(fsm + 90 + i * 8);
+		if (i)
+			bg_avg /= i;
+		if (t20_awb_lut16(247)[0] < ct && bg_avg > 256) {
+			uint32_t row = t20_awb_lut16(221)[0];
+			uint32_t lo = t20_awb_lut16(224)[row];
+			int32_t permille;
+
+			for (permille = 975;; ) {
+				uint32_t hi = (uint16_t)(permille *
+					(((int32_t)t20_awb_lut16(224)[t20_awb_lut16(241)[0]] +
+					  256) >> 1) / 1000);
+				uint32_t bg_hi = permille - 950 < 51 ?
+					(uint16_t)(permille *
+						   t20_awb_lut16(228)[row] / 1000) :
+					t20_awb_lut16(228)[row];
+				uint32_t acc = 0;
+
+				for (i = 0; i < zones; i++) {
+					uint16_t *zone = (uint16_t *)(fsm + (i + 11) * 8);
+
+					t20_awb_in_box[i] = !(zone[0] < lo) &&
+						!(hi < zone[0]) && !(bg_hi < zone[1]);
+					acc += valid[i] * weight[i] *
+					       t20_awb_share_a[i] * t20_awb_in_box[i];
+				}
+				if (acc)
+					break;
+				permille += 20;
+				if (permille == 1035)
+					break;
+			}
+			for (i = 0; i < zones; i++)
+				weight[i] = valid[i] * weight[i] *
+					    t20_awb_share_a[i] * t20_awb_in_box[i];
+		} else if (ct < 1851) {
+			for (i = 0; i < zones; i++)
+				weight[i] = valid[i] ? t20_awb_share_a[i] * weight[i] : 0;
+		} else {
+			uint32_t row = t20_awb_lut16(241)[0];
+
+			compute_weight((int32_t)(t20_awb_lut16(224)[row] + 256) >> 1,
+				       (t20_awb_lut16(228)[row] + 256) >> 1,
+				       valid, (int32_t *)weight,
+				       t20_awb_share_a, fsm);
+		}
+	}
+
+	/* which zones count, and their ratios */
+	zones = *(uint16_t *)(fsm + 16);
+	near0 = 0;
+	for (i = 0; (uint16_t)i < zones; i++)
+		near0 += t20_awb_near_source0[i];
+	/* firmware 0x1f50: 5 keeps the zones near light source 0 only, 6
+	 * drops them, 7 takes every zone in the box */
+	if ((zones >> 3) < near0) {
+		if (avg_a < avg_b)
+			mode = ct < 901 ? 7 : 6;
+		else
+			mode = ct < 101 ? 7 : ct < 901 ? 5 : 6;
+	} else {
+		mode = near0 == 0 || ct < 901 ? 7 : 6;
+	}
+	for (i = 0; (uint16_t)i < zones; i++) {
+		uint16_t *zone = (uint16_t *)(fsm + (i + 11) * 8);
+
+		if (mode == 5) {
+			uint32_t keep = t20_awb_near_source0[i] * valid[i];
+
+			t20_awb_zone_rg[i] = keep * zone[0];
+			t20_awb_zone_bg[i] = keep * zone[1];
+			weight[i] *= t20_awb_near_source0[i];
+		} else if (mode == 6) {
+			uint32_t keep = (uint16_t)(t20_awb_in_box[i] * valid[i]);
+			int32_t other = 1 - t20_awb_near_source0[i];
+
+			t20_awb_zone_rg[i] = (uint16_t)other * (keep * zone[0]);
+			t20_awb_zone_bg[i] = (uint16_t)other * (keep * zone[1]);
+			weight[i] *= other;
+		} else {
+			uint32_t keep = (uint16_t)(t20_awb_in_box[i] * valid[i]);
+
+			t20_awb_zone_rg[i] = keep * zone[0];
+			t20_awb_zone_bg[i] = keep * zone[1];
+		}
+	}
+
+	sum = 0;
+	for (i = 0; (uint16_t)i < zones; i++)
+		sum += weight[i];
+	if (sum) {
+		rg_sum = 0;
+		bg_sum = 0;
+		for (i = 0; (uint16_t)i < zones; i++) {
+			rg_sum += t20_awb_zone_rg[i] * weight[i];
+			bg_sum += t20_awb_zone_bg[i] * weight[i];
+		}
+		bg_sum /= sum;
+		rg_sum /= sum;
+		*(uint32_t *)(fsm + 60) = bg_sum;
+		*(uint32_t *)(fsm + 56) = rg_sum;
+	} else {
+		uint32_t row = t20_awb_lut16(216)[0];
+
+		rg_sum = 0;
+		for (i = 0; i != zones; i = (uint16_t)(i + 1))
+			rg_sum += *(uint16_t *)(fsm + 88 + i * 8);
+		if (i)
+			rg_sum /= i;
+		if (t20_awb_lut16(224)[row] < rg_sum) {
+			rg_sum = t20_awb_lut16(224)[row];
+			bg_sum = t20_awb_lut16(228)[row];
+		} else {
+			rg_sum = 256;
+			bg_sum = 256;
+		}
+	}
+
+	if (high_ct_shift && t20_awb_lut16(230)[2]) {
+		rg_sum = t20_awb_lut16(230)[0] * rg_sum / t20_awb_lut16(230)[2];
+		bg_sum = t20_awb_lut16(230)[1] * bg_sum / t20_awb_lut16(230)[2];
+	}
+	if (!rg_sum)
+		rg_sum = *(uint32_t *)(fsm + 56);
+	if (!bg_sum)
+		bg_sum = *(uint32_t *)(fsm + 60);
+	if (rg_sum && bg_sum)
+		fifo_push(0xffff / rg_sum, 0xffff / bg_sum);
+	else
+		fifo_push(0, 0);
+
+	get_point((uint16_t *)&point);
+	*(uint32_t *)(fsm + 48) = point.x;
+	*(uint32_t *)(fsm + 52) = point.y;
+	if (stab[12] == 0) {
+		int32_t temperature = 0;
+
+		if (point.x && point.y) {
+			int32_t mesh = AWB_mesh(0xffff / point.x, 0xffff / point.y,
+						(int16_t *)t20_awb_lut16(226),
+						(int16_t *)t20_awb_lut16(251),
+						t20_awb_lut16(214));
+
+			if (mesh)
+				temperature = 1000000 / mesh;
+			if (high_ct_shift && temperature < 5000)
+				temperature = 10000 - temperature;
+			if (temperature < *(int32_t *)(fsm + 1928)) {
+				*(uint16_t *)(fsm + 24) = *(uint16_t *)(fsm + 1936);
+				*(uint16_t *)(fsm + 26) = *(uint16_t *)(fsm + 1938);
+				temperature = *(int32_t *)(fsm + 1928);
+			} else if (*(int32_t *)(fsm + 1924) < temperature) {
+				*(uint16_t *)(fsm + 24) = *(uint16_t *)(fsm + 1932);
+				*(uint16_t *)(fsm + 26) = *(uint16_t *)(fsm + 1934);
+				temperature = *(int32_t *)(fsm + 1924);
+			} else {
+				*(uint16_t *)(fsm + 24) = *(uint32_t *)(fsm + 48);
+				*(uint16_t *)(fsm + 26) = *(uint32_t *)(fsm + 52);
+			}
+		}
+		*(int32_t *)(fsm + 1912) = temperature;
+	} else {
+		int32_t red = *(uint16_t *)(fsm + 24) ?
+			0xffff / *(uint16_t *)(fsm + 24) : 0xffff;
+		int32_t blue = *(uint16_t *)(fsm + 26) ?
+			0xffff / *(uint16_t *)(fsm + 26) : 0xffff;
+		int32_t mesh = AWB_mesh(red, blue, (int16_t *)t20_awb_lut16(226),
+					(int16_t *)t20_awb_lut16(251),
+					t20_awb_lut16(214));
+
+		*(int32_t *)(fsm + 1912) = mesh ? 1000000 / mesh : 0;
+	}
+	if (t20_trace_events) {
+		static unsigned int calls, prints;
+
+		if (calls++ % 16 == 0 && prints++ < 40) {
+			uint32_t valid_zones = 0;
+
+			for (i = 0; (uint16_t)i < zones; i++)
+				valid_zones += valid[i];
+			printk(KERN_INFO "T20AWB mesh zones=%u valid=%u counted=%u near0=%u share=%u/%u ctlim=%u mode=%d wsum=%u avg=%u/%u pt=%u/%u gain=%u/%u ct=%d ctrange=%d..%d manual=%u stab=%u/%u\n",
+			       zones, valid_zones, counted, near0, avg_a, avg_b,
+			       ct, mode, sum, rg_sum, bg_sum, point.x, point.y,
+			       *(uint16_t *)(fsm + 24), *(uint16_t *)(fsm + 26),
+			       *(int32_t *)(fsm + 1912),
+			       *(int32_t *)(fsm + 1928), *(int32_t *)(fsm + 1924),
+			       stab[12], stab[49], stab[50]);
+			printk(KERN_INFO "T20AWB zone0 rg=%u bg=%u pop=%u zone112 rg=%u bg=%u pop=%u\n",
+			       *(uint16_t *)(fsm + 88), *(uint16_t *)(fsm + 90),
+			       *(uint32_t *)(fsm + 92),
+			       *(uint16_t *)(fsm + 88 + 112 * 8),
+			       *(uint16_t *)(fsm + 90 + 112 * 8),
+			       *(uint32_t *)(fsm + 92 + 112 * 8));
+		}
+	}
+	return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002e458 origin=model_output original=awb_calc_avg_weighted_gr_gb */
 int32_t awb_calc_avg_weighted_gr_gb(int32_t *arg1)
 {
-    return *arg1;
+	/* firmware 0x2588: tail call */
+	return awb_calc_avg_weighted_gr_gb_mesh((uintptr_t)arg1);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002e468 origin=model_output original=awb_process_temp_and_shift */
@@ -22301,6 +20444,8 @@ int32_t awb_process_light_source(int32_t *arg1)
         result = *(uint8_t *)((char *)arg1 + 0x77d);
         goto epilogue;
     } else {
+        /* firmware 0x262c: the hold counter counts up here as well */
+        new_counter = (uint8_t)(*(uint8_t *)((char *)arg1 + 0x77e) + 1);
         *(uint8_t *)((char *)arg1 + 0x77e) = new_counter;
 
         if ((uint32_t)new_counter < (uint32_t)max_count) {
@@ -22383,6 +20528,17 @@ int32_t *awb_normalise(int32_t *arg1)
 				     0, 0x10);
 	for (i = 0; i < 4; i++)
 		*(int32_t *)(fsm + 0x760 + 4 * i) = gain[i] + offset;
+	if (t20_trace_events) {
+		static unsigned int calls, prints;
+
+		if (calls++ % 16 == 0 && prints++ < 40)
+			printk(KERN_INFO "T20AWB normalise static=%u/%u/%u/%u awb=%u/%u out=%d/%d/%d/%d\n",
+			       *(uint16_t *)(fsm + 0x770), *(uint16_t *)(fsm + 0x772),
+			       *(uint16_t *)(fsm + 0x774), *(uint16_t *)(fsm + 0x776),
+			       *(uint16_t *)(fsm + 0x18), *(uint16_t *)(fsm + 0x1a),
+			       *(int32_t *)(fsm + 0x760), *(int32_t *)(fsm + 0x764),
+			       *(int32_t *)(fsm + 0x768), *(int32_t *)(fsm + 0x76c));
+	}
 	return (int32_t *)(fsm + 0x760);
 }
 
@@ -23500,19 +21656,20 @@ int32_t sharpening_update(int32_t *arg1)
 	mod_ptr = (int16_t *)_GET_MOD_ENTRY16_PTR(hdr_idx);
 	rows = _GET_ROWS(0x65);
 	calc_val = calc_modulation_u16((uint16_t)(mod_val & 0xffff), (uintptr_t)mod_ptr, (int32_t)rows);
-	APICAL_WRITE_32(0x504, calc_val | (APICAL_READ_32(0x504) & mask));
+	APICAL_WRITE_32(0x504, (calc_val & 0xff) | (APICAL_READ_32(0x504) & mask));
 
 	hdr_idx = _GET_HDR_TABLE_INDEX(0x6a, *(uint8_t *)((char *)base + 0x1524));
 	mod_ptr = (int16_t *)_GET_MOD_ENTRY16_PTR(hdr_idx);
 	rows = _GET_ROWS(0x6a);
 	calc_val = calc_modulation_u16((uint16_t)(mod_val & 0xffff), (uintptr_t)mod_ptr, (int32_t)rows);
-	APICAL_WRITE_32(0x624, calc_val | (APICAL_READ_32(0x624) & mask));
+	APICAL_WRITE_32(0x624, (calc_val & 0xff) | (APICAL_READ_32(0x624) & mask));
 
 	hdr_idx = _GET_HDR_TABLE_INDEX(0x6f, *(uint8_t *)((char *)base + 0x1524));
 	mod_ptr = (int16_t *)_GET_MOD_ENTRY16_PTR(hdr_idx);
 	rows = _GET_ROWS(0x6f);
 	calc_val = calc_modulation_u16((uint16_t)(mod_val & 0xffff), (uintptr_t)mod_ptr, (int32_t)rows);
-	return APICAL_WRITE_32(0x724, calc_val | (APICAL_READ_32(0x724) & mask));
+	/* firmware 0x9b0/0xa08/0xa5c: the modulation values are masked to 8 bits */
+	return APICAL_WRITE_32(0x724, (calc_val & 0xff) | (APICAL_READ_32(0x724) & mask));
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002fed0 origin=model_output original=write_to_flash_output_port */
