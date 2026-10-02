@@ -173,13 +173,29 @@ class Lifter:
         for i in range(n):
             r = rel[i]
             if r and r[0] == 5:
-                for j in range(i + 1, n):
+                # the paired LO16 usually follows; gcc may also schedule it
+                # before the HI16 across a branch (func_zone_ct_weight)
+                # prefer a LO16 based on the lui's own register: with
+                # section-relative relocs several HI16s of one section can
+                # be interleaved (jz_isp_lsc_ct)
+                rt_ = (ins[i] >> 16) & 31
+                order_ = list(range(i + 1, n)) + list(range(i - 1, -1, -1))
+                order_ = [j for j in order_ if (ins[j] >> 21) & 31 == rt_] + order_
+                for j in order_:
                     rj = rel[j]
                     if rj and rj[0] == 6 and rj[1] is r[1]:
                         hi_add[i] = ((ins[i] & 0xffff) << 16) + s16(ins[j] & 0xffff)
                         break
                 else:
-                    raise Exception('unpaired HI16 at %x' % (start + 4 * i))
+                    # HI16 in a delay slot whose LO16 sits on a branch
+                    # target earlier in the function (T23 tiziano_ae_init)
+                    for j in range(i - 1, -1, -1):
+                        rj = rel[j]
+                        if rj and rj[0] == 6 and rj[1] is r[1]:
+                            hi_add[i] = ((ins[i] & 0xffff) << 16) + s16(ins[j] & 0xffff)
+                            break
+                    else:
+                        raise Exception('unpaired HI16 at %x' % (start + 4 * i))
         lo_add = {}
         def _writes(w):
             op = w >> 26
@@ -189,7 +205,7 @@ class Lifter:
                 return (w >> 11) & 31
             if op == 28:
                 return (w >> 11) & 31 if (w & 63) in (2, 32) else None
-            if op in (8, 9, 10, 11, 12, 13, 14, 15, 32, 33, 34, 35, 36, 37, 38):
+            if op in (8, 9, 10, 11, 12, 13, 14, 15, 32, 33, 34, 35, 36, 37, 38):  # 15 = lui
                 return (w >> 16) & 31
             if op == 3: return 31
             return None
@@ -208,7 +224,12 @@ class Lifter:
                             break
                         if (wj >> 26) == 15:
                             break
+                        if (wj >> 26) == 0 and (wj & 63) in (33, 37) and (wj >> 16) & 31 == 0:
+                            # move base, rs: follow the copy (T23 tiziano_ae_init)
+                            base = (wj >> 21) & 31
                         continue
+                if found is not None and rel[found][1] is not r[1]:
+                    found = None
                 if found is None:
                     for j in range(i - 1, -1, -1):
                         rj = rel[j]
@@ -247,9 +268,30 @@ class Lifter:
                     return '(csp + %d)' % (imm - frame)
                 return '(sp_base + %d)' % imm
             return '(%s + (uint32_t)%d)' % (reg(rs), imm)
+        def const_base(i, rs):
+            # rs still holds exactly the value of its paired lui: same basic
+            # block, no write to rs, no call or jump in between, lui not in
+            # the (annulled on fall-through) delay slot of a branch-likely
+            f = lo_lui.get(i)
+            if f is None or f >= i or (ins[f] >> 26) != 15 or (ins[f] >> 16) & 31 != rs:
+                return False
+            if f > 0:
+                wp = ins[f - 1]; opp = wp >> 26; rtp = (wp >> 16) & 31
+                if opp in (20, 21, 22, 23) or (opp == 1 and rtp in (2, 3, 18, 19)):
+                    return False
+            for k in range(f + 1, i + 1):
+                if k in targets:
+                    return False
+            for k in range(f + 1, i):
+                wk = ins[k]; opk = wk >> 26
+                if writes_reg(wk) == rs or opk in (2, 3) or (opk == 0 and (wk & 63) in (8, 9)):
+                    return False
+            return True
         def lo_full(i, rs):
             r = rel[i]
             va = self.resolve(r[1], lo_add[i]) & 0xffffffff
+            if os.environ.get('LIFT_CONST_XLATE', '1') == '1' and const_base(i, rs):
+                return 'LIFT_XLATE_K(0x%08xu)' % va
             return 'LIFT_XLATE(%s + (uint32_t)%d)' % (reg(rs), s16(va & 0xffff))
         def immexpr(i, default):
             r = rel[i]
@@ -267,7 +309,7 @@ class Lifter:
                 return (w >> 11) & 31 if (w & 63) in (2, 32) else None
             if op == 31:
                 return (w >> 16) & 31 if (w & 63) in (0, 4) else (w >> 11) & 31
-            if op in (8, 9, 10, 11, 12, 13, 14, 15, 32, 33, 34, 35, 36, 37, 38):
+            if op in (8, 9, 10, 11, 12, 13, 14, 15, 32, 33, 34, 35, 36, 37, 38):  # 15 = lui
                 return (w >> 16) & 31
             if op == 3: return 31
             return None
@@ -384,16 +426,19 @@ class Lifter:
             if op in (7, 23): return '(int32_t)%s > 0' % reg(rs)
             if op == 1:
                 return ('(int32_t)%s < 0' if rt in (0, 2) else '(int32_t)%s >= 0') % reg(rs)
-        def call(i):
+        def call(i, tail=False):
             w = ins[i]
             r = rel[i]
+            # tail call (jr t9): sp is back at the entry value, so stack
+            # arguments live in the caller's area (opt-in, T23 lift)
+            spv = 'csp' if (tail and getattr(self, 'tail_csp', False)) else 'sp_base'
             if w >> 26 == 3:
                 sym = r[1]
             else:
                 sym = last_set_sym(i, (w >> 21) & 31)
             if not sym:
                 self.dispatch_used = True
-                P('{ uint64_t q_ = %sdispatch(%s, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }' % (self.prefix, reg((w >> 21) & 31)))
+                P('{ uint64_t q_ = %sdispatch(%s, r_a0, r_a1, r_a2, r_a3, %s); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }' % (self.prefix, reg((w >> 21) & 31), spv))
                 return
             name = sym['name']
             if sym['shndx'] == 0 and name not in self.extern_c:
@@ -404,7 +449,7 @@ class Lifter:
                 P(self.extern_c[name])
             else:
                 self.need.append(name)
-                P('{ uint64_t q_ = %s%s(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }' % (self.prefix, name))
+                P('{ uint64_t q_ = %s%s(r_a0, r_a1, r_a2, r_a3, %s); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }' % (self.prefix, name, spv))
         heap = fname in set(x for x in os.environ.get('LIFT_HEAP_FRAMES', '').split(',') if x)
         if heap and frame > 256:
             # per-call kzalloc'd frame (lift_frame_alloc, see heapframes.py):
@@ -475,7 +520,7 @@ class Lifter:
             if op == 0 and fn == 8:  # jr
                 emit(i + 1)
                 if rs == 25:
-                    call(i); P('return ((uint64_t)r_v1 << 32) | r_v0;'); i += 2; continue
+                    call(i, tail=True); P('return ((uint64_t)r_v1 << 32) | r_v0;'); i += 2; continue
                 if rs != 31:
                     cands = sorted(t for t in e.rodata_text_targets() if start <= t < start + size)
                     if not cands: raise Exception('jr reg in %s at %x' % (fname, start + 4 * i))
