@@ -24697,6 +24697,7 @@ apical_isp_autozoom_s_attr_isra_280x108:
     return 0;
 }
 
+#if 0 /* decompiled setter: unreachable, writes past its stack frame */
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000005f60 origin=fragment_seed original=apical_isp_gamma_s_attr.isra.32 */
 #ifndef REGTRACE_KERNEL_TREE_BUILD
 int32_t apical_isp_gamma_s_attr_isra_32(uint32_t a0) __asm__("apical_isp_gamma_s_attr.isra.32");
@@ -24775,7 +24776,9 @@ apical_isp_gamma_s_attr_isra_320xa8:
 
     return 0;
 }
+#endif /* decompiled setter: unreachable, writes past its stack frame */
 
+#if 0 /* decompiled setter: unreachable, writes past its stack frame */
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000006010 origin=fragment_seed original=apical_isp_expr_s_ctrl.isra.33 */
 #ifndef REGTRACE_KERNEL_TREE_BUILD
 int32_t apical_isp_expr_s_ctrl_isra_33(uintptr_t a0, uint32_t a1) __asm__("apical_isp_expr_s_ctrl.isra.33");
@@ -24931,6 +24934,7 @@ apical_isp_expr_s_ctrl_isra_330x130:
 
     return 0;
 }
+#endif /* decompiled setter: unreachable, writes past its stack frame */
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000006150 origin=model_output original=apical_isp_ae_s_roi.isra.34 */
 #ifndef REGTRACE_KERNEL_TREE_BUILD
@@ -25528,6 +25532,7 @@ apical_isp_af_weight_s_attr_isra_490x140:
     return 0;
 }
 
+#if 0 /* decompiled setter: unreachable, writes past its stack frame */
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000067b0 origin=fragment_seed original=apical_isp_awb_zone_weight_s_attr.isra.68 */
 #ifndef REGTRACE_KERNEL_TREE_BUILD
 int32_t apical_isp_awb_zone_weight_s_attr_isra_68(uint32_t a0) __asm__("apical_isp_awb_zone_weight_s_attr.isra.68");
@@ -25584,6 +25589,7 @@ apical_isp_awb_zone_weight_s_attr_isra_680x90:
 
     return 0;
 }
+#endif /* decompiled setter: unreachable, writes past its stack frame */
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000006854 origin=fragment_seed original=apical_isp_core_ops_s_ctrl */
 int32_t apical_isp_core_ops_s_ctrl(uintptr_t a0, uintptr_t a1, uint32_t a2)
@@ -26012,7 +26018,9 @@ apical_isp_core_ops_s_ctrl0x1dc:
     if (_bc_a0_87) { goto apical_isp_core_ops_s_ctrl0x1404; }
 
     /* fragment 88: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)apical_isp_expr_s_ctrl_isra_33)(*(uint32_t *)((char *)(s0) + 0), *(uint32_t *)((char *)(a1) + 4)); /* jalr target resolved by relocation */
+    /* apical_isp_expr_s_ctrl.isra.33 is compiled out (see there); the
+     * callers only pass the image controls handled in the switch above. */
+    v0 = (uintptr_t *)(long)-EINVAL;
 
     /* fragment 89: Branch */
     s1 = v0;
