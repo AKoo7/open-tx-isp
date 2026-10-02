@@ -10624,19 +10624,29 @@ uint32_t cmos_fsm_process_interrupt(int32_t *arg1, char arg2)
 		APICAL_WRITE_32(0x1a0,
 			(APICAL_READ_32(0x1a0) & 0xfffff000) | (value & 0xfff));
 
+		/*
+		 * Firmware cmos_func.c.o 0xd18..0xd8c: the AWB output gains
+		 * (AWB fsm at +0x748, gains +0x760..+0x76c) become the four
+		 * channel gains in that order (gain 0 -> 0x300), with 17 bits of
+		 * fraction in sensor modes 1 and 2 (16 otherwise), like the
+		 * exposure gain above. The recovered loop reversed the order
+		 * and the precision.
+		 */
 		for (i = 4; i != 0; i--) {
 			int32_t table_value = *(int32_t *)((char *)sensor +
 				0x748 + i * -4 + 0x770);
 			uint32_t mode = *(uint8_t *)((char *)sensor + 0x1524);
 
 			value = math_exp2(table_value,
-				(mode - 1) < 2 ? 0x10 : 0x11, 8);
-			exposure_table[i - 1] = value >= 0x1000 ?
+				(mode - 1) < 2 ? 0x11 : 0x10, 8);
+			exposure_table[4 - i] = value >= 0x1000 ?
 				0xfff : (int16_t)value;
 		}
 
 		sensor_mode = *(uint8_t *)((char *)sensor + 0x1524);
-		if (2 <= (sensor_mode - 1)) {
+		/* black-level compensation in sensor modes 1..3 (firmware
+		 * 0xd90: skipped when mode - 1 > 2) */
+		if ((sensor_mode - 1) <= 2) {
 			int16_t modulation[4];
 
 			modulation[0] = APICAL_READ_32(0x310) & 0xfff;
@@ -19578,7 +19588,8 @@ int32_t awb_read_statistics(void *arg1)
     *(uint32_t *)(base + 10) = 0;
 
     while (i < count) {
-        raw = APICAL_READ_32((((uintptr_t)i << 1) + 0x1d0) << 2);
+        /* firmware 0xe4c: statistics bank at 0x8000 */
+        raw = APICAL_READ_32(((((uintptr_t)i << 1) + 0x1d0) << 2) + 0x8000);
         val1 = ((raw & 0xfff) * *(uint16_t *)((uintptr_t)base + 12)) >> 8;
         val1 &= 0xffff;
         if (val1 == 0)
@@ -19593,7 +19604,7 @@ int32_t awb_read_statistics(void *arg1)
         dst[0] = (uint16_t)(0xffff / val1);
         dst[1] = (uint16_t)(0xffff / val2);
 
-        raw2 = APICAL_READ_32((((uintptr_t)i << 1) + 0x1d1) << 2);
+        raw2 = APICAL_READ_32(((((uintptr_t)i << 1) + 0x1d1) << 2) + 0x8000);
         sum = *(uint32_t *)(base + 10);
         *(uint32_t *)(dst + 2) = raw2;
         *(uint32_t *)(base + 10) = sum + raw2;
