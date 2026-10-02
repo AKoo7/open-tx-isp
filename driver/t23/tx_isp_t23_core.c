@@ -9789,6 +9789,8 @@ static uint regtrace_t23_source_lsc_ct = 5000U;
 static uint regtrace_t23_source_lsc_runtime_ct = 5000U;
 static uint regtrace_t23_source_lsc_last_ct = 5000U;
 static uint regtrace_t23_source_lsc_event_count;
+/* LUT rewrites caused by a mesh strength change with the gain */
+static uint regtrace_t23_source_lsc_gain_events;
 static bool regtrace_t23_source_ae_stats_init = true;
 static uint regtrace_t23_source_ae_stats_irqs;
 static uint regtrace_t23_source_ae_stats_snapshots;
@@ -10125,6 +10127,8 @@ module_param_named(source_lsc_runtime_ct,
                    regtrace_t23_source_lsc_runtime_ct, uint, 0444);
 module_param_named(source_lsc_event_count,
                    regtrace_t23_source_lsc_event_count, uint, 0444);
+module_param_named(source_lsc_gain_events,
+                   regtrace_t23_source_lsc_gain_events, uint, 0444);
 module_param_named(source_ae_stats_init,
                    regtrace_t23_source_ae_stats_init, bool, 0644);
 module_param_named(source_ae_stats_irqs,
@@ -12888,6 +12892,7 @@ int32_t tisp_bcsh_ct_update(uintptr_t ignored, uint32_t ct);
 int32_t tiziano_bcsh_init(void);
 int32_t tisp_lsc_ct_update(uint32_t ct);
 int32_t tisp_lsc_write_lut_datas(void);
+int32_t tisp_lsc_gain_update(uint32_t a0);
 int32_t tisp_lsc_mirror_flip(uint32_t unused, uint32_t width,
                              uint32_t height, uint32_t flip,
                              uint32_t mirror);
@@ -13894,6 +13899,19 @@ static int regtrace_t23_source_apply_total_gain_value(uint32_t gain_q16,
         tisp_sdns_refresh(tgain);
     if (regtrace_t23_source_sharpen_initialized)
         tisp_sharpen_refresh(tgain);
+    /*
+     * OEM tisp_long_tgain_update -> tisp_lsc_gain_update stores the gain;
+     * the OEM frame-done interrupt (tisp_ipc_frame_done_interrupt_static)
+     * then runs tisp_lsc_write_lut_datas unless LSC is bypassed (0x0c bit
+     * 6).  This driver does not hook that interrupt, so the LUT check runs
+     * here, after the gain change, in the same (process) context as the
+     * CT-driven rewrite from the AWB work.
+     */
+    tisp_lsc_gain_update(tgain);
+    if (regtrace_t23_source_lsc_tuning_init &&
+        regtrace_t23_source_lsc_tables_initialized &&
+        !(system_reg_read(0xcU) & 0x40U))
+        tisp_lsc_write_lut_datas();
 
     regtrace_t23_dmsc_gain_q16 = gain_q16;
     regtrace_t23_tgain_log2 = tgain;
@@ -52191,10 +52209,12 @@ int32_t tisp_lsc_ct_update(uint32_t a0)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000021410 origin=fragment_seed original=tisp_lsc_gain_update */
 int32_t tisp_lsc_gain_update(uint32_t a0)
 {
-    if (a0 != (uint32_t)lsc_gain_curr) {
-        lsc_gain_curr = a0;
-        regtrace_t23_source_lsc_update_pending = true;
-    }
+    /*
+     * OEM: only stores the log2 total gain; tisp_lsc_write_lut_datas
+     * decides through tisp_lsc_judge_gain_update_flag whether the mesh
+     * strength, and so the LUT, changes.
+     */
+    lsc_gain_curr = a0;
     return 0;
 }
 
@@ -52429,27 +52449,25 @@ tisp_lsc_judge_ct_update_flag0xd8:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000217b8 origin=fragment_seed original=tisp_lsc_judge_gain_update_flag */
+/*
+ * OEM 0x217b8: 1 when the mesh strength interpolated at the stored gain
+ * differs from the last judged one.  Returns 0 while the previous result
+ * (lsc_gain_update_flag) is still 1, so a gain-driven rewrite is judged at
+ * most every other call.  Caller holds regtrace_t23_lsc_lut_lock.
+ */
 int32_t tisp_lsc_judge_gain_update_flag(void)
 {
-	uint32_t lsc_gain_update_flag_val;
-	uint32_t lsc_gain_curr;
-	int32_t *result;
-	uint32_t lsc_curr_str_value;
-	uint32_t lsc_last_str;
+	uint32_t gain = (uint32_t)lsc_gain_curr;
+	uint32_t strength;
 
-	lsc_gain_update_flag_val = *(uint8_t *)((char *)((char *)&lsc_a_lut + 0x1da4));
-	if (lsc_gain_update_flag_val == 1)
+	if (lsc_gain_update_flag == 1)
 		return 0;
-
-	lsc_gain_curr = *(uint32_t *)((char *)((char *)&lsc_a_lut + 0x1dbc));
-	result = tisp_simple_intp(lsc_gain_curr >> 16, lsc_gain_curr & 0xffff, (const uint32_t *)((char *)&lsc_mesh_str_now - 17472));
-	lsc_curr_str_value = result;
-
-	lsc_last_str = *(uint32_t *)((char *)((char *)&lsc_a_lut + 0x1db4));
-	if (lsc_curr_str_value == lsc_last_str)
+	strength = (uint32_t)tisp_simple_intp(gain >> 16, gain & 0xffffU,
+					      (void *)lsc_mesh_str);
+	lsc_curr_str = strength;
+	if (strength == (uint32_t)lsc_last_str)
 		return 0;
-
-	*(uint32_t *)((char *)((char *)&lsc_a_lut + 0x1db4)) = lsc_curr_str_value;
+	lsc_last_str = strength;
 	return 1;
 }
 
@@ -52525,20 +52543,34 @@ uint32_t regtrace_t23_lsc_scale_word(uint32_t value,
 int32_t tisp_lsc_write_lut_datas(void)
 {
     unsigned long flags;
-    uint32_t tgain = regtrace_t23_tgain_log2;
+    uint32_t tgain;
     uint32_t strength;
     uint32_t base;
     uint32_t ct;
     uint32_t i;
+    bool by_gain;
     int ret;
 
     ret = regtrace_t23_source_lsc_initialize_tables();
     if (ret)
         return ret;
     lsc_count++;
-    if (!regtrace_t23_source_lsc_update_pending)
-        return 0;
 
+    /*
+     * OEM: the CT flag and the gain flag (tisp_lsc_judge_gain_update_flag)
+     * are judged on every call, and either one rewrites the LUT.  Under the
+     * LUT lock: the AE and AWB work items and the ioctl paths all get here.
+     */
+    spin_lock_irqsave(&regtrace_t23_lsc_lut_lock, flags);
+    lsc_gain_update_flag = tisp_lsc_judge_gain_update_flag();
+    by_gain = lsc_gain_update_flag == 1 &&
+              !regtrace_t23_source_lsc_update_pending;
+    if (!regtrace_t23_source_lsc_update_pending && !by_gain) {
+        spin_unlock_irqrestore(&regtrace_t23_lsc_lut_lock, flags);
+        return 0;
+    }
+
+    tgain = (uint32_t)lsc_gain_curr;
     strength = tisp_simple_intp(
         tgain >> 16, tgain & 0xffffU,
         (void *)lsc_mesh_str);
@@ -52551,7 +52583,6 @@ int32_t tisp_lsc_write_lut_datas(void)
     else
         base = 0x100U;
 
-    spin_lock_irqsave(&regtrace_t23_lsc_lut_lock, flags);
     ct = regtrace_t23_source_lsc_runtime_ct;
     for (i = 0; i + 2U < regtrace_t23_source_lsc_lut_num; i += 3U) {
         uint32_t offset = (i / 3U) << 4;
@@ -52568,10 +52599,13 @@ int32_t tisp_lsc_write_lut_datas(void)
     }
     system_reg_write(0x2800cU, 0);
     regtrace_t23_source_lsc_update_pending = false;
+    if (by_gain)
+        regtrace_t23_source_lsc_gain_events++;
     spin_unlock_irqrestore(&regtrace_t23_lsc_lut_lock, flags);
-    printk(KERN_INFO
-           "tx_isp_t23_recovered: source LSC runtime CT%u tgain_log2=0x%x strength=%u committed (%u nodes)\n",
-           ct, tgain, strength,
+    printk_ratelimited(KERN_INFO
+           "tx_isp_t23_recovered: source LSC runtime CT%u tgain_log2=0x%x strength=%u by=%s gain_events=%u committed (%u nodes)\n",
+           ct, tgain, strength, by_gain ? "gain" : "ct",
+           regtrace_t23_source_lsc_gain_events,
            regtrace_t23_source_lsc_lut_num / 3U);
     return 0;
 }
