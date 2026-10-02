@@ -237,6 +237,15 @@ static long subdev_core_ops_release_all_sensor(struct tx_isp_video_in_device *vi
 		v4l2_warn(v4l2_dev, "the devnode does't have been opened.\n");
 		return -ISP_ERROR;
 	}
+	/* Like RELEASE_SENSOR: never drop the sensor of a running pipeline.
+	 * Only module removal drops an active sensor (drop_all_sensors). */
+	spin_lock(&vi->slock);
+	if (vi->active) {
+		spin_unlock(&vi->slock);
+		v4l2_warn(v4l2_dev, "the sensor is active, please stop it firstly.\n");
+		return -EBUSY;
+	}
+	spin_unlock(&vi->slock);
 	tx_isp_video_in_drop_all_sensors(vi);
 	return ISP_SUCCESS;
 }
