@@ -342,6 +342,11 @@ int tisp_s_adr_enable(int enable);
 int tisp_s_defog_enable(int enable);
 int tisp_s_ccm_attr(const void *in);
 static int tisp_get_csc_attr(uint32_t *buf);
+static int tisp_set_csc_attr(uint32_t *buf);
+static int tisp_get_blc_attr(uint32_t *out);
+extern int tisp_g_fcrop_control(char *arg1);
+extern int tisp_s_fcrop_control_user(const u32 *f);
+extern int tisp_s_scaler_level_control(u32 ch, u32 mode, u32 level);
 static void tisp_apply_hvflip(struct isp_tuning_data *tuning);
 int apical_isp_hvflip_update(void *arg1, int arg2);
 
@@ -3628,24 +3633,39 @@ void *isp_core_tuning_init(void *arg1);
 int tisp_init(void *sensor_info_arg, char *param_name);
 
 
-/* OEM CSC preset 0 (first 0x3c bytes copied by tx-isp-t31.ko).
- * The trailing 0xba dword in tuning_constants.h is not consumed by
- * tisp_set_csc_version(), which memcpy()s only 60 bytes. */
-static const int32_t tisp_csc_preset0[15] = {
-	0x132, 0x259, 0x75,
-	-0xad, -0x153, 0x200,
-	0x200, -0x1ad, -0x53,
-	0x00, 0x80,
-	0x00, 0xff, 0x00, 0xff,
+/* OEM CSC presets 0..3 (.data of tx-isp-t31.ko, 60 bytes each, only the
+ * first 15 dwords are consumed by tisp_set_csc_version()).  Preset 4 is the
+ * user preset: it starts out as a copy of preset 0 and is overwritten by
+ * tisp_set_user_csc().  Layout: 9 matrix coefficients, 2 offsets, 4 limits. */
+#define TISP_CSC_WORDS		15
+#define TISP_CSC_VERSION_USER	4
+static const int32_t tisp_csc_presets[4][TISP_CSC_WORDS] = {
+	{ 0x132, 0x259, 0x75, -0xad, -0x153, 0x200, 0x200, -0x1ad, -0x53,
+	  0x00, 0x80, 0x00, 0xff, 0x00, 0xff },
+	{ 0x106, 0x203, 0x64, -0x97, -0x129, 0x1c0, 0x1c0, -0x178, -0x49,
+	  0x10, 0x80, 0x10, 0xeb, 0x10, 0xf0 },
+	{ 0xda, 0x2dc, 0x4a, -0x75, -0x18b, 0x200, 0x200, -0x1d1, -0x2f,
+	  0x00, 0x80, 0x00, 0xff, 0x00, 0xff },
+	{ 0xba, 0x273, 0x3f, -0x67, -0x15a, 0x1c0, 0x1c0, -0x197, -0x29,
+	  0x10, 0x80, 0x10, 0xeb, 0x10, 0xf0 },
+};
+static int32_t tisp_csc_user_preset[TISP_CSC_WORDS] = {
+	0x132, 0x259, 0x75, -0xad, -0x153, 0x200, 0x200, -0x1ad, -0x53,
+	0x00, 0x80, 0x00, 0xff, 0x00, 0xff,
 };
 
-static int32_t tisp_csc_param_current[ARRAY_SIZE(tisp_csc_preset0)];
+static int32_t tisp_csc_param_current[TISP_CSC_WORDS];
 static uint32_t tisp_csc_version_now;
+static DEFINE_SPINLOCK(tisp_csc_lock);
 static int tisp_dmsc_wdr_enabled;
 
 static inline u32 tisp_csc_abs10(int32_t value)
 {
-	return (u32)(value < 0 ? -value : value) & 0x3ff;
+	u32 mag = (u32)value;
+
+	if (value < 0)
+		mag = 0U - mag;	/* no signed overflow for INT_MIN */
+	return mag & 0x3ff;
 }
 
 static inline u32 tisp_csc_pack_triplet(int32_t c0, int32_t c1, int32_t c2)
@@ -3655,32 +3675,27 @@ static inline u32 tisp_csc_pack_triplet(int32_t c0, int32_t c1, int32_t c2)
 	       (tisp_csc_abs10(c2) << 20);
 }
 
-static const int32_t *tisp_csc_select_preset(int version, int *effective_version)
-{
-	if (effective_version)
-		*effective_version = 0;
-
-	switch (version) {
-	case 0:
-		return tisp_csc_preset0;
-	default:
-		pr_warn_once("tisp_set_csc_version: CSC preset %d not implemented yet, falling back to OEM preset 0\n",
-			     version);
-		return tisp_csc_preset0;
-	}
-}
-
-
+/* OEM EXACT: tisp_set_csc_version (0x41eb0).  Versions 0..3 select a built-in
+ * preset, 4 the user preset; anything else is rejected with -1. */
 int tisp_set_csc_version(int version)
 {
-	const int32_t *preset;
-	int effective_version = 0;
+	int32_t preset[TISP_CSC_WORDS];
+	unsigned long flags;
+	u8 ver = (u8)version;
 
-	preset = tisp_csc_select_preset(version, &effective_version);
+	if (ver > TISP_CSC_VERSION_USER) {
+		pr_err("tisp_set_csc_version: invalid CSC version %d\n", version);
+		return -1;
+	}
+
+	spin_lock_irqsave(&tisp_csc_lock, flags);
+	memcpy(preset, ver == TISP_CSC_VERSION_USER ? tisp_csc_user_preset :
+	       tisp_csc_presets[ver], sizeof(preset));
 	memcpy(tisp_csc_param_current, preset, sizeof(tisp_csc_param_current));
-	tisp_csc_version_now = effective_version;
+	tisp_csc_version_now = ver;
+	spin_unlock_irqrestore(&tisp_csc_lock, flags);
 
-	/* OEM BN flow: enable CSC sign/control word, clear the adjacent control
+	/* OEM flow: enable CSC sign/control word, clear the adjacent control
 	 * slot, then write three packed 3x10-bit magnitude rows plus offset/limit
 	 * words. Negative coefficient positions are implied by the fixed 0x1f mode. */
 	system_reg_write(0x6000, 0x1f);
@@ -3690,13 +3705,13 @@ int tisp_set_csc_version(int version)
 	system_reg_write(0x6018, tisp_csc_pack_triplet(preset[6], preset[7], preset[8]));
 	system_reg_write(0x6020, ((u32)preset[9] & 0xff) |
 				 (((u32)preset[10] & 0xff) << 8));
-	system_reg_write(0x6030, ((u32)preset[11] & 0xff) |
-				 (((u32)preset[12] & 0xff) << 8) |
-				 (((u32)preset[13] & 0xff) << 16) |
-				 (((u32)preset[14] & 0xff) << 24));
+	/* OEM byte order: [7:0]=w13 [15:8]=w14 [23:16]=w11 [31:24]=w12 */
+	system_reg_write(0x6030, ((u32)preset[13] & 0xff) |
+				 (((u32)preset[14] & 0xff) << 8) |
+				 (((u32)preset[11] & 0xff) << 16) |
+				 (((u32)preset[12] & 0xff) << 24));
 
-	pr_info("tisp_set_csc_version: programmed CSC preset %d (requested %d)\n",
-		effective_version, version);
+	pr_info("tisp_set_csc_version: programmed CSC preset %d\n", ver);
 	return 1;
 }
 /* Use external system_reg_write from tx_isp_module.c that does real hardware writes */
@@ -9117,6 +9132,7 @@ static int apical_isp_core_ops_g_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
 
         case 0x80000a5: { /* OEM: tisp_get_blc_attr (0x14 bytes) */
             uint32_t blc[5] = {0};
+            tisp_get_blc_attr(blc);
             if (copy_to_user((void __user *)(unsigned long)ctrl->value, blc, 0x14))
                 ret = -EFAULT;
             break;
@@ -9132,6 +9148,7 @@ static int apical_isp_core_ops_g_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
 
         case 0x80000e3: { /* OEM: tisp_g_fcrop_control (0x14 bytes) */
             uint32_t fcrop[5] = {0};
+            tisp_g_fcrop_control((char *)fcrop);
             if (copy_to_user((void __user *)(unsigned long)ctrl->value, fcrop, 0x14))
                 ret = -EFAULT;
             break;
@@ -9786,7 +9803,31 @@ static int apical_isp_core_ops_s_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
                 ret = -EFAULT;
                 goto out;
             }
-            /* OEM: tisp_set_csc_attr — CSC not yet implemented */
+            /* Stock applies versions 0..3 as presets and 4 as user preset and
+             * silently ignores larger versions; reject those instead.  The HW
+             * masks coefficients to 10 bits magnitude and offsets/limits to 8
+             * bits, so reject values that would be silently truncated. */
+            if (csc_buf[0] > 4) {
+                ret = -EINVAL;
+                goto out;
+            }
+            if (csc_buf[0] == 4) {
+                int i;
+                for (i = 0; i < 9; i++) {
+                    int32_t c = (int32_t)csc_buf[1 + i];
+                    if (c < -0x3ff || c > 0x3ff) {
+                        ret = -EINVAL;
+                        goto out;
+                    }
+                }
+                for (i = 9; i < 15; i++) {
+                    if (csc_buf[1 + i] > 0xff) {
+                        ret = -EINVAL;
+                        goto out;
+                    }
+                }
+            }
+            tisp_set_csc_attr(csc_buf);
             break;
         }
 
@@ -9796,7 +9837,8 @@ static int apical_isp_core_ops_s_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
                 ret = -EFAULT;
                 goto out;
             }
-            ret = 0;
+            /* Stock ignores the result; report validation failures instead. */
+            ret = tisp_s_fcrop_control_user(fcrop);
             break;
         }
 
@@ -9848,7 +9890,8 @@ static int apical_isp_core_ops_s_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
                 ret = -EFAULT;
                 goto out;
             }
-            ret = 0;
+            /* scaler[0]=channel, [1]=mode (0 off/1 on), [2]=level (0..128) */
+            ret = tisp_s_scaler_level_control(scaler[0], scaler[1], scaler[2]);
             break;
         }
 
@@ -16935,7 +16978,19 @@ int tisp_g_mscaler_mask_attr(void *buf) {
 /* OEM EXACT: tisp_g_wb_zone (0x639b8) — calls tisp_awb_get_zone which copies tisp_wb_zone_attr (0x2a3 bytes) */
 int tisp_g_wb_zone(void *buf) { if (!buf) return -EINVAL; tisp_awb_get_zone(buf); return 0; }
 int tisp_set_fps(uint32_t fps) { return sensor_fps_control(fps); }
-int tisp_set_user_csc(void *buf) { (void)buf; return 0; }
+/* OEM EXACT: tisp_set_user_csc (0x42124) — store the 60-byte user CSC preset
+ * (15 dwords) and activate it as CSC version 4. */
+int tisp_set_user_csc(void *buf)
+{
+	unsigned long flags;
+
+	if (!buf)
+		return -EINVAL;
+	spin_lock_irqsave(&tisp_csc_lock, flags);
+	memcpy(tisp_csc_user_preset, buf, sizeof(tisp_csc_user_preset));
+	spin_unlock_irqrestore(&tisp_csc_lock, flags);
+	return tisp_set_csc_version(TISP_CSC_VERSION_USER);
+}
 
 /* OEM EXACT: tisp_ae_get_hist_custome (0x4f7a8)
  * Copies the last-captured AE histogram (0x42c bytes) under spinlock. */
@@ -32466,8 +32521,12 @@ static int tiziano_deflicker_expt_tune(uint32_t a, uint32_t b, uint32_t c, uint3
  * Decompiled from OEM at 0x42330. */
 static void tisp_get_current_csc(uint32_t *version_out, int32_t *params_out)
 {
+    unsigned long flags;
+
+    spin_lock_irqsave(&tisp_csc_lock, flags);
     *version_out = tisp_csc_version_now;
     memcpy(params_out, tisp_csc_param_current, sizeof(tisp_csc_param_current));
+    spin_unlock_irqrestore(&tisp_csc_lock, flags);
 }
 
 /* OEM EXACT: tisp_get_csc_attr — get CSC attributes.
@@ -32475,6 +32534,65 @@ static void tisp_get_current_csc(uint32_t *version_out, int32_t *params_out)
 static int tisp_get_csc_attr(uint32_t *buf)
 {
     tisp_get_current_csc(&buf[0], (int32_t *)&buf[1]);
+    return 0;
+}
+
+/* OEM EXACT: tisp_get_blc_attr (0x65d08) — read the five black-level values
+ * from the BLC registers.  The register window depends on whether modules
+ * 0 and 3 are both enabled (reg 0xc & 9 == 9: 0x1060.. else 0x1018..); the
+ * channel order of the five outputs depends on the Bayer pattern in reg 8,
+ * looked up in a 24-entry table of 3-bit channel indexes (OEM .rodata). */
+static const u16 tisp_blc_order[24] = {
+    0x4688, 0x4053, 0x44c1, 0x421a, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x2708, 0x2063, 0x16a0, 0x1113, 0x3501, 0x3222, 0x04e1, 0x031a,
+    0x3888, 0x3054, 0x28c1, 0x221c, 0x181a, 0x14c4, 0x0853, 0x068c,
+};
+
+static int tisp_get_blc_attr(uint32_t *out)
+{
+    uint32_t v[8] = {0}; /* order fields are 0..4; 8 slots keep & 7 in bounds */
+    uint32_t idx = system_reg_read(8) & 0x1f;
+    uint32_t order, r;
+
+    if (idx >= ARRAY_SIZE(tisp_blc_order))
+        idx = 0;
+    order = tisp_blc_order[idx];
+
+    if ((system_reg_read(0xc) & 9) == 9) {
+        v[0] = system_reg_read(0x1060) & 0xfff;
+        r = system_reg_read(0x1064);
+        v[1] = r & 0xfff;
+        v[2] = (r >> 16) & 0xfff;
+        r = system_reg_read(0x1068);
+        v[3] = r & 0xfff;
+        v[4] = (r >> 16) & 0xfff;
+    } else {
+        r = system_reg_read(0x1018);
+        v[0] = r & 0xfff;
+        v[1] = (r >> 16) & 0xfff;
+        r = system_reg_read(0x101c);
+        v[2] = r & 0xfff;
+        v[3] = (r >> 16) & 0xfff;
+        v[4] = system_reg_read(0x1020) & 0xfff;
+    }
+
+    out[0] = v[order & 7];
+    out[1] = v[(order >> 3) & 7];
+    out[2] = v[(order >> 6) & 7];
+    out[3] = v[(order >> 9) & 7];
+    out[4] = v[(order >> 12) & 7];
+    return 0;
+}
+
+/* OEM EXACT: tisp_set_csc_attr (0x6610c) — buf[0] is the CSC version; versions
+ * 0..3 select a built-in preset, version 4 carries a user preset in buf[1..15].
+ * Callers must have range-checked the user preset (see 0x80000a6 handler). */
+static int tisp_set_csc_attr(uint32_t *buf)
+{
+    if (buf[0] < TISP_CSC_VERSION_USER)
+        tisp_set_csc_version(buf[0]);
+    else if (buf[0] == TISP_CSC_VERSION_USER)
+        tisp_set_user_csc(&buf[1]);
     return 0;
 }
 

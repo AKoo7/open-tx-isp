@@ -3651,6 +3651,93 @@ int tisp_g_fcrop_control(char* arg1)
 }
 EXPORT_SYMBOL(tisp_g_fcrop_control);
 
+/**
+ * tisp_s_fcrop_control_user - validated entry for the FRONT_CROP set ioctl.
+ * @f: five dwords {enable, left, top, width, height} as the stock ioctl
+ *     passes to tisp_s_fcrop_control().
+ * Stock performs no range checks and ignores the return value; here the
+ * rectangle must be non-empty and lie inside the ISP input frame, otherwise
+ * -EINVAL is returned before any register or state is touched.
+ */
+int tisp_s_fcrop_control_user(const u32 *f)
+{
+    u32 isp_w, isp_h;
+
+    memcpy(&isp_w, tispinfo, sizeof(isp_w));
+    isp_h = data_b2f34;
+
+    if ((f[0] & 0xff) == 0)
+        return -EINVAL;
+    if (!isp_w || !isp_h)
+        return -EINVAL;
+    if (!f[3] || !f[4])
+        return -EINVAL;
+    if ((u64)f[1] + f[3] > isp_w || (u64)f[2] + f[4] > isp_h)
+        return -EINVAL;
+
+    return tisp_s_fcrop_control(f[0], f[1], f[2], f[3], f[4]);
+}
+
+/**
+ * tisp_s_scaler_level_control - OEM tisp_s_scaler_level_control (0x64150)
+ * @ch:    mscaler channel 0..2
+ * @mode:  0 = off (reset filter-level registers), 1 = set level
+ * @level: filter level, 0..128 (stock computes 3*level and accepts <= 384)
+ * Programs the channel's scaler level registers (base 0x9800 + ch*0x100 +
+ * 0x1c0..0x1cc) and re-latches 0x9804.  Channel must be enabled in msca_ch_en.
+ */
+int tisp_s_scaler_level_control(u32 ch, u32 mode, u32 level)
+{
+    u32 base, lo_a, hi_a, lo_b, hi_b, x;
+    u32 reg_a, reg_b;
+    u32 en;
+
+    if (ch > 2 || mode > 1 || (mode == 1 && level > 128))
+        return -EINVAL;
+
+    en = msca_ch_en;
+    if (en == ~0U)
+        en = 0;
+    if (!(en & (1U << ch))) {
+        msca_ch_en = en;
+        isp_printf(2, "scaler level: channel %u is not enabled\n", ch);
+        return -EINVAL;
+    }
+
+    base = 0x9800 + ch * 0x100;
+
+    if (mode == 0) {
+        lo_a = 0x200; hi_a = 0;
+        lo_b = 0;     hi_b = 0;
+        en &= ~((1U << (ch + 8)) | (1U << (ch + 11)));
+    } else {
+        x = level * 3;
+        lo_a = x + 128;
+        if (x <= 128) {
+            hi_a = 128 - x;
+            lo_b = hi_a;
+            hi_b = lo_a;
+        } else {
+            hi_a = 0;
+            lo_b = 0;
+            hi_b = 384 - x;
+        }
+        en |= (1U << (ch + 8)) | (1U << (ch + 11));
+    }
+
+    reg_a = (hi_a << 11) | lo_a;
+    reg_b = (hi_b << 11) | lo_b;
+    msca_ch_en = en;
+    system_reg_write(base + 0x1c0, reg_a);
+    system_reg_write(base + 0x1c4, reg_b);
+    system_reg_write(base + 0x1c8, reg_a);
+    system_reg_write(base + 0x1cc, reg_b);
+    msca_ch_en |= 0xf0000;
+    system_reg_write(0x9804, msca_ch_en);
+    return 0;
+}
+EXPORT_SYMBOL(tisp_s_scaler_level_control);
+
 
 /* ispcore_link_setup - EXACT Binary Ninja implementation */
 int ispcore_link_setup(struct tx_isp_dev *isp_dev, u32 flags)
