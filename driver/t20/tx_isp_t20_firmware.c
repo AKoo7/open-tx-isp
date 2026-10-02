@@ -949,7 +949,11 @@ static int32_t iir_coeff1;
 static int32_t iir_err0;
 static int32_t iir_err1;
 static const uint32_t fps_table[6] = { 5, 10, 15, 20, 25, 30 };
-static const uint8_t awb_idx_table[6] = { 0, 1, 2, 3, 4, 5 };
+/* firmware .rodata+204 (get_awb_idx 0x2828): AWB_CLOUDY (0x35) .. AWB_WARM_
+ * FLOURESCENT (0x3a) -> preset rows 1..6; DAY_LIGHT (0x34) and anything
+ * else -> row 0. The recovered table started at 0, giving each preset the
+ * row of the one before (INCANDESCENT got CLOUDY, SHADE got TWILIGHT). */
+static const uint8_t awb_idx_table[6] = { 1, 2, 3, 4, 5, 6 };
 /* OEM symbol at this address is stab.global_max_integration_time (u16 at
  * stab+26); the recovered firmware had mis-decoded it as a dangling function
  * pointer, so every scene_mode() write below was discarded instead of
