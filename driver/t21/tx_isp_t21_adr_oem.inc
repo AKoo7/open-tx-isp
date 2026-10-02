@@ -606,9 +606,21 @@ static const struct lift_va { uint32_t va, size; uintptr_t ours; } lift_vamap[] 
 	{ 0xe0000040u, 1u, (uintptr_t)((uintptr_t)&__ashldi3) },
 	{ 0xe0000050u, 1u, (uintptr_t)((uintptr_t)&div64_u64) },
 };
+/* Direct-mapped cache of the lookup below, keyed by address bits.  A hit is
+ * re-validated against the table (the entry must be the last object starting
+ * at or below va and va must lie within it), so a stale or racing slot can
+ * only cause a miss. */
+static uint16_t lift_xlate_cache[64];
 static uint32_t lift_xlate(uint32_t va)
 {
 	int lo = 0, hi = ARRAY_SIZE(lift_vamap) - 1, best = -1;
+	uint32_t h_ = (va >> 4) & 63;
+	int c_ = ACCESS_ONCE(lift_xlate_cache[h_]);
+
+	if (c_ < (int)ARRAY_SIZE(lift_vamap) && lift_vamap[c_].va <= va &&
+	    va - lift_vamap[c_].va <= lift_vamap[c_].size &&
+	    (c_ + 1 == (int)ARRAY_SIZE(lift_vamap) || lift_vamap[c_ + 1].va > va))
+		return (uint32_t)(lift_vamap[c_].ours + (va - lift_vamap[c_].va));
 
 	/* Last object starting at or below va: a pointer one past the end of
 	 * an object still maps to that object unless another one starts there. */
@@ -622,8 +634,10 @@ static uint32_t lift_xlate(uint32_t va)
 			hi = mid - 1;
 		}
 	}
-	if (best >= 0 && va - lift_vamap[best].va <= lift_vamap[best].size)
+	if (best >= 0 && va - lift_vamap[best].va <= lift_vamap[best].size) {
+		ACCESS_ONCE(lift_xlate_cache[h_]) = (uint16_t)best;
 		return (uint32_t)(lift_vamap[best].ours + (va - lift_vamap[best].va));
+	}
 	if (best + 1 < (int)ARRAY_SIZE(lift_vamap) &&
 	    lift_vamap[best + 1].va - va <= 64)
 		return (uint32_t)(lift_vamap[best + 1].ours -
@@ -639,7 +653,7 @@ static uint64_t L_tisp_adr_process(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, 
 	uint32_t r_at = 0, r_v0 = 0, r_v1 = 0, r_t0 = 0, r_t1 = 0, r_t2 = 0, r_t3 = 0, r_t4 = 0, r_t5 = 0, r_t6 = 0, r_t7 = 0, r_s0 = 0, r_s1 = 0, r_s2 = 0, r_s3 = 0, r_s4 = 0, r_s5 = 0, r_s6 = 0, r_s7 = 0, r_t8 = 0, r_t9 = 0, r_k0 = 0, r_k1 = 0, r_gp = 0, r_s8 = 0, r_ra = 0, r_hi = 0, r_lo = 0;
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_v0 = (uint32_t)(0x2020000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)28564));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tiziano_adr_algorithm + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 56) = r_s8;
 	*(uint32_t *)(uintptr_t)(sp_base + 52) = r_s7;
 	*(uint32_t *)(uintptr_t)(sp_base + 48) = r_s6;
@@ -652,7 +666,7 @@ static uint64_t L_tisp_adr_process(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, 
 	*(uint32_t *)(uintptr_t)(sp_base + 24) = r_s0;
 	r_s2 = (uint32_t)(0x14040000u);
 	{ uint64_t q_ = L_tiziano_adr_algorithm(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
-	r_s2 = (uint32_t)(LIFT_XLATE(r_s2 + (uint32_t)13292));
+	r_s2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&map_kneepoint_y + 0))) + 0u)));
 	r_s1 = (uint32_t)(0u + 0u);
 	r_s4 = (uint32_t)(0u + (uint32_t)6);
 	r_s5 = (uint32_t)(0u + (uint32_t)-8);
@@ -694,7 +708,7 @@ L_27684:
 	goto L_27624;
 L_27694:
 	r_s2 = (uint32_t)(0x14040000u);
-	r_s2 = (uint32_t)(LIFT_XLATE(r_s2 + (uint32_t)14268));
+	r_s2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&min_kneepoint_y + 0))) + 4u)));
 	r_s1 = (uint32_t)(0u + (uint32_t)3528);
 	r_s4 = (uint32_t)(0u + (uint32_t)3548);
 L_276a4:
@@ -710,9 +724,9 @@ L_276a4:
 	r_s2 = (uint32_t)(r_s2 + (uint32_t)8);
 	if (c_) goto L_276a4; }
 	r_v0 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)14304));
+	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&min_kneepoint_y + 0))) + 40u)));
 	r_s1 = (uint32_t)(0x14040000u);
-	r_s1 = (uint32_t)(LIFT_XLATE(r_s1 + (uint32_t)14368));
+	r_s1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ctc_kneepoint_x + 0))) + 0u)));
 	r_a0 = (uint32_t)(0u + (uint32_t)3548);
 	system_reg_write(r_a0, r_a1); r_v0 = 0;
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)8));
@@ -733,7 +747,7 @@ L_276a4:
 	r_a0 = (uint32_t)(0u + (uint32_t)3492);
 	r_s4 = (uint32_t)(0x14040000u);
 	system_reg_write(r_a0, r_a1); r_v0 = 0;
-	r_s4 = (uint32_t)(LIFT_XLATE(r_s4 + (uint32_t)12908));
+	r_s4 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&contrast_w_distance + 0))) + 0u)));
 	r_s0 = (uint32_t)(0u + (uint32_t)3360);
 	r_s2 = (uint32_t)(0u + (uint32_t)3488);
 	r_v0 = (uint32_t)(r_s4 + r_s0);
@@ -747,10 +761,10 @@ L_2773c:
 	r_v0 = (uint32_t)(r_s4 + r_s0);
 	if (c_) goto L_2773c; }
 	r_v0 = (uint32_t)(0x19010000u);
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)17020));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&param_adr_ct_par_array + 0))) + 0u)));
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v1 + (uint32_t)8));
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v1 + (uint32_t)4));
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)17020));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&param_adr_ct_par_array + 0))) + 0u)));
 	r_v1 = (uint32_t)(r_v1 << 8);
 	r_a1 = (uint32_t)(r_a1 << 16);
 	r_a1 = (uint32_t)(r_a1 | r_v1);
@@ -784,10 +798,10 @@ static uint64_t L_tiziano_adr_interrupt_static(uint32_t r_a0, uint32_t r_a1, uin
 	*(uint32_t *)(uintptr_t)(sp_base + 68) = r_s1;
 	*(uint32_t *)(uintptr_t)(sp_base + 64) = r_s0;
 	*(uint32_t *)(uintptr_t)(sp_base + 76) = r_ra;
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)11456));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&system_reg_read + 0))) + 0u)));
 	r_s1 = (uint32_t)(0x19000000u);
 	r_v0 = (uint32_t)system_reg_read(r_a0);
-	r_s2 = (uint32_t)(LIFT_XLATE(r_s1 + (uint32_t)9828));
+	r_s2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tispinfo + 0))) + 0u)));
 	r_s0 = (uint32_t)(r_v0 + 0u);
 	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s2 + (uint32_t)52));
 	{ int c_ = (r_s0 != r_v0);
@@ -796,12 +810,12 @@ static uint64_t L_tiziano_adr_interrupt_static(uint32_t r_a0, uint32_t r_a1, uin
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s2 + (uint32_t)48));
 	r_v0 = (uint32_t)(0xe0000000u);
 	r_a0 = (uint32_t)(0u + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&dma_cache_sync) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)4096);
 	r_a3 = (uint32_t)(0u + 0u);
 	dma_cache_sync(NULL, (void *)(uintptr_t)r_a1, r_a2, (enum dma_data_direction)r_a3); r_v0 = 0;
 	r_v0 = (uint32_t)(0x2020000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)27864));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tiziano_adr_get_data + 0))) + 0u)));
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s2 + (uint32_t)48));
 	{ uint64_t q_ = L_tiziano_adr_get_data(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_s2 = (uint32_t)(LIFT_XLATE(r_s1 + (uint32_t)9828));
@@ -814,14 +828,14 @@ L_26e94:
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s2 + (uint32_t)48));
 	r_v0 = (uint32_t)(0xe0000000u);
 	r_a0 = (uint32_t)(0u + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&dma_cache_sync) + 0u)));
 	r_a1 = (uint32_t)(r_a1 + (uint32_t)4096);
 	r_a2 = (uint32_t)(0u + (uint32_t)4096);
 	r_a3 = (uint32_t)(0u + 0u);
 	dma_cache_sync(NULL, (void *)(uintptr_t)r_a1, r_a2, (enum dma_data_direction)r_a3); r_v0 = 0;
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s2 + (uint32_t)48));
 	r_v0 = (uint32_t)(0x2020000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)27864));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tiziano_adr_get_data + 0))) + 0u)));
 	r_a0 = (uint32_t)(r_a0 + (uint32_t)4096);
 	{ uint64_t q_ = L_tiziano_adr_get_data(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_s2 = (uint32_t)(LIFT_XLATE(r_s1 + (uint32_t)9828));
@@ -834,14 +848,14 @@ L_26ed4:
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s2 + (uint32_t)48));
 	r_v0 = (uint32_t)(0xe0000000u);
 	r_a0 = (uint32_t)(0u + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&dma_cache_sync) + 0u)));
 	r_a1 = (uint32_t)(r_a1 + (uint32_t)8192);
 	r_a2 = (uint32_t)(0u + (uint32_t)4096);
 	r_a3 = (uint32_t)(0u + 0u);
 	dma_cache_sync(NULL, (void *)(uintptr_t)r_a1, r_a2, (enum dma_data_direction)r_a3); r_v0 = 0;
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s2 + (uint32_t)48));
 	r_v0 = (uint32_t)(0x2020000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)27864));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tiziano_adr_get_data + 0))) + 0u)));
 	r_a0 = (uint32_t)(r_a0 + (uint32_t)8192);
 	{ uint64_t q_ = L_tiziano_adr_get_data(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_s1 = (uint32_t)(LIFT_XLATE(r_s1 + (uint32_t)9828));
@@ -854,21 +868,21 @@ L_26f1c:
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)48));
 	r_v0 = (uint32_t)(0xe0000000u);
 	r_a0 = (uint32_t)(0u + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&dma_cache_sync) + 0u)));
 	r_a1 = (uint32_t)(r_a1 + (uint32_t)12288);
 	r_a2 = (uint32_t)(0u + (uint32_t)4096);
 	r_a3 = (uint32_t)(0u + 0u);
 	dma_cache_sync(NULL, (void *)(uintptr_t)r_a1, r_a2, (enum dma_data_direction)r_a3); r_v0 = 0;
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)48));
 	r_v0 = (uint32_t)(0x2020000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)27864));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tiziano_adr_get_data + 0))) + 0u)));
 	r_a0 = (uint32_t)(r_a0 + (uint32_t)12288);
 	{ uint64_t q_ = L_tiziano_adr_get_data(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(0u + (uint32_t)2);
 L_26f64:
 	*(uint32_t *)(uintptr_t)(sp_base + 24) = r_v0;
 	r_v0 = (uint32_t)(0x2010000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-4512));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_event_push + 0))) + 0u)));
 	r_a0 = (uint32_t)((sp_base + 16));
 	r_v0 = (uint32_t)tisp_event_push((void *)(uintptr_t)r_a0);
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 76));
@@ -890,10 +904,10 @@ static uint64_t L_tisp_adr_ev_update(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2
 	r_v0 = (uint32_t)(0x19010000u);
 	r_a1 = (uint32_t)(r_a1 << 22);
 	r_a0 = (uint32_t)(r_a0 >> 10);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)17368) = r_v1;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_adr_ev_changed + 0))) + 0u)) = r_v1;
 	r_a0 = (uint32_t)(r_a1 | r_a0);
 	r_v0 = (uint32_t)(0x19010000u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)17372) = r_a0;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_adr_ev_now + 0))) + 0u)) = r_a0;
 	r_v0 = (uint32_t)(0u + 0u);
 	return ((uint64_t)r_v1 << 32) | r_v0;
 	return ((uint64_t)r_v1 << 32) | r_v0;
@@ -911,8 +925,8 @@ static uint64_t L_tiziano_adr_get_data(uint32_t r_a0, uint32_t r_a1, uint32_t r_
 	r_t0 = (uint32_t)(r_a0 + 0u);
 	r_a1 = (uint32_t)(0u + 0u);
 	r_t4 = (uint32_t)(0u + (uint32_t)5);
-	r_t3 = (uint32_t)(LIFT_XLATE(r_t3 + (uint32_t)15332));
-	r_t2 = (uint32_t)(LIFT_XLATE(r_t2 + (uint32_t)15732));
+	r_t3 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&adr_block_hist + 0))) + 0u)));
+	r_t2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&adr_block_y + 0))) + 0u)));
 	r_t5 = (uint32_t)(r_t5 | 0xffff);
 	r_t6 = (uint32_t)(0u + (uint32_t)80);
 	r_t7 = (uint32_t)(0u + (uint32_t)4);
@@ -956,9 +970,9 @@ L_26d60:
 L_26d88:
 	r_a1 = (uint32_t)(0x19010000u);
 	r_v0 = (uint32_t)(0x19010000u);
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)13284));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&adr_hist + 0))) + 0u)));
 	r_v1 = (uint32_t)(r_a0 + (uint32_t)168);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)13300));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&adr_hist + 0))) + 16u)));
 	r_a2 = (uint32_t)(r_a2 + (uint32_t)2056);
 L_26da0:
 	r_a3 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v1 + (uint32_t)0));
@@ -1005,17 +1019,17 @@ static uint64_t L_tisp_s_adr_str_internal(uint32_t r_a0, uint32_t r_a1, uint32_t
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_v0 = (uint32_t)(0x14040000u);
 	r_v1 = (uint32_t)(0x19010000u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)15124) = r_a0;
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)17152));
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&adr_ratio + 0))) + 0u)) = r_a0;
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&adr_mapb4_list + 0))) + 0u)));
 	r_v0 = (uint32_t)(0x14010000u);
 	r_a3 = (uint32_t)(0x19010000u);
 	r_a2 = (uint32_t)(0x19010000u);
 	r_a1 = (uint32_t)(0x19010000u);
 	r_t0 = (uint32_t)(r_a0 + (uint32_t)-128);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)22256));
-	r_a3 = (uint32_t)(LIFT_XLATE(r_a3 + (uint32_t)17260));
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)17224));
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)17188));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tparams + 0))) + 85152u)));
+	r_a3 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&adr_mapb1_list + 0))) + 0u)));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&adr_mapb2_list + 0))) + 0u)));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&adr_mapb3_list + 0))) + 0u)));
 	r_t3 = (uint32_t)(r_v1 + (uint32_t)36);
 	r_t4 = (uint32_t)(r_a0 < (uint32_t)129);
 	r_t5 = (uint32_t)(0u + (uint32_t)450);
@@ -1083,13 +1097,13 @@ L_28aac:
 	r_a1 = (uint32_t)(r_a1 + (uint32_t)4);
 	if (c_) goto L_289f0; }
 	r_v0 = (uint32_t)(0x2020000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)30648));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tiziano_adr_params_init + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_ra;
 	{ uint64_t q_ = L_tiziano_adr_params_init(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 20));
 	r_v1 = (uint32_t)(0u + (uint32_t)1);
 	r_v0 = (uint32_t)(0x19010000u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)17368) = r_v1;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_adr_ev_changed + 0))) + 0u)) = r_v1;
 	return ((uint64_t)r_v1 << 32) | r_v0;
 	return ((uint64_t)r_v1 << 32) | r_v0;
 }
@@ -1101,7 +1115,7 @@ static uint64_t L_tisp_defog_process(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2
 	uint32_t r_at = 0, r_v0 = 0, r_v1 = 0, r_t0 = 0, r_t1 = 0, r_t2 = 0, r_t3 = 0, r_t4 = 0, r_t5 = 0, r_t6 = 0, r_t7 = 0, r_s0 = 0, r_s1 = 0, r_s2 = 0, r_s3 = 0, r_s4 = 0, r_s5 = 0, r_s6 = 0, r_s7 = 0, r_t8 = 0, r_t9 = 0, r_k0 = 0, r_k1 = 0, r_gp = 0, r_s8 = 0, r_ra = 0, r_hi = 0, r_lo = 0;
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_v0 = (uint32_t)(0x2020000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)19756));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tiziano_defog_algorithm + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_ra;
 	{ uint64_t q_ = L_tiziano_defog_algorithm(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 20));
@@ -1122,10 +1136,10 @@ static uint64_t L_tiziano_defog_interrupt_static(uint32_t r_a0, uint32_t r_a1, u
 	*(uint32_t *)(uintptr_t)(sp_base + 68) = r_s1;
 	*(uint32_t *)(uintptr_t)(sp_base + 64) = r_s0;
 	*(uint32_t *)(uintptr_t)(sp_base + 76) = r_ra;
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)11456));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&system_reg_read + 0))) + 0u)));
 	r_s1 = (uint32_t)(0x19000000u);
 	r_v0 = (uint32_t)system_reg_read(r_a0);
-	r_s2 = (uint32_t)(LIFT_XLATE(r_s1 + (uint32_t)9828));
+	r_s2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tispinfo + 0))) + 0u)));
 	r_s0 = (uint32_t)(r_v0 + 0u);
 	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s2 + (uint32_t)64));
 	{ int c_ = (r_s0 != r_v0);
@@ -1134,12 +1148,12 @@ static uint64_t L_tiziano_defog_interrupt_static(uint32_t r_a0, uint32_t r_a1, u
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s2 + (uint32_t)60));
 	r_v0 = (uint32_t)(0xe0000000u);
 	r_a0 = (uint32_t)(0u + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&dma_cache_sync) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)4096);
 	r_a3 = (uint32_t)(0u + 0u);
 	dma_cache_sync(NULL, (void *)(uintptr_t)r_a1, r_a2, (enum dma_data_direction)r_a3); r_v0 = 0;
 	r_v0 = (uint32_t)(0x2020000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)19112));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tiziano_defog_get_data + 0))) + 0u)));
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s2 + (uint32_t)60));
 	{ uint64_t q_ = L_tiziano_defog_get_data(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_s2 = (uint32_t)(LIFT_XLATE(r_s1 + (uint32_t)9828));
@@ -1152,14 +1166,14 @@ L_24c2c:
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s2 + (uint32_t)60));
 	r_v0 = (uint32_t)(0xe0000000u);
 	r_a0 = (uint32_t)(0u + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&dma_cache_sync) + 0u)));
 	r_a1 = (uint32_t)(r_a1 + (uint32_t)4096);
 	r_a2 = (uint32_t)(0u + (uint32_t)4096);
 	r_a3 = (uint32_t)(0u + 0u);
 	dma_cache_sync(NULL, (void *)(uintptr_t)r_a1, r_a2, (enum dma_data_direction)r_a3); r_v0 = 0;
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s2 + (uint32_t)60));
 	r_v0 = (uint32_t)(0x2020000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)19112));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tiziano_defog_get_data + 0))) + 0u)));
 	r_a0 = (uint32_t)(r_a0 + (uint32_t)4096);
 	{ uint64_t q_ = L_tiziano_defog_get_data(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_s2 = (uint32_t)(LIFT_XLATE(r_s1 + (uint32_t)9828));
@@ -1172,14 +1186,14 @@ L_24c6c:
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s2 + (uint32_t)60));
 	r_v0 = (uint32_t)(0xe0000000u);
 	r_a0 = (uint32_t)(0u + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&dma_cache_sync) + 0u)));
 	r_a1 = (uint32_t)(r_a1 + (uint32_t)8192);
 	r_a2 = (uint32_t)(0u + (uint32_t)4096);
 	r_a3 = (uint32_t)(0u + 0u);
 	dma_cache_sync(NULL, (void *)(uintptr_t)r_a1, r_a2, (enum dma_data_direction)r_a3); r_v0 = 0;
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s2 + (uint32_t)60));
 	r_v0 = (uint32_t)(0x2020000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)19112));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tiziano_defog_get_data + 0))) + 0u)));
 	r_a0 = (uint32_t)(r_a0 + (uint32_t)8192);
 	{ uint64_t q_ = L_tiziano_defog_get_data(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_s1 = (uint32_t)(LIFT_XLATE(r_s1 + (uint32_t)9828));
@@ -1192,21 +1206,21 @@ L_24cb4:
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)60));
 	r_v0 = (uint32_t)(0xe0000000u);
 	r_a0 = (uint32_t)(0u + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&dma_cache_sync) + 0u)));
 	r_a1 = (uint32_t)(r_a1 + (uint32_t)12288);
 	r_a2 = (uint32_t)(0u + (uint32_t)4096);
 	r_a3 = (uint32_t)(0u + 0u);
 	dma_cache_sync(NULL, (void *)(uintptr_t)r_a1, r_a2, (enum dma_data_direction)r_a3); r_v0 = 0;
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)60));
 	r_v0 = (uint32_t)(0x2020000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)19112));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tiziano_defog_get_data + 0))) + 0u)));
 	r_a0 = (uint32_t)(r_a0 + (uint32_t)12288);
 	{ uint64_t q_ = L_tiziano_defog_get_data(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(0u + (uint32_t)3);
 L_24cfc:
 	*(uint32_t *)(uintptr_t)(sp_base + 24) = r_v0;
 	r_v0 = (uint32_t)(0x2010000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-4512));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_event_push + 0))) + 0u)));
 	r_a0 = (uint32_t)((sp_base + 16));
 	r_v0 = (uint32_t)tisp_event_push((void *)(uintptr_t)r_a0);
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 76));
@@ -1228,10 +1242,10 @@ static uint64_t L_tisp_defog_ev_update(uint32_t r_a0, uint32_t r_a1, uint32_t r_
 	r_v0 = (uint32_t)(0x19010000u);
 	r_a1 = (uint32_t)(r_a1 << 22);
 	r_a0 = (uint32_t)(r_a0 >> 10);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)13228) = r_v1;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_defog_ev_changed + 0))) + 0u)) = r_v1;
 	r_a0 = (uint32_t)(r_a1 | r_a0);
 	r_v0 = (uint32_t)(0x19010000u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)13232) = r_a0;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_defog_ev_now + 0))) + 0u)) = r_a0;
 	r_v0 = (uint32_t)(0u + 0u);
 	return ((uint64_t)r_v1 << 32) | r_v0;
 	return ((uint64_t)r_v1 << 32) | r_v0;
@@ -1257,13 +1271,13 @@ static uint64_t L_tiziano_defog_get_data(uint32_t r_a0, uint32_t r_a1, uint32_t 
 	r_v1 = (uint32_t)(0u + 0u);
 	r_t2 = (uint32_t)(0u + (uint32_t)20);
 	r_s0 = (uint32_t)(0u + (uint32_t)10);
-	r_t9 = (uint32_t)(LIFT_XLATE(r_t9 + (uint32_t)10576));
+	r_t9 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_meam_block_b + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_a1 | 0xffff);
-	r_t8 = (uint32_t)(LIFT_XLATE(r_t8 + (uint32_t)11376));
-	r_t7 = (uint32_t)(LIFT_XLATE(r_t7 + (uint32_t)12176));
-	r_t6 = (uint32_t)(LIFT_XLATE(r_t6 + (uint32_t)9776));
-	r_t5 = (uint32_t)(LIFT_XLATE(r_t5 + (uint32_t)8176));
-	r_t4 = (uint32_t)(LIFT_XLATE(r_t4 + (uint32_t)8976));
+	r_t8 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_meam_block_g + 0))) + 0u)));
+	r_t7 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_meam_block_r + 0))) + 0u)));
+	r_t6 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_meam_block_y + 0))) + 0u)));
+	r_t5 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_detial_block + 0))) + 0u)));
+	r_t4 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_variance_block + 0))) + 0u)));
 	r_t3 = (uint32_t)(0u + (uint32_t)200);
 L_24b04:
 	if (r_t2) { r_lo = (uint32_t)((int32_t)r_v1 / (int32_t)r_t2); r_hi = (uint32_t)((int32_t)r_v1 % (int32_t)r_t2); }
@@ -1321,11 +1335,11 @@ static uint64_t L_tisp_ae_process(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, u
 	uint32_t r_at = 0, r_v0 = 0, r_v1 = 0, r_t0 = 0, r_t1 = 0, r_t2 = 0, r_t3 = 0, r_t4 = 0, r_t5 = 0, r_t6 = 0, r_t7 = 0, r_s0 = 0, r_s1 = 0, r_s2 = 0, r_s3 = 0, r_s4 = 0, r_s5 = 0, r_s6 = 0, r_s7 = 0, r_t8 = 0, r_t9 = 0, r_k0 = 0, r_k1 = 0, r_gp = 0, r_s8 = 0, r_ra = 0, r_hi = 0, r_lo = 0;
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-16352));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_ae_ctrls_update + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_ra;
 	{ uint64_t q_ = L_tisp_ae_ctrls_update(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-14108));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_ae_process_impl + 0))) + 0u)));
 	{ uint64_t q_ = L_tisp_ae_process_impl(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 20));
 	r_v0 = (uint32_t)(0u + 0u);
@@ -1341,16 +1355,16 @@ static uint64_t L_tiziano_ae_init(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, u
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_v1 = (uint32_t)(0u + (uint32_t)1);
 	r_v0 = (uint32_t)(0x14040000u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)19052) = r_v1;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ftune + 0))) + 0u)) = r_v1;
 	r_v0 = (uint32_t)(0x19010000u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)29128) = 0u;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ae_first + 0))) + 0u)) = 0u;
 	*(uint32_t *)(uintptr_t)(sp_base + 40) = r_s2;
 	*(uint32_t *)(uintptr_t)(sp_base + 32) = r_s0;
 	r_v0 = (uint32_t)(0x14040000u);
 	r_s0 = (uint32_t)(0x19010000u);
 	r_s2 = (uint32_t)(0xe0000000u);
 	*(uint32_t *)(uintptr_t)(sp_base + 52) = r_ra;
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)19060) = r_a2;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&min_it + 0))) + 0u)) = r_a2;
 	*(uint32_t *)(uintptr_t)(sp_base + 44) = r_s3;
 	*(uint32_t *)(uintptr_t)(sp_base + 36) = r_s1;
 	r_s3 = (uint32_t)(r_a1 + 0u);
@@ -1359,8 +1373,8 @@ static uint64_t L_tiziano_ae_init(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, u
 	r_a2 = (uint32_t)(0u + (uint32_t)1068);
 	*(uint32_t *)(uintptr_t)(sp_base + 48) = r_s4;
 	r_s1 = (uint32_t)(r_a0 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_s2 + (uint32_t)16));
-	r_a0 = (uint32_t)(LIFT_XLATE(r_s0 + (uint32_t)25168));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&memset) + 0u)));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_ae_hist + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(csp + 12) = r_a3;
 	r_v0 = (uint32_t)(uintptr_t)memset((void *)(uintptr_t)r_a0, (int)r_a1, r_a2);
 	r_a1 = (uint32_t)(LIFT_XLATE(r_s0 + (uint32_t)25168));
@@ -1377,17 +1391,17 @@ static uint64_t L_tiziano_ae_init(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, u
 	*(uint32_t *)(uintptr_t)(r_a1 + (uint32_t)1052) = r_v1;
 	r_a2 = (uint32_t)(0u + (uint32_t)1068);
 	r_v1 = (uint32_t)(0u + (uint32_t)192);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)26236));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)32));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_ae_hist_last + 0))) + 0u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&memcpy) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_a1 + (uint32_t)1056) = r_v1;
 	r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2);
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-15464));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tiziano_ae_params_refresh + 0))) + 0u)));
 	{ uint64_t q_ = L_tiziano_ae_params_refresh(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a2 = (uint32_t)(0x14040000u);
 	r_a1 = (uint32_t)(r_s3 >> 1);
 	r_v0 = (uint32_t)(0u + 0u);
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)18888));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ae_parameter + 0))) + 0u)));
 	goto L_2d38c;
 L_2d378:
 	r_a0 = (uint32_t)(r_v0 << 2);
@@ -1404,7 +1418,7 @@ L_2d38c:
 	r_a1 = (uint32_t)(0x14040000u);
 	r_a0 = (uint32_t)(r_s1 >> 1);
 	r_v0 = (uint32_t)(0u + 0u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)18888));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ae_parameter + 0))) + 0u)));
 	goto L_2d3c4;
 L_2d3b0:
 	r_a2 = (uint32_t)(r_v0 << 2);
@@ -1420,11 +1434,11 @@ L_2d3c4:
 	goto L_2d3b0; }
 	r_v0 = (uint32_t)(0x2030000u);
 	r_s0 = (uint32_t)(0x14040000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-12324));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tiziano_ae_set_hardware_param + 0))) + 0u)));
 	r_s0 = (uint32_t)(LIFT_XLATE(r_s0 + (uint32_t)15224));
 	{ uint64_t q_ = L_tiziano_ae_set_hardware_param(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-27456));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_set_sensor_integration_time + 0))) + 0u)));
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s0 + (uint32_t)8));
 	{ uint64_t q_ = L_tisp_set_sensor_integration_time(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	if (r_v0 == 0u) {
@@ -1433,7 +1447,7 @@ L_2d3c4:
 	r_a1 = (uint32_t)(0xe000000u);
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)2);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)8312));
 	r_v0 = 0;
 	r_v0 = (uint32_t)(0u + (uint32_t)-1);
@@ -1446,7 +1460,7 @@ L_2d420:
 	r_s1 = (uint32_t)(0x2030000u);
 	r_a2 = (uint32_t)(r_v0 << 16);
 	r_a2 = (uint32_t)(r_a2 | r_v0);
-	r_s1 = (uint32_t)(LIFT_XLATE(r_s1 + (uint32_t)-14220));
+	r_s1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_system_reg_write_ae + 0))) + 0u)));
 	r_a0 = (uint32_t)(0u + (uint32_t)2);
 	r_a1 = (uint32_t)(0u + (uint32_t)1032);
 	{ uint64_t q_ = L_system_reg_write_ae(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
@@ -1458,7 +1472,7 @@ L_2d420:
 	{ uint64_t q_ = L_system_reg_write_ae(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a1 = (uint32_t)(0x2030000u);
 	r_s1 = (uint32_t)(0x2030000u);
-	r_s1 = (uint32_t)(LIFT_XLATE(r_s1 + (uint32_t)15416));
+	r_s1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&system_irq_func_set + 0))) + 0u)));
 	r_a0 = (uint32_t)(0u + (uint32_t)17);
 	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)-24780));
 	r_v0 = (uint32_t)system_irq_func_set(r_a0, (t21_irq_callback_t)(uintptr_t)r_a1);
@@ -1468,31 +1482,31 @@ L_2d420:
 	r_v0 = (uint32_t)system_irq_func_set(r_a0, (t21_irq_callback_t)(uintptr_t)r_a1);
 	r_s1 = (uint32_t)(0x19010000u);
 	r_s2 = (uint32_t)(LIFT_XLATE(r_s2 + (uint32_t)16));
-	r_a0 = (uint32_t)(LIFT_XLATE(r_s1 + (uint32_t)17496));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_ae_ctrls + 0))) + 0u)));
 	r_a1 = (uint32_t)(0u + 0u);
 	r_a2 = (uint32_t)(0u + (uint32_t)64);
 	r_v0 = (uint32_t)(uintptr_t)memset((void *)(uintptr_t)r_a0, (int)r_a1, r_a2);
 	r_a0 = (uint32_t)(0x19010000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)17480));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ae_ctrls + 0))) + 0u)));
 	r_a1 = (uint32_t)(0u + 0u);
 	r_a2 = (uint32_t)(0u + (uint32_t)16);
 	r_v0 = (uint32_t)(uintptr_t)memset((void *)(uintptr_t)r_a0, (int)r_a1, r_a2);
 	r_v0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)18864));
+	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_AePointPos + 0))) + 0u)));
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s0 + (uint32_t)8));
 	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s0 + (uint32_t)12));
 	r_a3 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s0 + (uint32_t)4));
 	r_v0 = (uint32_t)(0x2010000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-15552));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult3_32 + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_a1 << (r_a0 & 31));
 	{ uint64_t q_ = L_fix_point_mult3_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_s2 = (uint32_t)(0x14040000u);
 	r_v1 = (uint32_t)(LIFT_XLATE(r_s1 + (uint32_t)17496));
 	*(uint32_t *)(uintptr_t)(r_v1 + (uint32_t)36) = r_v0;
-	r_v0 = (uint32_t)(LIFT_XLATE(r_s2 + (uint32_t)18820));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_exp_parameter + 0))) + 0u)));
 	r_s4 = (uint32_t)(0x19000000u);
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)8));
-	r_v1 = (uint32_t)(LIFT_XLATE(r_s4 + (uint32_t)9684));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&sensor_ctrl + 0))) + 0u)));
 	{ int c_ = (r_a0 != 0u);
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v1 + (uint32_t)36));
 	if (c_) goto L_2d508; }
@@ -1512,7 +1526,7 @@ L_2d514:
 	r_s3 = (uint32_t)(0x2010000u);
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)28) = r_v1;
 	r_a1 = (uint32_t)(0u + (uint32_t)16);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_s3 + (uint32_t)-18112));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_math_exp2 + 0))) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)10);
 	{ uint64_t q_ = L_tisp_math_exp2(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s0 + (uint32_t)12));
@@ -1536,28 +1550,28 @@ L_2d55c:
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s2 + (uint32_t)12));
 	*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)24) = r_v0;
 	r_v0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)18644));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)18644));
+	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_flicker_t + 0))) + 0u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_flicker_t + 0))) + 0u)));
 	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)8));
 	r_a3 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)12));
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)4));
 	*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)20) = r_v1;
 	r_v0 = (uint32_t)(0x14040000u);
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s2 + (uint32_t)16));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)18164));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_deflick_lut + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)32) = r_v1;
 	*(uint32_t *)(uintptr_t)(sp_base + 16) = r_v0;
 	r_v0 = (uint32_t)(0x14040000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)18160));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_nodes_num + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_v0;
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-14672));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tiziano_deflicker_expt + 0))) + 0u)));
 	r_s0 = (uint32_t)(0x2000000u);
 	{ uint64_t q_ = L_tiziano_deflicker_expt(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a1 = (uint32_t)(0x2030000u);
 	r_v0 = (uint32_t)(0x2010000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)-12380));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-4540));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_ae_process + 0))) + 0u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_event_set_cb + 0))) + 0u)));
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
 	r_v0 = (uint32_t)tisp_event_set_cb((int32_t)r_a0, (int32_t)r_a1);
 	r_a0 = (uint32_t)(0x18000000u);
@@ -1587,19 +1601,19 @@ static uint64_t L_tiziano_ae_dn_params_refresh(uint32_t r_a0, uint32_t r_a1, uin
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_v0 = (uint32_t)(0u + (uint32_t)1);
 	r_v1 = (uint32_t)(0x14040000u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)19052) = r_v0;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ftune + 0))) + 0u)) = r_v0;
 	r_v1 = (uint32_t)(0x19010000u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)17564) = r_v0;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ae_dn_refresh_flag + 0))) + 0u)) = r_v0;
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-15464));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tiziano_ae_params_refresh + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_ra;
 	{ uint64_t q_ = L_tiziano_ae_params_refresh(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(0x14040000u);
-	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)18836));
+	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_exp_parameter + 0))) + 16u)));
 	r_v0 = (uint32_t)(0x19010000u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)17528) = r_v1;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_ae_ctrls + 0))) + 32u)) = r_v1;
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-12324));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tiziano_ae_set_hardware_param + 0))) + 0u)));
 	{ uint64_t q_ = L_tiziano_ae_set_hardware_param(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 20));
 	r_v0 = (uint32_t)(0u + 0u);
@@ -1617,136 +1631,136 @@ static uint64_t L_tiziano_ae_params_refresh(uint32_t r_a0, uint32_t r_a1, uint32
 	r_a1 = (uint32_t)(0x14000000u);
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_s0;
 	r_s0 = (uint32_t)(0xe0000000u);
-	r_s0 = (uint32_t)(LIFT_XLATE(r_s0 + (uint32_t)32));
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)18888));
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)28896));
+	r_s0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&memcpy) + 0u)));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ae_parameter + 0))) + 0u)));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tparams + 0))) + 26256u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)152);
 	*(uint32_t *)(uintptr_t)(sp_base + 28) = r_ra;
 	*(uint32_t *)(uintptr_t)(sp_base + 24) = r_s1;
 	r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2);
 	r_a0 = (uint32_t)(0x14040000u);
 	r_a1 = (uint32_t)(0x14000000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)18872));
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)29048));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ae_switch_night_mode + 0))) + 0u)));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tparams + 0))) + 26408u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)16);
 	r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2);
 	r_a0 = (uint32_t)(0x14040000u);
 	r_a1 = (uint32_t)(0x14000000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)18864));
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)29064));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_AePointPos + 0))) + 0u)));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tparams + 0))) + 26424u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)8);
 	r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2);
 	r_a0 = (uint32_t)(0x14040000u);
 	r_a1 = (uint32_t)(0x14000000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)18820));
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)29072));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_exp_parameter + 0))) + 0u)));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tparams + 0))) + 26432u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)44);
 	r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2);
 	r_a0 = (uint32_t)(0x14040000u);
 	r_a1 = (uint32_t)(0x14000000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)18800));
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)29116));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ae_ev_step + 0))) + 0u)));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tparams + 0))) + 26476u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)20);
 	r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2);
 	r_a0 = (uint32_t)(0x14040000u);
 	r_a1 = (uint32_t)(0x14000000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)18784));
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)29136));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ae_stable_tol + 0))) + 0u)));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tparams + 0))) + 26496u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)16);
 	r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2);
 	r_a0 = (uint32_t)(0x14040000u);
 	r_a1 = (uint32_t)(0x14000000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)18744));
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)29152));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ev_list + 0))) + 0u)));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tparams + 0))) + 26512u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)40);
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a0 = (uint32_t)(0x14040000u);
 	r_a1 = (uint32_t)(0x14000000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)18720));
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)29192));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_lum_list + 0))) + 0u)));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tparams + 0))) + 26552u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)24);
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a0 = (uint32_t)(0x14040000u);
 	r_a1 = (uint32_t)(0x14000000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)18680));
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)29216));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_at_list + 0))) + 0u)));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tparams + 0))) + 26576u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)40);
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a0 = (uint32_t)(0x14040000u);
 	r_a1 = (uint32_t)(0x14000000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)18668));
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)29256));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_deflicker_para + 0))) + 0u)));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tparams + 0))) + 26616u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)12);
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a0 = (uint32_t)(0x14040000u);
 	r_a1 = (uint32_t)(0x14000000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)18644));
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)29268));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_flicker_t + 0))) + 0u)));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tparams + 0))) + 26628u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)24);
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a0 = (uint32_t)(0x14040000u);
 	r_a1 = (uint32_t)(0x14000000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)18116));
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)29292));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_scene_para + 0))) + 0u)));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tparams + 0))) + 26652u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)44);
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a0 = (uint32_t)(0x14040000u);
 	r_a1 = (uint32_t)(0x14000000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)18100));
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)29336));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ae_scene_mode_th + 0))) + 0u)));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tparams + 0))) + 26696u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)16);
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a0 = (uint32_t)(0x14040000u);
 	r_a1 = (uint32_t)(0x14000000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)18020));
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)29352));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_log2_lut + 0))) + 0u)));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tparams + 0))) + 26712u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)80);
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a0 = (uint32_t)(0x14040000u);
 	r_a1 = (uint32_t)(0x14000000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)17940));
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)29432));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_weight_lut + 0))) + 0u)));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tparams + 0))) + 26792u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)80);
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a0 = (uint32_t)(0x14040000u);
 	r_a1 = (uint32_t)(0x14000000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)17040));
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)29512));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ae_zone_weight + 0))) + 0u)));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tparams + 0))) + 26872u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)900);
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a0 = (uint32_t)(0x14040000u);
 	r_a1 = (uint32_t)(0x14000000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)16140));
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)30412));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_scene_roui_weight + 0))) + 0u)));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tparams + 0))) + 27772u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)900);
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a0 = (uint32_t)(0x14040000u);
 	r_a1 = (uint32_t)(0x14000000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)15240));
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)31312));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_scene_roi_weight + 0))) + 0u)));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tparams + 0))) + 28672u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)900);
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(0x19010000u);
-	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)17564));
+	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ae_dn_refresh_flag + 0))) + 0u)));
 	{ int c_ = (r_v1 != 0u);
 	r_s1 = (uint32_t)(r_v0 + 0u);
 	if (c_) goto L_2c5b8; }
 	r_a0 = (uint32_t)(0x14040000u);
 	r_a1 = (uint32_t)(0x14000000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)15224));
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)32212));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ae_result + 0))) + 0u)));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tparams + 0))) + 29572u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)16);
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a0 = (uint32_t)(0x14040000u);
 	r_a1 = (uint32_t)(0x14000000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)15204));
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)32228));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ae_stat + 0))) + 0u)));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tparams + 0))) + 29588u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)20);
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a0 = (uint32_t)(0x14040000u);
 	r_a1 = (uint32_t)(0x14000000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)15144));
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)32248));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ae_wm_q + 0))) + 0u)));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tparams + 0))) + 29608u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)60);
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 L_2c5b8:
@@ -1778,7 +1792,7 @@ L_2baac:
 	r_a1 = (uint32_t)(0xe000000u);
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)2);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)8172));
 	r_v0 = 0;
 	r_v0 = (uint32_t)(0u + (uint32_t)-1);
@@ -1786,9 +1800,9 @@ L_2baac:
 L_2bacc:
 	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)19060) = r_a0;
 	r_v0 = (uint32_t)(0x14040000u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)19064) = r_a1;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&min_ag + 0))) + 0u)) = r_a1;
 	r_v0 = (uint32_t)(0x14040000u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)19056) = 0u;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&trig_cal + 0))) + 0u)) = 0u;
 	r_v0 = (uint32_t)(0u + 0u);
 L_2bae4:
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 20));
@@ -1803,10 +1817,10 @@ static uint64_t L_tisp_ae_g_min(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, uin
 	uint32_t r_at = 0, r_v0 = 0, r_v1 = 0, r_t0 = 0, r_t1 = 0, r_t2 = 0, r_t3 = 0, r_t4 = 0, r_t5 = 0, r_t6 = 0, r_t7 = 0, r_s0 = 0, r_s1 = 0, r_s2 = 0, r_s3 = 0, r_s4 = 0, r_s5 = 0, r_s6 = 0, r_s7 = 0, r_t8 = 0, r_t9 = 0, r_k0 = 0, r_k1 = 0, r_gp = 0, r_s8 = 0, r_ra = 0, r_hi = 0, r_lo = 0;
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_v0 = (uint32_t)(0x14040000u);
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)19060));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&min_it + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_a0 + (uint32_t)0) = r_v0;
 	r_v0 = (uint32_t)(0x14040000u);
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)19064));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&min_ag + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_a0 + (uint32_t)4) = r_v0;
 	r_v0 = (uint32_t)(0u + 0u);
 	return ((uint64_t)r_v1 << 32) | r_v0;
@@ -1820,12 +1834,12 @@ static uint64_t L_tiziano_ae_compensation_set(uint32_t r_a0, uint32_t r_a1, uint
 	uint32_t r_at = 0, r_v0 = 0, r_v1 = 0, r_t0 = 0, r_t1 = 0, r_t2 = 0, r_t3 = 0, r_t4 = 0, r_t5 = 0, r_t6 = 0, r_t7 = 0, r_s0 = 0, r_s1 = 0, r_s2 = 0, r_s3 = 0, r_s4 = 0, r_s5 = 0, r_s6 = 0, r_s7 = 0, r_t8 = 0, r_t9 = 0, r_k0 = 0, r_k1 = 0, r_gp = 0, r_s8 = 0, r_ra = 0, r_hi = 0, r_lo = 0;
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_v0 = (uint32_t)(0x14040000u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)19044) = r_a0;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ae_compensation + 0))) + 0u)) = r_a0;
 	r_v1 = (uint32_t)(0x19010000u);
 	r_v0 = (uint32_t)(0u + (uint32_t)1);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)29124) = r_v0;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&trig + 0))) + 0u)) = r_v0;
 	r_v1 = (uint32_t)(0x19010000u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)29108) = r_v0;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&force_trig + 0))) + 0u)) = r_v0;
 	r_v0 = (uint32_t)(0u + 0u);
 	return ((uint64_t)r_v1 << 32) | r_v0;
 	return ((uint64_t)r_v1 << 32) | r_v0;
@@ -1838,7 +1852,7 @@ static uint64_t L_tiziano_ae_s_ev_start(uint32_t r_a0, uint32_t r_a1, uint32_t r
 	uint32_t r_at = 0, r_v0 = 0, r_v1 = 0, r_t0 = 0, r_t1 = 0, r_t2 = 0, r_t3 = 0, r_t4 = 0, r_t5 = 0, r_t6 = 0, r_t7 = 0, r_s0 = 0, r_s1 = 0, r_s2 = 0, r_s3 = 0, r_s4 = 0, r_s5 = 0, r_s6 = 0, r_s7 = 0, r_t8 = 0, r_t9 = 0, r_k0 = 0, r_k1 = 0, r_gp = 0, r_s8 = 0, r_ra = 0, r_hi = 0, r_lo = 0;
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_v0 = (uint32_t)(0x14040000u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)19040) = r_a0;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_ae_ev_init_strict + 0))) + 0u)) = r_a0;
 	r_v1 = (uint32_t)(0u + (uint32_t)1);
 	r_v0 = (uint32_t)(0x19010000u);
 	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)17560) = r_v1;
@@ -1853,7 +1867,7 @@ static uint64_t L_tiziano_ae_s_max_again(uint32_t r_a0, uint32_t r_a1, uint32_t 
 	uint32_t r_at = 0, r_v0 = 0, r_v1 = 0, r_t0 = 0, r_t1 = 0, r_t2 = 0, r_t3 = 0, r_t4 = 0, r_t5 = 0, r_t6 = 0, r_t7 = 0, r_s0 = 0, r_s1 = 0, r_s2 = 0, r_s3 = 0, r_s4 = 0, r_s5 = 0, r_s6 = 0, r_s7 = 0, r_t8 = 0, r_t9 = 0, r_k0 = 0, r_k1 = 0, r_gp = 0, r_s8 = 0, r_ra = 0, r_hi = 0, r_lo = 0;
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_v0 = (uint32_t)(0x19000000u);
-	r_a3 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)9708));
+	r_a3 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&sensor_ctrl + 0))) + 24u)));
 	r_a3 = (uint32_t)(r_a3 << 11);
 	r_v0 = (uint32_t)(r_a3 < r_a0);
 	{ int c_ = (r_v0 == 0u);
@@ -1862,8 +1876,8 @@ static uint64_t L_tiziano_ae_s_max_again(uint32_t r_a0, uint32_t r_a1, uint32_t 
 	r_a1 = (uint32_t)(0xe000000u);
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a2 = (uint32_t)(r_a0 + 0u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)8264));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem__LC9 + 0))) + 0u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_a0 = (uint32_t)(0u + (uint32_t)2);
 	r_v0 = 0;
 	r_v0 = (uint32_t)(0u + (uint32_t)-1);
@@ -1871,11 +1885,11 @@ static uint64_t L_tiziano_ae_s_max_again(uint32_t r_a0, uint32_t r_a1, uint32_t 
 L_2c650:
 	r_v0 = (uint32_t)(0x2010000u);
 	r_a1 = (uint32_t)(0u + (uint32_t)5);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-18112));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_math_exp2 + 0))) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)10);
 	{ uint64_t q_ = L_tisp_math_exp2(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v1 = (uint32_t)(0x19010000u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)17516) = r_v0;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_ae_ctrls + 0))) + 20u)) = r_v0;
 	r_v0 = (uint32_t)(0u + 0u);
 L_2c670:
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 20));
@@ -1892,12 +1906,12 @@ static uint64_t L_tiziano_ae_s_max_isp_dgain(uint32_t r_a0, uint32_t r_a1, uint3
 	r_v0 = (uint32_t)(0x2010000u);
 	r_a1 = (uint32_t)(0u + (uint32_t)5);
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_ra;
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-18112));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_math_exp2 + 0))) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)10);
 	{ uint64_t q_ = L_tisp_math_exp2(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 20));
 	r_v1 = (uint32_t)(0x19010000u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)17528) = r_v0;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_ae_ctrls + 0))) + 32u)) = r_v0;
 	r_v0 = (uint32_t)(0u + 0u);
 	return ((uint64_t)r_v1 << 32) | r_v0;
 	return ((uint64_t)r_v1 << 32) | r_v0;
@@ -1911,11 +1925,11 @@ static uint64_t L_tisp_ae_manual_set(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(csp + 52));
 	r_v0 = (uint32_t)(0x19010000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)17496));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_ae_ctrls + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)52) = r_v1;
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)12) = r_a3;
 	r_v0 = (uint32_t)(0x14040000u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)19056) = 0u;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&trig_cal + 0))) + 0u)) = 0u;
 	*(uint32_t *)(uintptr_t)(csp + 0) = r_a0;
 	*(uint32_t *)(uintptr_t)(csp + 4) = r_a1;
 	*(uint32_t *)(uintptr_t)(csp + 8) = r_a2;
@@ -1932,14 +1946,14 @@ static uint64_t L_tiziano_deflicker_expt_tune(uint32_t r_a0, uint32_t r_a1, uint
 	uint32_t r_at = 0, r_v0 = 0, r_v1 = 0, r_t0 = 0, r_t1 = 0, r_t2 = 0, r_t3 = 0, r_t4 = 0, r_t5 = 0, r_t6 = 0, r_t7 = 0, r_s0 = 0, r_s1 = 0, r_s2 = 0, r_s3 = 0, r_s4 = 0, r_s5 = 0, r_s6 = 0, r_s7 = 0, r_t8 = 0, r_t9 = 0, r_k0 = 0, r_k1 = 0, r_gp = 0, r_s8 = 0, r_ra = 0, r_hi = 0, r_lo = 0;
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_v0 = (uint32_t)(0x14040000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)18164));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_deflick_lut + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 16) = r_v0;
 	r_v0 = (uint32_t)(0x14040000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)18160));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_nodes_num + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_v0;
 	r_v0 = (uint32_t)(0x2030000u);
 	*(uint32_t *)(uintptr_t)(sp_base + 28) = r_ra;
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-14672));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tiziano_deflicker_expt + 0))) + 0u)));
 	{ uint64_t q_ = L_tiziano_deflicker_expt(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 28));
 	return ((uint64_t)r_v1 << 32) | r_v0;
@@ -2230,12 +2244,12 @@ L_3f70:
 L_3fa0:
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)((sp_base + 1072));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)1064));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&private_copy_from_user + 0))) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)4);
 	r_v0 = (uint32_t)((uint32_t (*)(uint32_t, uint32_t, uint32_t, uint32_t))LIFT_FNADDR(private_copy_from_user))(r_a0, r_a1, r_a2, r_a3);
 	r_v0 = (uint32_t)(0x2030000u);
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 1072));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)3908));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_s_module_control + 0))) + 0u)));
 	goto L_4724;
 L_3fc4:
 	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)4040));
@@ -2247,8 +2261,8 @@ L_3fc4:
 	r_a1 = (uint32_t)(0xe000000u);
 	r_a2 = (uint32_t)(0xc000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)2040));
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)464));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem__LC1 + 0))) + 0u)));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 464u)));
 	r_a3 = (uint32_t)(0u + (uint32_t)2384);
 	goto L_40c0;
 L_3ff4:
@@ -2281,7 +2295,7 @@ L_4020:
 L_404c:
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(r_s1 + (uint32_t)16256);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)1064));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&private_copy_from_user + 0))) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)262);
 	r_v0 = (uint32_t)((uint32_t (*)(uint32_t, uint32_t, uint32_t, uint32_t))LIFT_FNADDR(private_copy_from_user))(r_a0, r_a1, r_a2, r_a3);
 	r_s0 = (uint32_t)(0u + 0u);
@@ -2295,12 +2309,12 @@ L_4068:
 	r_a0 = (uint32_t)(0u + (uint32_t)-22);
 	if (c_) goto L_4090; }
 	r_v1 = (uint32_t)(0xc000000u);
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)428));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 428u)));
 	r_v0 = (uint32_t)(r_v0 + r_v1);
 	r_a0 = (uint32_t)((int32_t)*(int8_t *)(uintptr_t)(r_v0 + (uint32_t)0));
 L_4090:
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)52));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_s_antiflick + 0))) + 0u)));
 	{ uint64_t q_ = L_tisp_s_antiflick(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	{ int c_ = (r_v0 == 0u);
 	r_s0 = (uint32_t)(r_v0 + 0u);
@@ -2308,12 +2322,12 @@ L_4090:
 	r_a1 = (uint32_t)(0xe000000u);
 	r_a2 = (uint32_t)(0xc000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)2040));
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)432));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem__LC1 + 0))) + 0u)));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 432u)));
 	r_a3 = (uint32_t)(0u + (uint32_t)577);
 L_40c0:
 	r_v0 = (uint32_t)(0x2000000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_v0 = 0;
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 1180));
 	goto L_4748;
@@ -2327,7 +2341,7 @@ L_40d8:
 	if (c_) goto L_472c; }
 	r_a0 = (uint32_t)(*(uint8_t *)(uintptr_t)(r_s0 + (uint32_t)4));
 	*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)16528) = r_a0;
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-720));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_set_saturation + 0))) + 0u)));
 	goto L_4724;
 L_4100:
 	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)212));
@@ -2338,7 +2352,7 @@ L_4100:
 	if (c_) goto L_472c; }
 	r_a0 = (uint32_t)(*(uint8_t *)(uintptr_t)(r_s0 + (uint32_t)4));
 	*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)16532) = r_a0;
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-1592));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_set_brightness + 0))) + 0u)));
 	goto L_4724;
 L_4124:
 	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)0));
@@ -2350,7 +2364,7 @@ L_4124:
 	if (c_) goto L_472c; }
 	r_a0 = (uint32_t)(*(uint8_t *)(uintptr_t)(r_a1 + (uint32_t)4));
 	*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)16524) = r_a0;
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-468));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_set_contrast + 0))) + 0u)));
 	goto L_4724;
 L_414c:
 	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)212));
@@ -2361,7 +2375,7 @@ L_414c:
 	if (c_) goto L_472c; }
 	r_a0 = (uint32_t)(*(uint8_t *)(uintptr_t)(r_a1 + (uint32_t)4));
 	*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)16236) = r_a0;
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-1520));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_set_sharpness + 0))) + 0u)));
 	goto L_4724;
 L_4170:
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)0));
@@ -2389,14 +2403,14 @@ L_4170:
 L_41b8:
 	r_a1 = (uint32_t)(0xe000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)2248));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem__LC7 + 0))) + 0u)));
 	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 1156));
 	r_a3 = (uint32_t)(r_s0 + 0u);
 	goto L_40c0;
 L_41d0:
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 1156));
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-1804));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_set_fps + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)16544) = r_a0;
 	{ uint64_t q_ = L_tisp_set_fps(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 1180));
@@ -2415,7 +2429,7 @@ L_41ec:
 L_4210:
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(r_s0 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)14288));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&apical_isp_gamma_s_attr_isra_44 + 0))) + 0u)));
 	goto L_46a4;
 L_4220:
 	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)0));
@@ -2424,7 +2438,7 @@ L_4220:
 	r_a0 = (uint32_t)((sp_base + 1132));
 	r_s1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)288));
 	r_v0 = (uint32_t)(0x2000000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)1064));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&private_copy_from_user + 0))) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)12);
 	r_v0 = (uint32_t)((uint32_t (*)(uint32_t, uint32_t, uint32_t, uint32_t))LIFT_FNADDR(private_copy_from_user))(r_a0, r_a1, r_a2, r_a3);
 	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 1132));
@@ -2454,9 +2468,9 @@ L_4284:
 	r_v0 = (uint32_t)(0x2000000u);
 	*(uint32_t *)(uintptr_t)(sp_base + 16) = 0u;
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)2288));
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)520));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem__LC8 + 0))) + 0u)));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 520u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_a3 = (uint32_t)(0u + (uint32_t)1781);
 	r_v0 = 0;
 	r_s0 = (uint32_t)(0u + (uint32_t)-1);
@@ -2471,16 +2485,16 @@ L_42c4:
 	r_a1 = (uint32_t)(0xe000000u);
 	r_a2 = (uint32_t)(0xc000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)2328));
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)520));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem__LC9 + 0))) + 0u)));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 520u)));
 	r_a3 = (uint32_t)(0u + (uint32_t)1787);
 	goto L_4608;
 L_42e0:
 	r_a1 = (uint32_t)(0xe000000u);
 	r_a2 = (uint32_t)(0xc000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)2368));
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)520));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem__LC10 + 0))) + 0u)));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 520u)));
 	r_a3 = (uint32_t)(0u + (uint32_t)1792);
 	goto L_4608;
 L_42fc:
@@ -2502,7 +2516,7 @@ L_431c:
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 1076));
 	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 1080));
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)3432));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_s_ae_attr + 0))) + 0u)));
 	r_a3 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 1084));
 	{ uint64_t q_ = L_tisp_s_ae_attr(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_s0 = (uint32_t)(0u + 0u);
@@ -2514,7 +2528,7 @@ L_434c:
 L_4358:
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)((sp_base + 1132));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)1064));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&private_copy_from_user + 0))) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)8);
 	r_v0 = (uint32_t)((uint32_t (*)(uint32_t, uint32_t, uint32_t, uint32_t))LIFT_FNADDR(private_copy_from_user))(r_a0, r_a1, r_a2, r_a3);
 	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 1132));
@@ -2524,7 +2538,7 @@ L_4358:
 	if (c_) goto L_43d8; }
 	r_v1 = (uint32_t)(0xc000000u);
 	r_v0 = (uint32_t)(r_v0 << 2);
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)320));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 320u)));
 	r_v0 = (uint32_t)(r_v1 + r_v0);
 	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)0));
 	switch (r_v0) {
@@ -2567,7 +2581,7 @@ L_43d8:
 	r_a2 = (uint32_t)(0xc000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
 	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)2408));
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)564));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 564u)));
 	r_a3 = (uint32_t)(0u + (uint32_t)1956);
 	goto L_4608;
 L_43f0:
@@ -2586,7 +2600,7 @@ L_43fc:
 	r_a3 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 1084));
 	*(uint32_t *)(uintptr_t)(sp_base + 24) = r_v0;
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)2148));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_s_wb_attr + 0))) + 0u)));
 	r_s0 = (uint32_t)(0u + 0u);
 	r_v0 = (uint32_t)((uint32_t (*)(uint32_t, uint32_t, uint32_t, uint32_t))LIFT_FNADDR(tisp_s_wb_attr))(r_a0, r_a1, r_a2, r_a3);
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 1180));
@@ -2598,7 +2612,7 @@ L_4438:
 L_4444:
 	r_v0 = (uint32_t)(0x2030000u);
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s0 + (uint32_t)4));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)4024));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_s_max_isp_dgain + 0))) + 0u)));
 	goto L_4724;
 L_4454:
 	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)520));
@@ -2610,8 +2624,8 @@ L_4454:
 	r_a1 = (uint32_t)(0xe000000u);
 	r_a2 = (uint32_t)(0xc000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)2040));
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)588));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem__LC1 + 0))) + 0u)));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 588u)));
 	r_a3 = (uint32_t)(0u + (uint32_t)2137);
 	goto L_40c0;
 L_4484:
@@ -2624,12 +2638,12 @@ L_4490:
 	r_v0 = (uint32_t)(0x2000000u);
 	if (c_) goto L_4738; }
 	r_a0 = (uint32_t)((sp_base + 1072));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)1064));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&private_copy_from_user + 0))) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)8);
 	r_v0 = (uint32_t)((uint32_t (*)(uint32_t, uint32_t, uint32_t, uint32_t))LIFT_FNADDR(private_copy_from_user))(r_a0, r_a1, r_a2, r_a3);
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 1072));
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)3632));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_s_ae_min + 0))) + 0u)));
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 1076));
 	{ uint64_t q_ = L_tisp_s_ae_min(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_s0 = (uint32_t)(r_v0 + 0u);
@@ -2644,13 +2658,13 @@ L_44c8:
 	if (c_) goto L_44f0; }
 	r_a1 = (uint32_t)(0xe000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)2448));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem__LC12 + 0))) + 0u)));
 	goto L_46cc;
 L_44f0:
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s0 + (uint32_t)4));
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)((sp_base + 1072));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)1064));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&private_copy_from_user + 0))) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)16);
 	r_v0 = (uint32_t)((uint32_t (*)(uint32_t, uint32_t, uint32_t, uint32_t))LIFT_FNADDR(private_copy_from_user))(r_a0, r_a1, r_a2, r_a3);
 	r_v0 = (uint32_t)(*(uint8_t *)(uintptr_t)(sp_base + 1072));
@@ -2679,18 +2693,18 @@ L_4548:
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)4));
 	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)8));
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)2264));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_s_ae_hist + 0))) + 0u)));
 	r_a3 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)12));
 	{ uint64_t q_ = L_tisp_s_ae_hist(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(r_s1 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)1048));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&private_kfree + 0))) + 0u)));
 	goto L_4724;
 L_4580:
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s0 + (uint32_t)4));
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)((sp_base + 1132));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)1064));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&private_copy_from_user + 0))) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)24);
 	r_v0 = (uint32_t)((uint32_t (*)(uint32_t, uint32_t, uint32_t, uint32_t))LIFT_FNADDR(private_copy_from_user))(r_a0, r_a1, r_a2, r_a3);
 	r_v0 = (uint32_t)(*(uint8_t *)(uintptr_t)(sp_base + 1150));
@@ -2727,12 +2741,12 @@ L_45f0:
 	r_a1 = (uint32_t)(0xe000000u);
 	r_a2 = (uint32_t)(0xc000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)2476));
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)660));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem__LC13 + 0))) + 0u)));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 660u)));
 	r_a3 = (uint32_t)(0u + (uint32_t)1625);
 L_4608:
 	r_v0 = (uint32_t)(0x2000000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_s0 = (uint32_t)(0u + (uint32_t)-1);
 	r_v0 = 0;
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 1180));
@@ -2764,7 +2778,7 @@ L_4620:
 	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 1092));
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_v0;
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)3808));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_s_af_attr + 0))) + 0u)));
 	r_s0 = (uint32_t)(0u + 0u);
 	r_v0 = (uint32_t)((uint32_t (*)(uint32_t, uint32_t, uint32_t, uint32_t))LIFT_FNADDR(tisp_s_af_attr))(r_a0, r_a1, r_a2, r_a3);
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 1180));
@@ -2783,10 +2797,10 @@ L_46b4:
 	if (c_) goto L_46e4; }
 	r_a1 = (uint32_t)(0xe000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)2508));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem__LC14 + 0))) + 0u)));
 L_46cc:
 	r_v0 = (uint32_t)(0x2000000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_s0 = (uint32_t)(0u + (uint32_t)-1);
 	r_v0 = 0;
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 1180));
@@ -2800,7 +2814,7 @@ L_46e4:
 	r_a1 = (uint32_t)(0xe000000u);
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)2536));
 	r_v0 = 0;
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 1180));
@@ -2808,7 +2822,7 @@ L_46e4:
 L_4718:
 	r_v0 = (uint32_t)(0x2030000u);
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s0 + (uint32_t)4));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)3992));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_s_ev_start + 0))) + 0u)));
 L_4724:
 	{ uint64_t q_ = L_dispatch(r_v0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 L_472c:
@@ -3108,7 +3122,7 @@ L_52a4:
 	goto L_5668;
 L_52b4:
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)3936));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_g_module_control + 0))) + 0u)));
 	r_a0 = (uint32_t)((sp_base + 16));
 	r_v0 = (uint32_t)((uint32_t (*)(uint32_t, uint32_t, uint32_t, uint32_t))LIFT_FNADDR(tisp_g_module_control))(r_a0, r_a1, r_a2, r_a3);
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)4));
@@ -3117,7 +3131,7 @@ L_52b4:
 	goto L_53c0;
 L_52d4:
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)4080));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_g_drc_strength + 0))) + 0u)));
 	r_a0 = (uint32_t)((sp_base + 76));
 	{ uint64_t q_ = L_tisp_g_drc_strength(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	{ int c_ = (r_v0 == 0u);
@@ -3126,8 +3140,8 @@ L_52d4:
 	r_a1 = (uint32_t)(0xe000000u);
 	r_a2 = (uint32_t)(0xc000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)2040));
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)740));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem__LC1 + 0))) + 0u)));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 740u)));
 	r_a3 = (uint32_t)(0u + (uint32_t)2396);
 	goto L_5384;
 L_5308:
@@ -3141,9 +3155,9 @@ L_5308:
 	r_a2 = (uint32_t)(0xc000000u);
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)2040));
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)772));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem__LC1 + 0))) + 0u)));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 772u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_a3 = (uint32_t)(0u + (uint32_t)2165);
 	r_v0 = 0;
 	r_s0 = (uint32_t)(0u + 0u);
@@ -3154,7 +3168,7 @@ L_5348:
 	goto L_563c;
 L_5354:
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)1764));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_g_ev_attr + 0))) + 0u)));
 	r_a0 = (uint32_t)((sp_base + 16));
 	r_v0 = (uint32_t)((uint32_t (*)(uint32_t, uint32_t, uint32_t, uint32_t))LIFT_FNADDR(tisp_g_ev_attr))(r_a0, r_a1, r_a2, r_a3);
 	{ int c_ = (r_v0 == 0u);
@@ -3163,12 +3177,12 @@ L_5354:
 	r_a1 = (uint32_t)(0xe000000u);
 	r_a2 = (uint32_t)(0xc000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)2560));
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)716));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem__LC16 + 0))) + 0u)));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 716u)));
 	r_a3 = (uint32_t)(0u + (uint32_t)114);
 L_5384:
 	r_v0 = (uint32_t)(0x2000000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_v0 = 0;
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 92));
 	goto L_566c;
@@ -3177,7 +3191,7 @@ L_539c:
 	goto L_5498;
 L_53a4:
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-108));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_g_ncuinfo + 0))) + 0u)));
 	r_a0 = (uint32_t)((sp_base + 16));
 	r_v0 = (uint32_t)((uint32_t (*)(uint32_t, uint32_t, uint32_t, uint32_t))LIFT_FNADDR(tisp_g_ncuinfo))(r_a0, r_a1, r_a2, r_a3);
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)4));
@@ -3185,7 +3199,7 @@ L_53a4:
 	r_a2 = (uint32_t)(0u + (uint32_t)20);
 L_53c0:
 	r_v0 = (uint32_t)(0x2000000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)1192));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&private_copy_to_user + 0))) + 0u)));
 	r_s0 = (uint32_t)(0u + 0u);
 	r_v0 = (uint32_t)((uint32_t (*)(uint32_t, uint32_t, uint32_t, uint32_t))LIFT_FNADDR(private_copy_to_user))(r_a0, r_a1, r_a2, r_a3);
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 92));
@@ -3196,7 +3210,7 @@ L_53d8:
 L_53e0:
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(r_s1 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)18692));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&apical_isp_gamma_g_attr_isra_63 + 0))) + 0u)));
 	goto L_55e0;
 L_53f0:
 	r_a0 = (uint32_t)(r_s1 + 0u);
@@ -3205,7 +3219,7 @@ L_53f0:
 L_53fc:
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(r_s1 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)19196));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&apical_isp_wb_g_ctrl_isra_65 + 0))) + 0u)));
 	goto L_55e0;
 L_540c:
 	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)2108));
@@ -3216,7 +3230,7 @@ L_540c:
 	goto L_543c;
 L_5424:
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)2108));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_g_wb_attr + 0))) + 0u)));
 	r_a0 = (uint32_t)((sp_base + 16));
 	r_v0 = (uint32_t)((uint32_t (*)(uint32_t, uint32_t, uint32_t, uint32_t))LIFT_FNADDR(tisp_g_wb_attr))(r_a0, r_a1, r_a2, r_a3);
 	r_v1 = (uint32_t)(*(uint16_t *)(uintptr_t)(sp_base + 32));
@@ -3232,7 +3246,7 @@ L_5448:
 L_5454:
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(r_s1 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)18388));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&apical_isp_max_dgain_g_ctrl_isra_61 + 0))) + 0u)));
 	goto L_55e0;
 L_5464:
 	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)664));
@@ -3244,8 +3258,8 @@ L_5464:
 	r_a1 = (uint32_t)(0xe000000u);
 	r_a2 = (uint32_t)(0xc000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)2040));
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)924));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem__LC1 + 0))) + 0u)));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 924u)));
 	r_a3 = (uint32_t)(0u + (uint32_t)2149);
 	goto L_5384;
 L_5494:
@@ -3256,7 +3270,7 @@ L_5498:
 L_54a0:
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(r_s1 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)19516));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_apical_isp_ae_zone_g_ctrl_isra_69 + 0))) + 0u)));
 	goto L_55e0;
 L_54b0:
 	r_a0 = (uint32_t)(r_s1 + 0u);
@@ -3276,7 +3290,7 @@ L_54c8:
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)4));
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a1 = (uint32_t)((sp_base + 16));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)1192));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&private_copy_to_user + 0))) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)8);
 	r_v0 = (uint32_t)((uint32_t (*)(uint32_t, uint32_t, uint32_t, uint32_t))LIFT_FNADDR(private_copy_to_user))(r_a0, r_a1, r_a2, r_a3);
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 92));
@@ -3284,7 +3298,7 @@ L_54c8:
 L_54fc:
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)1068);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)960));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&private_kmalloc + 0))) + 0u)));
 	r_a1 = (uint32_t)(0u + (uint32_t)208);
 	r_v0 = (uint32_t)((uint32_t (*)(uint32_t, uint32_t, uint32_t, uint32_t))LIFT_FNADDR(private_kmalloc))(r_a0, r_a1, r_a2, r_a3);
 	{ int c_ = (r_v0 != 0u);
@@ -3293,7 +3307,7 @@ L_54fc:
 	r_a1 = (uint32_t)(0xe000000u);
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)2448));
 	r_v0 = 0;
 	r_s0 = (uint32_t)(0u + (uint32_t)-1);
@@ -3301,7 +3315,7 @@ L_54fc:
 L_5538:
 	r_a0 = (uint32_t)(r_v0 + 0u);
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)2224));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_g_ae_hist + 0))) + 0u)));
 	{ uint64_t q_ = L_tisp_g_ae_hist(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s0 + (uint32_t)1044));
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)4));
@@ -3328,11 +3342,11 @@ L_5538:
 	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s0 + (uint32_t)1064));
 	*(uint8_t *)(uintptr_t)(sp_base + 31) = (uint8_t)r_v0;
 	r_v0 = (uint32_t)(0x2000000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)1192));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&private_copy_to_user + 0))) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)16);
 	r_v0 = (uint32_t)((uint32_t (*)(uint32_t, uint32_t, uint32_t, uint32_t))LIFT_FNADDR(private_copy_to_user))(r_a0, r_a1, r_a2, r_a3);
 	r_v0 = (uint32_t)(0x2000000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)1048));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&private_kfree + 0))) + 0u)));
 	r_a0 = (uint32_t)(r_s0 + 0u);
 	r_v0 = (uint32_t)((uint32_t (*)(uint32_t, uint32_t, uint32_t, uint32_t))LIFT_FNADDR(private_kfree))(r_a0, r_a1, r_a2, r_a3);
 	r_s0 = (uint32_t)(0u + 0u);
@@ -3340,7 +3354,7 @@ L_5538:
 L_55d4:
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(r_s1 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)19900));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&apical_isp_af_hist_g_attr_isra_73 + 0))) + 0u)));
 L_55e0:
 	{ uint64_t q_ = L_dispatch(r_v0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_s0 = (uint32_t)(r_v0 + 0u);
@@ -3348,7 +3362,7 @@ L_55e0:
 L_55f0:
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(r_s1 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)20072));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_apical_isp_af_weight_g_attr_isra_74 + 0))) + 0u)));
 	goto L_55e0;
 L_5600:
 	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_a0 + (uint32_t)3764));
@@ -3408,14 +3422,14 @@ static uint64_t L_JZ_Isp_Awb(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, uint32
 	*(uint32_t *)(uintptr_t)(sp_base + 156) = r_s0;
 	r_s0 = (uint32_t)(0x14040000u);
 	r_v0 = (uint32_t)(0x14040000u);
-	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s0 + (uint32_t)7228));
+	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_awb_ct + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 164) = r_s2;
 	*(uint32_t *)(uintptr_t)(sp_base + 160) = r_s1;
 	r_s2 = (uint32_t)(0x14040000u);
-	r_s1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)7484));
+	r_s1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&awb_ev + 0))) + 0u)));
 	r_v0 = (uint32_t)(0x14040000u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)7224) = r_v1;
-	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s2 + (uint32_t)7232));
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_awb_ct_last + 0))) + 0u)) = r_v1;
+	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_awb_mode + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 172) = r_ra;
 	r_v1 = (uint32_t)(r_v1 << 10);
 	r_v1 = (uint32_t)(r_s1 < r_v1);
@@ -3424,15 +3438,15 @@ static uint64_t L_JZ_Isp_Awb(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, uint32
 	{ int c_ = (r_v1 == 0u);
 	r_a0 = (uint32_t)(0x14040000u);
 	if (c_) goto L_ff24; }
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)7136));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_light_src + 0))) + 0u)));
 	r_a1 = (uint32_t)(0x14040000u);
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)19060));
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)3336));
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)19060) = r_a0;
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&IspAwbCtDetectParam + 0))) + 0u)));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_rgbg_weight_ot + 0))) + 0u)));
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&IspAwbCtDetectParam + 0))) + 0u)) = r_a0;
 	r_a0 = (uint32_t)(0x14040000u);
 	*(uint32_t *)(uintptr_t)(r_v1 + (uint32_t)16) = r_a1;
 	*(uint32_t *)(uintptr_t)(r_v1 + (uint32_t)4) = 0u;
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)6996));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_awb_ct_th_ot_luxhigh + 0))) + 0u)));
 	goto L_ff5c;
 L_ff24:
 	r_v1 = (uint32_t)(LIFT_XLATE(r_s2 + (uint32_t)7232));
@@ -3444,35 +3458,35 @@ L_ff24:
 	if (c_) goto L_ff6c; }
 	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)7136));
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)3336));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_rgbg_weight_ot + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)19060) = r_a0;
 	r_a0 = (uint32_t)(0x14040000u);
 	*(uint32_t *)(uintptr_t)(r_v1 + (uint32_t)16) = r_a1;
 	*(uint32_t *)(uintptr_t)(r_v1 + (uint32_t)4) = 0u;
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)6980));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_awb_ct_th_ot_luxlow + 0))) + 0u)));
 L_ff5c:
 	*(uint32_t *)(uintptr_t)(r_v1 + (uint32_t)8) = r_a0;
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)6956));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_awb_ct_para_ot + 0))) + 0u)));
 	goto L_ffa0;
 L_ff6c:
 	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)7136));
 	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)19060) = r_a0;
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_a0 + (uint32_t)7132));
+	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_light_src_num + 0))) + 0u)));
 	r_a1 = (uint32_t)(0x14040000u);
 	*(uint32_t *)(uintptr_t)(r_v1 + (uint32_t)4) = r_a0;
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)6964));
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)6036));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_awb_ct_th_in + 0))) + 0u)));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_rgbg_weight + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v1 + (uint32_t)8) = r_a0;
 	r_a0 = (uint32_t)(0x14040000u);
 	*(uint32_t *)(uintptr_t)(r_v1 + (uint32_t)16) = r_a1;
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)6948));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_awb_ct_para_in + 0))) + 0u)));
 L_ffa0:
 	r_a2 = (uint32_t)(0x14040000u);
 	*(uint32_t *)(uintptr_t)(r_v1 + (uint32_t)12) = r_a0;
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)7296));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_awb_parameter + 0))) + 0u)));
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_a0 + (uint32_t)12));
 	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)19060));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)20) = r_v1;
@@ -3480,51 +3494,51 @@ L_ffa0:
 	r_a1 = (uint32_t)(0x19000000u);
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)24) = r_v1;
 	r_v1 = (uint32_t)(0x14040000u);
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)7072));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_rg_pos + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)28) = r_v1;
 	r_v1 = (uint32_t)(0x14040000u);
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)7012));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_bg_pos + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)32) = r_v1;
 	r_v1 = (uint32_t)(0x14040000u);
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)5136));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_color_temp_mesh + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)36) = r_v1;
 	r_v1 = (uint32_t)(0x14040000u);
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)4236));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_awb_wght + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)40) = r_v1;
 	r_v1 = (uint32_t)(0x14040000u);
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)6936));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_awb_dis_tw + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)44) = r_v1;
 	r_v1 = (uint32_t)(LIFT_XLATE(r_s0 + (uint32_t)7228));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)48) = r_v1;
 	r_v1 = (uint32_t)(0x14040000u);
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)1280));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ls_w_lut + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)52) = r_v1;
 	r_v1 = (uint32_t)(0x19000000u);
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)18160));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&awb_array_r + 0))) + 0u)));
 	r_t0 = (uint32_t)(0x19000000u);
-	r_t0 = (uint32_t)(LIFT_XLATE(r_t0 + (uint32_t)17260));
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_a1 + (uint32_t)19120) = r_v1;
-	r_v1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)19120));
+	r_t0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&awb_array_g + 0))) + 0u)));
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&IspAwbFpgaParam + 0))) + 0u)) = r_v1;
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&IspAwbFpgaParam + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v1 + (uint32_t)4) = r_t0;
 	r_t0 = (uint32_t)(0x19000000u);
-	r_t0 = (uint32_t)(LIFT_XLATE(r_t0 + (uint32_t)16360));
+	r_t0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&awb_array_b + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v1 + (uint32_t)8) = r_t0;
 	r_t0 = (uint32_t)(0x19000000u);
-	r_t0 = (uint32_t)(LIFT_XLATE(r_t0 + (uint32_t)15460));
+	r_t0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&awb_array_p + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v1 + (uint32_t)24) = r_a0;
 	r_a0 = (uint32_t)(0x14040000u);
 	*(uint32_t *)(uintptr_t)(r_v1 + (uint32_t)12) = r_t0;
-	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_a0 + (uint32_t)7292));
+	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_pixel_cnt_th + 0))) + 0u)));
 	r_t0 = (uint32_t)(0x14040000u);
-	r_t0 = (uint32_t)(LIFT_XLATE(r_t0 + (uint32_t)7268));
+	r_t0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_awb_cof + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v1 + (uint32_t)16) = r_t0;
 	*(uint32_t *)(uintptr_t)(r_v1 + (uint32_t)28) = r_a0;
 	r_a3 = (uint32_t)(0x14040000u);
 	r_t0 = (uint32_t)(0x14040000u);
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a3 = (uint32_t)(LIFT_XLATE(r_a3 + (uint32_t)7276));
-	r_t0 = (uint32_t)(LIFT_XLATE(r_t0 + (uint32_t)7244));
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)7216));
+	r_a3 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_AwbPointPos + 0))) + 0u)));
+	r_t0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_awb_mf_para + 0))) + 0u)));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_wb_static + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v1 + (uint32_t)36) = r_a3;
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)56) = r_a3;
 	*(uint32_t *)(uintptr_t)(r_v1 + (uint32_t)20) = r_t0;
@@ -3564,7 +3578,7 @@ L_100dc:
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)4));
 	r_a3 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)12));
 	r_v0 = (uint32_t)(0x2010000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-2836));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_Tiziano_awb_fpga + 0))) + 0u)));
 	r_s2 = (uint32_t)(LIFT_XLATE(r_s2 + (uint32_t)7232));
 	{ uint64_t q_ = L_Tiziano_awb_fpga(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s2 + (uint32_t)8));
@@ -3573,21 +3587,21 @@ L_100dc:
 	{ int c_ = (r_s1 == 0u);
 	r_v0 = (uint32_t)(0x19000000u);
 	if (c_) goto L_1015c; }
-	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)19220));
+	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_ModeFlag_18824 + 0))) + 0u)));
 	if (r_v1 != 0u) {
 	r_v0 = (uint32_t)(0u + (uint32_t)8);
 	goto L_101a8; }
 	r_v1 = (uint32_t)(0u + (uint32_t)1);
 	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)19220) = r_v1;
 	r_v0 = (uint32_t)(0x19000000u);
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)19216));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&awb_frz + 0))) + 0u)));
 	if (r_v0 != 0u) {
 	r_v0 = (uint32_t)(0u + (uint32_t)8);
 	goto L_101a8; }
 	r_v0 = (uint32_t)(0x14040000u);
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)7284));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_awb_lowlight_rg_th + 0))) + 0u)));
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v1 + (uint32_t)4));
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)7284));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_awb_lowlight_rg_th + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_a1 << 16);
 	goto L_10190;
 L_1015c:
@@ -3598,7 +3612,7 @@ L_1015c:
 	goto L_101a8; }
 	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)19220) = 0u;
 	r_v0 = (uint32_t)(0x19000000u);
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)19216));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&awb_frz + 0))) + 0u)));
 	{ int c_ = (r_v0 != 0u);
 	r_v0 = (uint32_t)(0u + (uint32_t)8);
 	if (c_) goto L_101a8; }
@@ -3609,7 +3623,7 @@ L_1015c:
 L_10190:
 	r_a1 = (uint32_t)(r_a1 | r_v0);
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)10240));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&system_reg_write + 0))) + 0u)));
 	r_a0 = (uint32_t)(0u + (uint32_t)2088);
 	system_reg_write(r_a0, r_a1); r_v0 = 0;
 	r_v0 = (uint32_t)(0u + (uint32_t)8);
@@ -3619,7 +3633,7 @@ L_101a8:
 	r_a0 = (uint32_t)((sp_base + 104));
 	*(uint32_t *)(uintptr_t)(sp_base + 120) = r_v0;
 	r_v0 = (uint32_t)(0x2010000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-4512));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_event_push + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 124) = 0u;
 	r_v0 = (uint32_t)tisp_event_push((void *)(uintptr_t)r_a0);
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 172));
@@ -3643,8 +3657,8 @@ static uint64_t L_awb_interrupt_static(uint32_t r_a0, uint32_t r_a1, uint32_t r_
 	r_s1 = (uint32_t)(0x19000000u);
 	*(uint32_t *)(uintptr_t)(sp_base + 76) = r_ra;
 	*(uint32_t *)(uintptr_t)(sp_base + 68) = r_s0;
-	r_s1 = (uint32_t)(LIFT_XLATE(r_s1 + (uint32_t)9828));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)11456));
+	r_s1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tispinfo + 0))) + 0u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&system_reg_read + 0))) + 0u)));
 	r_a0 = (uint32_t)(0u + (uint32_t)2128);
 	r_v0 = (uint32_t)system_reg_read(r_a0);
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)36));
@@ -3653,20 +3667,20 @@ static uint64_t L_awb_interrupt_static(uint32_t r_a0, uint32_t r_a1, uint32_t r_
 	r_a1 = (uint32_t)(r_s0 + r_a1);
 	r_a2 = (uint32_t)(0u + (uint32_t)4096);
 	r_a3 = (uint32_t)(0u + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&dma_cache_sync) + 0u)));
 	r_a0 = (uint32_t)(0u + 0u);
 	dma_cache_sync(NULL, (void *)(uintptr_t)r_a1, r_a2, (enum dma_data_direction)r_a3); r_v0 = 0;
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)36));
 	r_a1 = (uint32_t)(0xf0010000u);
 	r_v0 = (uint32_t)(0x2010000u);
 	r_a0 = (uint32_t)(r_s0 + r_a0);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-3276));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_JZ_Isp_Get_Awb_Statistics + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_a1 | 0xf001);
 	{ uint64_t q_ = L_JZ_Isp_Get_Awb_Statistics(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(0u + (uint32_t)9);
 	*(uint32_t *)(uintptr_t)(sp_base + 24) = r_v0;
 	r_v0 = (uint32_t)(0x2010000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-4512));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_event_push + 0))) + 0u)));
 	r_a0 = (uint32_t)((sp_base + 16));
 	r_v0 = (uint32_t)tisp_event_push((void *)(uintptr_t)r_a0);
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 76));
@@ -3701,10 +3715,10 @@ static uint64_t L_JZ_Isp_Get_Awb_Statistics(uint32_t r_a0, uint32_t r_a1, uint32
 	r_t9 = (uint32_t)(r_v0 << 2);
 	r_a2 = (uint32_t)(0u + 0u);
 	r_t8 = (uint32_t)(0u + (uint32_t)60);
-	r_t7 = (uint32_t)(LIFT_XLATE(r_t7 + (uint32_t)18160));
-	r_t5 = (uint32_t)(LIFT_XLATE(r_t5 + (uint32_t)17260));
-	r_t3 = (uint32_t)(LIFT_XLATE(r_t3 + (uint32_t)16360));
-	r_t1 = (uint32_t)(LIFT_XLATE(r_t1 + (uint32_t)15460));
+	r_t7 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&awb_array_r + 0))) + 0u)));
+	r_t5 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&awb_array_g + 0))) + 0u)));
+	r_t3 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&awb_array_b + 0))) + 0u)));
+	r_t1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&awb_array_p + 0))) + 0u)));
 	r_s0 = (uint32_t)(r_s0 | 0xffff);
 	r_s1 = (uint32_t)(r_s1 | 0xfc00);
 	goto L_f414;
@@ -3769,7 +3783,7 @@ static uint64_t L_tisp_awb_ev_update(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2
 	uint32_t r_at = 0, r_v0 = 0, r_v1 = 0, r_t0 = 0, r_t1 = 0, r_t2 = 0, r_t3 = 0, r_t4 = 0, r_t5 = 0, r_t6 = 0, r_t7 = 0, r_s0 = 0, r_s1 = 0, r_s2 = 0, r_s3 = 0, r_s4 = 0, r_s5 = 0, r_s6 = 0, r_s7 = 0, r_t8 = 0, r_t9 = 0, r_k0 = 0, r_k1 = 0, r_gp = 0, r_s8 = 0, r_ra = 0, r_hi = 0, r_lo = 0;
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_v0 = (uint32_t)(0x14040000u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)7484) = r_a0;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&awb_ev + 0))) + 0u)) = r_a0;
 	r_v0 = (uint32_t)(0u + 0u);
 	return ((uint64_t)r_v1 << 32) | r_v0;
 	return ((uint64_t)r_v1 << 32) | r_v0;
@@ -3782,7 +3796,7 @@ static uint64_t L_tisp_ct_update(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, ui
 	uint32_t r_at = 0, r_v0 = 0, r_v1 = 0, r_t0 = 0, r_t1 = 0, r_t2 = 0, r_t3 = 0, r_t4 = 0, r_t5 = 0, r_t6 = 0, r_t7 = 0, r_s0 = 0, r_s1 = 0, r_s2 = 0, r_s3 = 0, r_s4 = 0, r_s5 = 0, r_s6 = 0, r_s7 = 0, r_t8 = 0, r_t9 = 0, r_k0 = 0, r_k1 = 0, r_gp = 0, r_s8 = 0, r_ra = 0, r_hi = 0, r_lo = 0;
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_v0 = (uint32_t)(0x2020000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-23092));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_ccm_ct_update + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 28) = r_ra;
 	*(uint32_t *)(uintptr_t)(sp_base + 24) = r_s1;
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_s0;
@@ -3791,7 +3805,7 @@ static uint64_t L_tisp_ct_update(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, ui
 	{ uint64_t q_ = L_tisp_ccm_ct_update(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(0x2010000u);
 	r_a0 = (uint32_t)(r_s0 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)31896));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_lsc_ct_update + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_s1 + 0u);
 	{ uint64_t q_ = L_tisp_lsc_ct_update(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 28));
@@ -3810,12 +3824,12 @@ static uint64_t L_tisp_ccm_ct_update(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	*(uint32_t *)(uintptr_t)(sp_base + 24) = r_s1;
 	r_s1 = (uint32_t)(0x19010000u);
-	r_s1 = (uint32_t)(LIFT_XLATE(r_s1 + (uint32_t)-13800));
+	r_s1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ccm_real + 0))) + 0u)));
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)12));
 	r_v0 = (uint32_t)(0x14040000u);
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_s0;
 	r_s0 = (uint32_t)(r_a0 + 0u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)8148) = r_a0;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ct + 0))) + 0u)) = r_a0;
 	r_a0 = (uint32_t)(r_v1 < r_a0);
 	r_v0 = (uint32_t)(r_s0 - r_v1);
 	r_v1 = (uint32_t)(r_v1 - r_s0);
@@ -3826,7 +3840,7 @@ static uint64_t L_tisp_ccm_ct_update(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2
 	*(uint32_t *)(uintptr_t)(sp_base + 28) = r_ra;
 	if (c_) goto L_1a624; }
 	r_v0 = (uint32_t)(0x2020000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-23772));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_jz_isp_ccm + 0))) + 0u)));
 	{ uint64_t q_ = L_jz_isp_ccm(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)12) = r_s0;
 L_1a624:
@@ -3846,12 +3860,12 @@ static uint64_t L_tisp_ccm_ev_update(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	*(uint32_t *)(uintptr_t)(sp_base + 24) = r_s1;
 	r_s1 = (uint32_t)(0x19010000u);
-	r_s1 = (uint32_t)(LIFT_XLATE(r_s1 + (uint32_t)-13800));
+	r_s1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ccm_real + 0))) + 0u)));
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)4));
 	r_v0 = (uint32_t)(0x14040000u);
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_s0;
 	r_s0 = (uint32_t)(r_a0 >> 10);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)8144) = r_a0;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ev + 0))) + 0u)) = r_a0;
 	r_a0 = (uint32_t)(r_v1 < r_s0);
 	r_v0 = (uint32_t)(r_s0 - r_v1);
 	r_v1 = (uint32_t)(r_v1 - r_s0);
@@ -3862,7 +3876,7 @@ static uint64_t L_tisp_ccm_ev_update(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2
 	*(uint32_t *)(uintptr_t)(sp_base + 28) = r_ra;
 	if (c_) goto L_1a5b4; }
 	r_v0 = (uint32_t)(0x2020000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-23772));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_jz_isp_ccm + 0))) + 0u)));
 	{ uint64_t q_ = L_jz_isp_ccm(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)4) = r_s0;
 L_1a5b4:
@@ -3881,7 +3895,7 @@ static uint64_t L_tisp_lsc_ct_update(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2
 	uint32_t r_at = 0, r_v0 = 0, r_v1 = 0, r_t0 = 0, r_t1 = 0, r_t2 = 0, r_t3 = 0, r_t4 = 0, r_t5 = 0, r_t6 = 0, r_t7 = 0, r_s0 = 0, r_s1 = 0, r_s2 = 0, r_s3 = 0, r_s4 = 0, r_s5 = 0, r_s6 = 0, r_s7 = 0, r_t8 = 0, r_t9 = 0, r_k0 = 0, r_k1 = 0, r_gp = 0, r_s8 = 0, r_ra = 0, r_hi = 0, r_lo = 0;
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_v0 = (uint32_t)(0x2010000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)30472));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_jz_isp_lsc_ct + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_ra;
 	*(uint32_t *)(uintptr_t)(sp_base + 16) = r_s0;
 	r_s0 = (uint32_t)(0x14040000u);
@@ -3891,7 +3905,7 @@ static uint64_t L_tisp_lsc_ct_update(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 20));
 	r_v0 = (uint32_t)(0x14040000u);
 	r_s0 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 16));
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)8120) = r_v1;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ct_last + 0))) + 0u)) = r_v1;
 	r_v0 = (uint32_t)(0u + 0u);
 	return ((uint64_t)r_v1 << 32) | r_v0;
 	return ((uint64_t)r_v1 << 32) | r_v0;
@@ -3904,11 +3918,11 @@ static uint64_t L_tisp_lsc_gain_update(uint32_t r_a0, uint32_t r_a1, uint32_t r_
 	uint32_t r_at = 0, r_v0 = 0, r_v1 = 0, r_t0 = 0, r_t1 = 0, r_t2 = 0, r_t3 = 0, r_t4 = 0, r_t5 = 0, r_t6 = 0, r_t7 = 0, r_s0 = 0, r_s1 = 0, r_s2 = 0, r_s3 = 0, r_s4 = 0, r_s5 = 0, r_s6 = 0, r_s7 = 0, r_t8 = 0, r_t9 = 0, r_k0 = 0, r_k1 = 0, r_gp = 0, r_s8 = 0, r_ra = 0, r_hi = 0, r_lo = 0;
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_v1 = (uint32_t)(0x14040000u);
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)8112));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&lsc_gain_old + 0))) + 0u)));
 	r_a3 = (uint32_t)(0u + (uint32_t)-1);
 	{ int c_ = (r_v0 != r_a3);
 	if (c_) goto L_17d00; }
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)8112) = r_a0;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&lsc_gain_old + 0))) + 0u)) = r_a0;
 L_17cf8:
 	r_v0 = (uint32_t)(0u + 0u);
 	return ((uint64_t)r_v1 << 32) | r_v0;
@@ -3927,11 +3941,11 @@ L_17d18:
 	{ int c_ = (r_v0 != 0u);
 	if (c_) goto L_17cf8; }
 	r_v0 = (uint32_t)(0x2010000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)30472));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_jz_isp_lsc_ct + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_ra;
 	*(uint32_t *)(uintptr_t)(sp_base + 16) = r_s0;
 	r_s0 = (uint32_t)(0x19010000u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s0 + (uint32_t)-32292) = 0u;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&gain_no_change + 0))) + 0u)) = 0u;
 	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_a2 + (uint32_t)8112) = r_a0;
 	{ uint64_t q_ = L_jz_isp_lsc_ct(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 20));
@@ -3950,18 +3964,18 @@ static uint64_t L_tiziano_adr_algorithm(uint32_t r_a0, uint32_t r_a1, uint32_t r
 	uint32_t r_at = 0, r_v0 = 0, r_v1 = 0, r_t0 = 0, r_t1 = 0, r_t2 = 0, r_t3 = 0, r_t4 = 0, r_t5 = 0, r_t6 = 0, r_t7 = 0, r_s0 = 0, r_s1 = 0, r_s2 = 0, r_s3 = 0, r_s4 = 0, r_s5 = 0, r_s6 = 0, r_s7 = 0, r_t8 = 0, r_t9 = 0, r_k0 = 0, r_k1 = 0, r_gp = 0, r_s8 = 0, r_ra = 0, r_hi = 0, r_lo = 0;
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_v0 = (uint32_t)(0x19010000u);
-	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)17372));
+	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_adr_ev_now + 0))) + 0u)));
 	r_v0 = (uint32_t)(0x19010000u);
-	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)17368));
+	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_adr_ev_changed + 0))) + 0u)));
 	r_v1 = (uint32_t)(0u + (uint32_t)1);
 	*(uint32_t *)(uintptr_t)(sp_base + 76) = r_ra;
 	{ int c_ = (r_a1 != r_v1);
 	*(uint32_t *)(uintptr_t)(sp_base + 72) = r_s0;
 	if (c_) goto L_27440; }
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)17368) = 0u;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_adr_ev_changed + 0))) + 0u)) = 0u;
 	r_v0 = (uint32_t)(0x19010000u);
 	r_a1 = (uint32_t)(0u + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)17332));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&adr_ev_list + 0))) + 0u)));
 	r_a3 = (uint32_t)(0u + (uint32_t)9);
 	r_a2 = (uint32_t)(r_a1 << 2);
 L_26fd0:
@@ -3981,19 +3995,19 @@ L_26fd0:
 	{ int c_ = (r_a1 != 0u);
 	r_t3 = (uint32_t)(0x19010000u);
 	if (c_) goto L_27040; }
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_t2 + (uint32_t)17296));
-	r_t8 = (uint32_t)(LIFT_XLATE(r_t8 + (uint32_t)11708));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&adr_ligb_list + 0))) + 0u)));
+	r_t8 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&adr_light_end + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_t8 + (uint32_t)112) = r_v0;
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_t7 + (uint32_t)17116));
-	r_a3 = (uint32_t)(LIFT_XLATE(r_a3 + (uint32_t)11648));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&adr_blp2_list + 0))) + 0u)));
+	r_a3 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&adr_block_light + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_a3 + (uint32_t)16) = r_v0;
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_t6 + (uint32_t)17260));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&adr_mapb1_list + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_a3 + (uint32_t)40) = r_v0;
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_t5 + (uint32_t)17224));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&adr_mapb2_list + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_a3 + (uint32_t)44) = r_v0;
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_t4 + (uint32_t)17188));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&adr_mapb3_list + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_a3 + (uint32_t)48) = r_v0;
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_t3 + (uint32_t)17152));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&adr_mapb4_list + 0))) + 0u)));
 	goto L_270b8;
 L_27040:
 	r_t0 = (uint32_t)(r_a1 + (uint32_t)-1);
@@ -4278,53 +4292,53 @@ L_27430:
 L_27440:
 	r_v0 = (uint32_t)(0x14040000u);
 	r_v1 = (uint32_t)(0x19010000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)14368));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ctc_kneepoint_x + 0))) + 0u)));
 	r_a0 = (uint32_t)(0x14040000u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)17052) = r_v0;
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)14352));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)17052));
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_TizianoAdrFpgaStructMe + 0))) + 0u)) = r_v0;
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ctc_kneepoint_mux + 0))) + 0u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_TizianoAdrFpgaStructMe + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)4) = r_a0;
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)14308));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&min_kneepoint_x + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)8) = r_a0;
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)14264));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&min_kneepoint_y + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)12) = r_a0;
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)14172));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&map_kneepoint_x + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)16) = r_a0;
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)13292));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&map_kneepoint_y + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)20) = r_a0;
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)12908));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&contrast_w_distance + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)24) = r_a0;
 	r_a0 = (uint32_t)(0x19010000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)13284));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&adr_hist + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)28) = r_a0;
 	r_a0 = (uint32_t)(0x19010000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)15732));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&adr_block_y + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)32) = r_a0;
 	r_a0 = (uint32_t)(0x19010000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)15332));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&adr_block_hist + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)36) = r_a0;
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)12856));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&adr_tm_base_lut + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)40) = r_a0;
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)12340));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&adr_gam_x + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)44) = r_a0;
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)11824));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&adr_gam_y + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)48) = r_a0;
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)11604));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&adr_map_mode + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)52) = r_a0;
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)11708));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&adr_light_end + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)56) = r_a0;
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)11648));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&adr_block_light + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)60) = r_a0;
 	r_a1 = (uint32_t)(r_v1 + 0u);
 	r_a2 = (uint32_t)((sp_base + 16));
@@ -4346,23 +4360,23 @@ L_2752c:
 L_27540:
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)17328));
 	r_v0 = (uint32_t)(0x14040000u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)11820) = r_v1;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&adr_light_end + 0))) + 112u)) = r_v1;
 	r_v1 = (uint32_t)(0x19010000u);
-	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)17148));
+	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&adr_blp2_list + 0))) + 32u)));
 	r_v0 = (uint32_t)(0x14040000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)11648));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&adr_block_light + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)16) = r_v1;
 	r_v1 = (uint32_t)(0x19010000u);
-	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)17292));
+	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&adr_mapb1_list + 0))) + 32u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)40) = r_v1;
 	r_v1 = (uint32_t)(0x19010000u);
-	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)17256));
+	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&adr_mapb2_list + 0))) + 32u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)44) = r_v1;
 	r_v1 = (uint32_t)(0x19010000u);
-	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)17220));
+	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&adr_mapb3_list + 0))) + 32u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)48) = r_v1;
 	r_v1 = (uint32_t)(0x19010000u);
-	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)17184));
+	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&adr_mapb4_list + 0))) + 32u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)52) = r_v1;
 	goto L_27440;
 L_27594:
@@ -4371,7 +4385,7 @@ L_27594:
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)4));
 	r_a3 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)12));
 	r_v0 = (uint32_t)(0x2010000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)13024));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_Tiziano_adr_fpga + 0))) + 0u)));
 	{ uint64_t q_ = L_Tiziano_adr_fpga(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 76));
 	r_s0 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 72));
@@ -4393,7 +4407,7 @@ static uint64_t L_tiziano_adr_params_init(uint32_t r_a0, uint32_t r_a1, uint32_t
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_s1;
 	*(uint32_t *)(uintptr_t)(sp_base + 36) = r_ra;
 	*(uint32_t *)(uintptr_t)(sp_base + 16) = r_s0;
-	r_s2 = (uint32_t)(LIFT_XLATE(r_s2 + (uint32_t)15960));
+	r_s2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&param_adr_centre_w_dis_array + 0))) + 4u)));
 	r_s1 = (uint32_t)(0u + (uint32_t)2600);
 	r_s4 = (uint32_t)(0x2030000u);
 	r_s3 = (uint32_t)(0u + (uint32_t)2660);
@@ -4410,13 +4424,13 @@ L_277e8:
 	r_s2 = (uint32_t)(r_s2 + (uint32_t)8);
 	if (c_) goto L_277e8; }
 	r_v0 = (uint32_t)(0x19010000u);
-	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)16076));
+	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&param_adr_centre_w_dis_array + 0))) + 120u)));
 	r_a0 = (uint32_t)(0u + (uint32_t)2660);
 	system_reg_write(r_a0, r_a1); r_v0 = 0;
 	r_v0 = (uint32_t)(0x19010000u);
-	r_s1 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)16164));
+	r_s1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&param_adr_map_kneepoint_array + 0))) + 0u)));
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)4));
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)16164));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&param_adr_map_kneepoint_array + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_a1 << 16);
 	r_a0 = (uint32_t)(0u + (uint32_t)2664);
 	r_a1 = (uint32_t)(r_a1 | r_v0);
@@ -4485,10 +4499,10 @@ L_277e8:
 	r_a1 = (uint32_t)(r_a1 | r_v0);
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(0x19010000u);
-	r_s1 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)16892));
+	r_s1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&param_adr_weight_20_lut_array + 0))) + 0u)));
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)12));
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)8));
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)16892));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&param_adr_weight_20_lut_array + 0))) + 0u)));
 	r_v1 = (uint32_t)(r_v1 << 16);
 	r_a1 = (uint32_t)(r_a1 << 24);
 	r_a1 = (uint32_t)(r_a1 | r_v1);
@@ -4583,10 +4597,10 @@ L_277e8:
 	r_a1 = (uint32_t)(r_a1 | r_v0);
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(0x19010000u);
-	r_s1 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)16764));
+	r_s1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&param_adr_weight_02_lut_array + 0))) + 0u)));
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)12));
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)8));
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)16764));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&param_adr_weight_02_lut_array + 0))) + 0u)));
 	r_v1 = (uint32_t)(r_v1 << 16);
 	r_a1 = (uint32_t)(r_a1 << 24);
 	r_a1 = (uint32_t)(r_a1 | r_v1);
@@ -4681,10 +4695,10 @@ L_277e8:
 	r_a1 = (uint32_t)(r_a1 | r_v0);
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(0x19010000u);
-	r_s1 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)16636));
+	r_s1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&param_adr_weight_12_lut_array + 0))) + 0u)));
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)12));
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)8));
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)16636));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&param_adr_weight_12_lut_array + 0))) + 0u)));
 	r_v1 = (uint32_t)(r_v1 << 16);
 	r_a1 = (uint32_t)(r_a1 << 24);
 	r_a1 = (uint32_t)(r_a1 | r_v1);
@@ -4779,10 +4793,10 @@ L_277e8:
 	r_a1 = (uint32_t)(r_a1 | r_v0);
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(0x19010000u);
-	r_s1 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)16508));
+	r_s1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&param_adr_weight_22_lut_array + 0))) + 0u)));
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)12));
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)8));
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)16508));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&param_adr_weight_22_lut_array + 0))) + 0u)));
 	r_v1 = (uint32_t)(r_v1 << 16);
 	r_a1 = (uint32_t)(r_a1 << 24);
 	r_a1 = (uint32_t)(r_a1 | r_v1);
@@ -4877,10 +4891,10 @@ L_277e8:
 	r_a1 = (uint32_t)(r_a1 | r_v0);
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(0x19010000u);
-	r_s1 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)16380));
+	r_s1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&param_adr_weight_21_lut_array + 0))) + 0u)));
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)12));
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)8));
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)16380));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&param_adr_weight_21_lut_array + 0))) + 0u)));
 	r_v1 = (uint32_t)(r_v1 << 16);
 	r_a1 = (uint32_t)(r_a1 << 24);
 	r_a1 = (uint32_t)(r_a1 | r_v1);
@@ -4975,9 +4989,9 @@ L_277e8:
 	r_a1 = (uint32_t)(r_a1 | r_v0);
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(0x19010000u);
-	r_s1 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)16256));
+	r_s1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&param_adr_min_kneepoint_array + 0))) + 0u)));
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)4));
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)16256));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&param_adr_min_kneepoint_array + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_a1 << 16);
 	r_a0 = (uint32_t)(0u + (uint32_t)3504);
 	r_a1 = (uint32_t)(r_a1 | r_v0);
@@ -5046,9 +5060,9 @@ L_277e8:
 	r_a1 = (uint32_t)(r_a1 | r_v0);
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(0x19010000u);
-	r_s1 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)16080));
+	r_s1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&param_adr_coc_kneepoint_array + 0))) + 0u)));
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)4));
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)16080));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&param_adr_coc_kneepoint_array + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_a1 << 16);
 	r_a0 = (uint32_t)(0u + (uint32_t)3568);
 	r_a1 = (uint32_t)(r_a1 | r_v0);
@@ -5108,7 +5122,7 @@ L_277e8:
 	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)76));
 	r_a1 = (uint32_t)(r_a1 << 8);
 	r_s1 = (uint32_t)(0x19010000u);
-	r_s1 = (uint32_t)(LIFT_XLATE(r_s1 + (uint32_t)17020));
+	r_s1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&param_adr_ct_par_array + 0))) + 0u)));
 	r_a0 = (uint32_t)(0u + (uint32_t)3612);
 	r_a1 = (uint32_t)(r_a1 | r_v0);
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
@@ -5128,9 +5142,9 @@ L_277e8:
 	r_a0 = (uint32_t)(0u + (uint32_t)3600);
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(0x19010000u);
-	r_s1 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)15812));
+	r_s1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&param_adr_stat_block_hist_diff_array + 0))) + 0u)));
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)4));
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)15812));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&param_adr_stat_block_hist_diff_array + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_a1 << 16);
 	r_a0 = (uint32_t)(0u + (uint32_t)3616);
 	r_a1 = (uint32_t)(r_a1 | r_v0);
@@ -5159,9 +5173,9 @@ static uint64_t L_tiziano_defog_algorithm(uint32_t r_a0, uint32_t r_a1, uint32_t
 	uint32_t r_at = 0, r_v0 = 0, r_v1 = 0, r_t0 = 0, r_t1 = 0, r_t2 = 0, r_t3 = 0, r_t4 = 0, r_t5 = 0, r_t6 = 0, r_t7 = 0, r_s0 = 0, r_s1 = 0, r_s2 = 0, r_s3 = 0, r_s4 = 0, r_s5 = 0, r_s6 = 0, r_s7 = 0, r_t8 = 0, r_t9 = 0, r_k0 = 0, r_k1 = 0, r_gp = 0, r_s8 = 0, r_ra = 0, r_hi = 0, r_lo = 0;
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_v0 = (uint32_t)(0x19010000u);
-	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)13232));
+	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_defog_ev_now + 0))) + 0u)));
 	r_v0 = (uint32_t)(0x19010000u);
-	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)13228));
+	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_defog_ev_changed + 0))) + 0u)));
 	r_v1 = (uint32_t)(0u + (uint32_t)1);
 	*(uint32_t *)(uintptr_t)(sp_base + 108) = r_ra;
 	*(uint32_t *)(uintptr_t)(sp_base + 104) = r_s6;
@@ -5173,10 +5187,10 @@ static uint64_t L_tiziano_defog_algorithm(uint32_t r_a0, uint32_t r_a1, uint32_t
 	{ int c_ = (r_a1 != r_v1);
 	*(uint32_t *)(uintptr_t)(sp_base + 80) = r_s0;
 	if (c_) goto L_25234; }
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)13228) = 0u;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_defog_ev_changed + 0))) + 0u)) = 0u;
 	r_v0 = (uint32_t)(0x19010000u);
 	r_a1 = (uint32_t)(0u + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)13192));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_ev_list + 0))) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)9);
 	r_a3 = (uint32_t)(r_a1 << 2);
 L_24d80:
@@ -5196,19 +5210,19 @@ L_24d80:
 	{ int c_ = (r_a1 != 0u);
 	r_t3 = (uint32_t)(0x19010000u);
 	if (c_) goto L_24df0; }
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_t2 + (uint32_t)12976));
-	r_s0 = (uint32_t)(LIFT_XLATE(r_s0 + (uint32_t)11424));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_rgbra_list + 0))) + 0u)));
+	r_s0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_fpga_para + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_s0 + (uint32_t)28) = r_v0;
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_t7 + (uint32_t)13156));
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_a2 + (uint32_t)8136) = r_v0;
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_t6 + (uint32_t)13120));
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)8136));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_trsy0_list + 0))) + 0u)));
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_defog_block_t_y + 0))) + 0u)) = r_v0;
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_trsy1_list + 0))) + 0u)));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_defog_block_t_y + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_a2 + (uint32_t)4) = r_v0;
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_t5 + (uint32_t)13084));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_trsy2_list + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_a2 + (uint32_t)8) = r_v0;
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_t4 + (uint32_t)13048));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_trsy3_list + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_a2 + (uint32_t)12) = r_v0;
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_t3 + (uint32_t)13012));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_trsy4_list + 0))) + 0u)));
 	goto L_24e68;
 L_24df0:
 	r_t0 = (uint32_t)(r_a1 + (uint32_t)-1);
@@ -5491,14 +5505,14 @@ L_251dc:
 	goto L_253f4;
 L_251ec:
 	r_v0 = (uint32_t)(0x14040000u);
-	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)11452));
+	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_fpga_para + 0))) + 28u)));
 	r_v0 = (uint32_t)(0x19010000u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)6936) = r_v1;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&param_defog_soft_ct_par_array + 0))) + 20u)) = r_v1;
 	r_v1 = (uint32_t)(0x19010000u);
-	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)8136));
+	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_defog_block_t_y + 0))) + 0u)));
 	r_v0 = (uint32_t)(0x19010000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)7020));
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)8136));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&param_defog_blk_trans_array + 0))) + 0u)));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_defog_block_t_y + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)20) = r_a0;
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v1 + (uint32_t)4));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)24) = r_a0;
@@ -5511,56 +5525,56 @@ L_251ec:
 L_25234:
 	r_v0 = (uint32_t)(0x19010000u);
 	r_v1 = (uint32_t)(0x19010000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)12176));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_meam_block_r + 0))) + 0u)));
 	r_a0 = (uint32_t)(0x19010000u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)6848) = r_v0;
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)11376));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)6848));
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&TizianoDefogStructMe + 0))) + 0u)) = r_v0;
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_meam_block_g + 0))) + 0u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&TizianoDefogStructMe + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)4) = r_a0;
 	r_a0 = (uint32_t)(0x19010000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)10576));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_meam_block_b + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)8) = r_a0;
 	r_a0 = (uint32_t)(0x19010000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)9776));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_meam_block_y + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)12) = r_a0;
 	r_a0 = (uint32_t)(0x19010000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)8176));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_detial_block + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)16) = r_a0;
 	r_a0 = (uint32_t)(0x19010000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)8976));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_variance_block + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)20) = r_a0;
 	r_a0 = (uint32_t)(0x19010000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)8156));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_defog_block_t_x + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)24) = r_a0;
 	r_a0 = (uint32_t)(0x19010000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)8136));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_defog_block_t_y + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)28) = r_a0;
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)11516));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_detail_x + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)32) = r_a0;
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)11496));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_detail_y + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)36) = r_a0;
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)11476));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_color_var_x + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)40) = r_a0;
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)11456));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_color_var_y + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)44) = r_a0;
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)11424));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_fpga_para + 0))) + 0u)));
 	r_t0 = (uint32_t)(0x14040000u);
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)48) = r_a0;
 	r_a3 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_t0 + (uint32_t)10624));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_block_transmit_t + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)52) = r_a0;
 	r_a2 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a3 + (uint32_t)9824));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_block_air_light_r + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)56) = r_a0;
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)9024));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_block_air_light_g + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)60) = r_a0;
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)8224));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_block_air_light_b + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)64) = r_a1;
 	r_t1 = (uint32_t)((sp_base + 16));
 	r_a1 = (uint32_t)(r_v1 + 0u);
@@ -5587,7 +5601,7 @@ L_2533c:
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)4));
 	r_a3 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)12));
 	r_v0 = (uint32_t)(0x2010000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)23472));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_Tiziano_defog_fpga + 0))) + 0u)));
 	r_s6 = (uint32_t)(LIFT_XLATE(r_s1 + (uint32_t)9824));
 	r_s1 = (uint32_t)(0xffff0000u);
 	{ uint64_t q_ = L_Tiziano_defog_fpga(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
@@ -5629,23 +5643,23 @@ L_25388:
 L_253f4:
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)13008));
 	r_v0 = (uint32_t)(0x14040000u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)11452) = r_v1;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_fpga_para + 0))) + 28u)) = r_v1;
 	r_v1 = (uint32_t)(0x19010000u);
-	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)13188));
+	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_trsy0_list + 0))) + 32u)));
 	r_v0 = (uint32_t)(0x19010000u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)8136) = r_v1;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_defog_block_t_y + 0))) + 0u)) = r_v1;
 	r_v1 = (uint32_t)(0x19010000u);
-	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)13152));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)8136));
+	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_trsy1_list + 0))) + 32u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_defog_block_t_y + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)4) = r_v1;
 	r_v1 = (uint32_t)(0x19010000u);
-	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)13116));
+	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_trsy2_list + 0))) + 32u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)8) = r_v1;
 	r_v1 = (uint32_t)(0x19010000u);
-	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)13080));
+	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_trsy3_list + 0))) + 32u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)12) = r_v1;
 	r_v1 = (uint32_t)(0x19010000u);
-	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)13044));
+	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&defog_trsy4_list + 0))) + 32u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)16) = r_v1;
 	goto L_251ec;
 L_25448:
@@ -5671,16 +5685,16 @@ static uint64_t L_tisp_ae_ctrls_update(uint32_t r_a0, uint32_t r_a1, uint32_t r_
 	*(uint32_t *)(uintptr_t)(sp_base + 24) = r_s1;
 	r_s1 = (uint32_t)(0x19010000u);
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_s0;
-	r_a1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)9684));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&sensor_ctrl + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 28) = r_ra;
-	r_v0 = (uint32_t)(LIFT_XLATE(r_s1 + (uint32_t)17496));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_ae_ctrls + 0))) + 0u)));
 	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_a1 + (uint32_t)36));
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)28));
 	r_s0 = (uint32_t)(0x14040000u);
 	r_a2 = (uint32_t)(r_a2 < r_a0);
 	r_a1 = (uint32_t)(r_v1 + 0u);
 	{ int c_ = (r_a2 != 0u);
-	r_v1 = (uint32_t)(LIFT_XLATE(r_s0 + (uint32_t)18820));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_exp_parameter + 0))) + 0u)));
 	if (c_) goto L_2c064; }
 	*(uint32_t *)(uintptr_t)(r_v1 + (uint32_t)8) = r_a0;
 	goto L_2c06c;
@@ -5692,7 +5706,7 @@ L_2c06c:
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v1 + (uint32_t)24));
 	r_v0 = (uint32_t)(0x2010000u);
 	r_a1 = (uint32_t)(0u + (uint32_t)16);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-18112));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_math_exp2 + 0))) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)10);
 	{ uint64_t q_ = L_tisp_math_exp2(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v1 = (uint32_t)(LIFT_XLATE(r_s1 + (uint32_t)17496));
@@ -5700,7 +5714,7 @@ L_2c06c:
 	r_a1 = (uint32_t)(0x14040000u);
 	r_v0 = (uint32_t)(r_v0 < r_a0);
 	{ int c_ = (r_v0 != 0u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)18820));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_exp_parameter + 0))) + 0u)));
 	if (c_) goto L_2c0a8; }
 	*(uint32_t *)(uintptr_t)(r_a1 + (uint32_t)12) = r_a0;
 	goto L_2c0b0;
@@ -5734,7 +5748,7 @@ static uint64_t L_tisp_ae_process_impl(uint32_t r_a0, uint32_t r_a1, uint32_t r_
 	r_v0 = (uint32_t)(0x4000000u);
 	r_v0 = (uint32_t)(r_v0 + (uint32_t)1024);
 	*(uint32_t *)(uintptr_t)(sp_base + 212) = r_s1;
-	r_s1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)18864));
+	r_s1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_AePointPos + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 200) = r_v0;
 	*(uint32_t *)(uintptr_t)(sp_base + 204) = r_v0;
 	r_v0 = (uint32_t)(0u + (uint32_t)1);
@@ -5743,11 +5757,11 @@ static uint64_t L_tisp_ae_process_impl(uint32_t r_a0, uint32_t r_a1, uint32_t r_
 	*(uint32_t *)(uintptr_t)(sp_base + 196) = r_v0;
 	r_v0 = (uint32_t)(0x19010000u);
 	r_a1 = (uint32_t)(0x19010000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)24136));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ae_array_d + 0))) + 0u)));
 	r_a0 = (uint32_t)(0x19010000u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_a1 + (uint32_t)25104) = r_v0;
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)23236));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)25104));
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&IspAeWmeanParam + 0))) + 0u)) = r_v0;
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ae_array_m + 0))) + 0u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&IspAeWmeanParam + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 228) = r_s5;
 	*(uint32_t *)(uintptr_t)(sp_base + 224) = r_s4;
 	*(uint32_t *)(uintptr_t)(sp_base + 216) = r_s2;
@@ -5759,87 +5773,87 @@ static uint64_t L_tisp_ae_process_impl(uint32_t r_a0, uint32_t r_a1, uint32_t r_
 	*(uint32_t *)(uintptr_t)(sp_base + 220) = r_s3;
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)4) = r_a0;
 	r_a0 = (uint32_t)(0x19010000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)22336));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ae_array_s + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)8) = r_a0;
 	r_a0 = (uint32_t)(0x19010000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)21436));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ae_array_ir + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)12) = r_a0;
 	r_a0 = (uint32_t)(0x19010000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)20536));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ae_array_dc + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)16) = r_a0;
 	r_a0 = (uint32_t)(0x19010000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)19636));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ae_array_sc + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)20) = r_a0;
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)18888));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ae_parameter + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)24) = r_a0;
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)17040));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ae_zone_weight + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)28) = r_a0;
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)16140));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_scene_roui_weight + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)40) = r_a0;
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)15240));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_scene_roi_weight + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)44) = r_a0;
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)18020));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_log2_lut + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)48) = r_a0;
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)17940));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_weight_lut + 0))) + 0u)));
 	r_s0 = (uint32_t)(0x14040000u);
-	r_t0 = (uint32_t)(LIFT_XLATE(r_s0 + (uint32_t)18820));
+	r_t0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_exp_parameter + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)52) = r_a0;
 	r_a2 = (uint32_t)(0x14040000u);
 	r_a0 = (uint32_t)(0x19010000u);
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)32) = r_t0;
-	r_a3 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)15204));
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)18864));
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_a0 + (uint32_t)25036) = r_t0;
+	r_a3 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ae_stat + 0))) + 0u)));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_AePointPos + 0))) + 0u)));
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&IspAeTuneParam + 0))) + 0u)) = r_t0;
 	r_t0 = (uint32_t)(0x14040000u);
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)36) = r_a3;
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)56) = r_v1;
-	r_t0 = (uint32_t)(LIFT_XLATE(r_t0 + (uint32_t)18744));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)25036));
+	r_t0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ev_list + 0))) + 0u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&IspAeTuneParam + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)4) = r_t0;
 	r_t0 = (uint32_t)(0x14040000u);
-	r_t0 = (uint32_t)(LIFT_XLATE(r_t0 + (uint32_t)18720));
+	r_t0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_lum_list + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)8) = r_t0;
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)24) = r_a3;
 	r_a3 = (uint32_t)(0x14040000u);
-	r_a3 = (uint32_t)(LIFT_XLATE(r_a3 + (uint32_t)15144));
+	r_a3 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ae_wm_q + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)28) = r_a3;
 	r_a3 = (uint32_t)(0x14040000u);
-	r_a3 = (uint32_t)(LIFT_XLATE(r_a3 + (uint32_t)18164));
+	r_a3 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_deflick_lut + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)32) = r_a3;
 	r_a3 = (uint32_t)(0x14040000u);
-	r_a3 = (uint32_t)(LIFT_XLATE(r_a3 + (uint32_t)18668));
+	r_a3 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_deflicker_para + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)36) = r_a3;
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)52) = r_v1;
 	r_a3 = (uint32_t)(0x14040000u);
 	r_v1 = (uint32_t)(0x19010000u);
-	r_a3 = (uint32_t)(LIFT_XLATE(r_a3 + (uint32_t)18800));
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)17588));
+	r_a3 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ae_ev_step + 0))) + 0u)));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ae_hist_ir_array + 0))) + 0u)));
 	r_t0 = (uint32_t)(0x14040000u);
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)40) = r_a3;
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)56) = r_v1;
 	r_a3 = (uint32_t)(0x14040000u);
 	r_v1 = (uint32_t)(0x14040000u);
-	r_t0 = (uint32_t)(LIFT_XLATE(r_t0 + (uint32_t)18680));
-	r_a3 = (uint32_t)(LIFT_XLATE(r_a3 + (uint32_t)18100));
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)18160));
+	r_t0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_at_list + 0))) + 0u)));
+	r_a3 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ae_scene_mode_th + 0))) + 0u)));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_nodes_num + 0))) + 0u)));
 	r_s5 = (uint32_t)(0x14040000u);
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)12) = r_t0;
 	r_s4 = (uint32_t)(0x19010000u);
-	r_t0 = (uint32_t)(LIFT_XLATE(r_s5 + (uint32_t)15224));
+	r_t0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ae_result + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)44) = r_a3;
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)60) = r_v1;
 	r_a3 = (uint32_t)(0x14040000u);
 	r_v1 = (uint32_t)(0x14040000u);
-	r_a3 = (uint32_t)(LIFT_XLATE(r_a3 + (uint32_t)18784));
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)19044));
+	r_a3 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ae_stable_tol + 0))) + 0u)));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ae_compensation + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)16) = r_t0;
-	r_t0 = (uint32_t)(LIFT_XLATE(r_s4 + (uint32_t)17572));
+	r_t0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ae_reg + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)48) = r_a3;
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)64) = r_v1;
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)20) = r_t0;
@@ -5858,11 +5872,11 @@ L_2cacc:
 	r_t0 = (uint32_t)(r_v1 + r_v0);
 	if (c_) goto L_2cabc; }
 	r_v0 = (uint32_t)(0x19010000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)18612));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ae_hist_array + 0))) + 0u)));
 	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)15204));
 	*(uint32_t *)(uintptr_t)(sp_base + 132) = r_v0;
 	r_v0 = (uint32_t)(0x14040000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)18116));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_scene_para + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 128) = r_a2;
 	r_a2 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)25104));
 	*(uint32_t *)(uintptr_t)(sp_base + 136) = r_v0;
@@ -5886,7 +5900,7 @@ L_2cb1c:
 	r_a3 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)12));
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)4));
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-17680));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_Tiziano_ae_fpga + 0))) + 0u)));
 	r_s2 = (uint32_t)(LIFT_XLATE(r_s2 + (uint32_t)25036));
 	{ uint64_t q_ = L_Tiziano_ae_fpga(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_s2 = (uint32_t)(r_s2 + (uint32_t)16);
@@ -5909,13 +5923,13 @@ L_2cb70:
 	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)8));
 	r_a3 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)12));
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-16760));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_set_ag_func + 0))) + 0u)));
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)25036));
 	{ uint64_t q_ = L_tisp_set_ag_func(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(LIFT_XLATE(r_s4 + (uint32_t)17572));
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)8));
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-27456));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_set_sensor_integration_time + 0))) + 0u)));
 	{ uint64_t q_ = L_tisp_set_sensor_integration_time(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	{ int c_ = (r_v0 == 0u);
 	r_s0 = (uint32_t)(LIFT_XLATE(r_s0 + (uint32_t)18820));
@@ -5923,7 +5937,7 @@ L_2cb70:
 	r_a1 = (uint32_t)(0xe000000u);
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)2);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)8312));
 	r_v0 = 0;
 	r_v0 = (uint32_t)(0u + (uint32_t)-1);
@@ -5935,12 +5949,12 @@ L_2cbdc:
 	r_v1 = (uint32_t)(r_v0 << 2);
 	r_s0 = (uint32_t)(0x19010000u);
 	r_s2 = (uint32_t)(0x19010000u);
-	r_a3 = (uint32_t)(LIFT_XLATE(r_s6 + (uint32_t)19068));
-	r_t0 = (uint32_t)(LIFT_XLATE(r_s7 + (uint32_t)19108));
+	r_a3 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_ev_cache + 0))) + 0u)));
+	r_t0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_ad_cache + 0))) + 0u)));
 	r_a3 = (uint32_t)(r_a3 + r_v1);
 	r_t0 = (uint32_t)(r_t0 + r_v1);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s0 + (uint32_t)29116) = r_v0;
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s2 + (uint32_t)29120) = r_v0;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_EffectFrame + 0))) + 0u)) = r_v0;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_EffectCount + 0))) + 0u)) = r_v0;
 	r_v1 = (uint32_t)(0u + 0u);
 	r_a0 = (uint32_t)(r_v0 + (uint32_t)1);
 	r_t1 = (uint32_t)(0u + (uint32_t)-4);
@@ -5968,14 +5982,14 @@ L_2cc38:
 	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s2 + (uint32_t)29120) = r_v0;
 	r_v0 = (uint32_t)(0x2010000u);
 	r_a0 = (uint32_t)(r_s1 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-15552));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult3_32 + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_a1 << (r_s1 & 31));
 	{ uint64_t q_ = L_fix_point_mult3_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s6 + (uint32_t)19068) = r_v0;
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s3 + (uint32_t)12));
 	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s3 + (uint32_t)4));
 	r_v0 = (uint32_t)(0x2010000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-15620));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult2_32 + 0))) + 0u)));
 	r_a0 = (uint32_t)(r_s1 + 0u);
 	{ uint64_t q_ = L_fix_point_mult2_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s7 + (uint32_t)19108) = r_v0;
@@ -5983,8 +5997,8 @@ L_2cc38:
 	r_s3 = (uint32_t)(0x14040000u);
 	r_s8 = (uint32_t)(0x14040000u);
 	r_v1 = (uint32_t)(r_v0 << 2);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_s3 + (uint32_t)19148));
-	r_a2 = (uint32_t)(LIFT_XLATE(r_s8 + (uint32_t)19184));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_ag_cache + 0))) + 0u)));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_dg_cache + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s2 + (uint32_t)29120) = r_v0;
 	r_a1 = (uint32_t)(r_a1 + r_v1);
 	r_a2 = (uint32_t)(r_a2 + r_v1);
@@ -6014,7 +6028,7 @@ L_2cce4:
 	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s3 + (uint32_t)19148) = r_t0;
 	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s8 + (uint32_t)19184) = r_a3;
 	r_a3 = (uint32_t)(0x14040000u);
-	r_t1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_a3 + (uint32_t)19220));
+	r_t1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_expt_first_frame + 0))) + 0u)));
 	r_t0 = (uint32_t)(0u + (uint32_t)1);
 	{ int c_ = (r_t1 == r_t0);
 	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s2 + (uint32_t)29120) = r_a0;
@@ -6023,7 +6037,7 @@ L_2cd28:
 	r_v0 = (uint32_t)(0xe0000000u);
 	r_a0 = (uint32_t)(LIFT_XLATE(r_s5 + (uint32_t)15224));
 	r_a1 = (uint32_t)(LIFT_XLATE(r_s4 + (uint32_t)17572));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)32));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&memcpy) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)16);
 	r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2);
 	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s0 + (uint32_t)29116));
@@ -6033,13 +6047,13 @@ L_2cd28:
 	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s8 + (uint32_t)0));
 	r_v0 = (uint32_t)(0x2030000u);
 	r_a3 = (uint32_t)((sp_base + 192));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-26784));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_JZ_Isp_Ae_Dg2reg + 0))) + 0u)));
 	r_a0 = (uint32_t)(r_s1 + 0u);
 	r_a1 = (uint32_t)((sp_base + 200));
 	{ uint64_t q_ = L_JZ_Isp_Ae_Dg2reg(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_s1 = (uint32_t)(0x2030000u);
 	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 200));
-	r_s1 = (uint32_t)(LIFT_XLATE(r_s1 + (uint32_t)-14220));
+	r_s1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_system_reg_write_ae + 0))) + 0u)));
 	r_a0 = (uint32_t)(0u + (uint32_t)2);
 	r_a1 = (uint32_t)(0u + (uint32_t)1032);
 	{ uint64_t q_ = L_system_reg_write_ae(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
@@ -6058,12 +6072,12 @@ L_2cd28:
 	r_s2 = (uint32_t)(0x2010000u);
 	*(uint32_t *)(uintptr_t)(sp_base + 160) = r_v0;
 	r_a0 = (uint32_t)((sp_base + 144));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_s2 + (uint32_t)-4512));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_event_push + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 164) = 0u;
 	r_s1 = (uint32_t)(0x19010000u);
 	r_v0 = (uint32_t)tisp_event_push((void *)(uintptr_t)r_a0);
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 160));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_s1 + (uint32_t)17496));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_ae_ctrls + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)36) = r_v1;
 	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s0 + (uint32_t)29116));
 	r_s7 = (uint32_t)(LIFT_XLATE(r_s7 + (uint32_t)19108));
@@ -6073,13 +6087,13 @@ L_2cd28:
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s7 + (uint32_t)0));
 	r_v0 = (uint32_t)(0x19010000u);
 	r_a0 = (uint32_t)(r_a0 << 6);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)17464) = r_a0;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&total_gain_new + 0))) + 0u)) = r_a0;
 	r_v0 = (uint32_t)(0x19010000u);
-	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)17468));
+	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&total_gain_old + 0))) + 0u)));
 	if (r_v1 != r_a0) {
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)17468) = r_a0;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&total_gain_old + 0))) + 0u)) = r_a0;
 	goto L_2ceb8; }
-	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s1 + (uint32_t)17496));
+	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_ae_ctrls + 0))) + 0u)));
 	goto L_2ceac;
 L_2ce18:
 	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_a3 + (uint32_t)19220) = 0u;
@@ -6088,7 +6102,7 @@ L_2ce18:
 	r_t1 = (uint32_t)(LIFT_XLATE(r_s7 + (uint32_t)19108));
 	r_t0 = (uint32_t)(r_t0 + r_v1);
 	r_t1 = (uint32_t)(r_t1 + r_v1);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_a3 + (uint32_t)29120) = r_v0;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_EffectCount + 0))) + 0u)) = r_v0;
 	r_v1 = (uint32_t)(0u + 0u);
 	r_t2 = (uint32_t)(0u + (uint32_t)-4);
 	goto L_2ce58;
@@ -6133,7 +6147,7 @@ L_2ceac:
 L_2ceb8:
 	r_v0 = (uint32_t)(0x2010000u);
 	r_a1 = (uint32_t)(0u + (uint32_t)16);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-14376));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_log2_fixed_to_fixed + 0))) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)16);
 	{ uint64_t q_ = L_tisp_log2_fixed_to_fixed(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_s4 = (uint32_t)(r_v0 + 0u);
@@ -6154,9 +6168,9 @@ L_2cef8:
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s3 + (uint32_t)0));
 	r_v0 = (uint32_t)(0x19010000u);
 	r_a0 = (uint32_t)(r_a0 << 6);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)17456) = r_a0;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&again_new + 0))) + 0u)) = r_a0;
 	r_v0 = (uint32_t)(0x19010000u);
-	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)17460));
+	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&again_old + 0))) + 0u)));
 	{ int c_ = (r_a1 != r_a0);
 	r_v1 = (uint32_t)(r_v0 + 0u);
 	if (c_) goto L_2cf30; }
@@ -6168,7 +6182,7 @@ L_2cf30:
 	r_v0 = (uint32_t)(0x2010000u);
 	r_a1 = (uint32_t)(0u + (uint32_t)16);
 	r_a2 = (uint32_t)(0u + (uint32_t)16);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-14376));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_log2_fixed_to_fixed + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)17460) = r_a0;
 	{ uint64_t q_ = L_tisp_log2_fixed_to_fixed(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_s0 = (uint32_t)(r_v0 + 0u);
@@ -6205,9 +6219,9 @@ static uint64_t L_tiziano_ae_set_hardware_param(uint32_t r_a0, uint32_t r_a1, ui
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_v1 = (uint32_t)(0x19010000u);
 	r_v0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)29128));
+	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ae_first + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 24) = r_s0;
-	r_s0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)18888));
+	r_s0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ae_parameter + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 32) = r_s2;
 	*(uint32_t *)(uintptr_t)(sp_base + 36) = r_ra;
 	*(uint32_t *)(uintptr_t)(sp_base + 28) = r_s1;
@@ -6215,10 +6229,10 @@ static uint64_t L_tiziano_ae_set_hardware_param(uint32_t r_a0, uint32_t r_a1, ui
 	r_s2 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s0 + (uint32_t)140));
 	if (c_) goto L_2d1b4; }
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)29128) = r_a0;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ae_first + 0))) + 0u)) = r_a0;
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s0 + (uint32_t)12));
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s0 + (uint32_t)8));
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)18888));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ae_parameter + 0))) + 0u)));
 	r_v1 = (uint32_t)(r_v1 << 16);
 	r_a1 = (uint32_t)(r_a1 << 28);
 	r_a1 = (uint32_t)(r_a1 | r_v1);
@@ -6226,7 +6240,7 @@ static uint64_t L_tiziano_ae_set_hardware_param(uint32_t r_a0, uint32_t r_a1, ui
 	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s0 + (uint32_t)4));
 	r_s1 = (uint32_t)(0x2030000u);
 	r_v0 = (uint32_t)(r_v0 << 12);
-	r_s1 = (uint32_t)(LIFT_XLATE(r_s1 + (uint32_t)10240));
+	r_s1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&system_reg_write + 0))) + 0u)));
 	r_a0 = (uint32_t)(0u + (uint32_t)1796);
 	r_a1 = (uint32_t)(r_a1 | r_v0);
 	system_reg_write(r_a0, r_a1); r_v0 = 0;
@@ -6372,13 +6386,13 @@ static uint64_t L_tisp_set_sensor_integration_time(uint32_t r_a0, uint32_t r_a1,
 	uint32_t r_at = 0, r_v0 = 0, r_v1 = 0, r_t0 = 0, r_t1 = 0, r_t2 = 0, r_t3 = 0, r_t4 = 0, r_t5 = 0, r_t6 = 0, r_t7 = 0, r_s0 = 0, r_s1 = 0, r_s2 = 0, r_s3 = 0, r_s4 = 0, r_s5 = 0, r_s6 = 0, r_s7 = 0, r_t8 = 0, r_t9 = 0, r_k0 = 0, r_k1 = 0, r_gp = 0, r_s8 = 0, r_ra = 0, r_hi = 0, r_lo = 0;
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_v0 = (uint32_t)(0x19010000u);
-	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)17496));
+	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_ae_ctrls + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_v0 + 0u);
 	r_v1 = (uint32_t)(0x19000000u);
 	{ int c_ = (r_a2 != 0u);
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_ra;
 	if (c_) goto L_294e8; }
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)17496));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_ae_ctrls + 0))) + 0u)));
 	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)52));
 	{ int c_ = (r_a2 == 0u);
 	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)9684));
@@ -6416,9 +6430,9 @@ static uint64_t L_tisp_set_sensor_analog_gain(uint32_t r_a0, uint32_t r_a1, uint
 	*(uint32_t *)(uintptr_t)(sp_base + 44) = r_ra;
 	*(uint32_t *)(uintptr_t)(sp_base + 40) = r_s1;
 	r_a2 = (uint32_t)(0u + (uint32_t)16);
-	r_s0 = (uint32_t)(LIFT_XLATE(r_s0 + (uint32_t)9684));
+	r_s0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&sensor_ctrl + 0))) + 0u)));
 	r_a0 = (uint32_t)(r_a0 << 6);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-14376));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_log2_fixed_to_fixed + 0))) + 0u)));
 	r_a1 = (uint32_t)(0u + (uint32_t)16);
 	{ uint64_t q_ = L_tisp_log2_fixed_to_fixed(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s0 + (uint32_t)80));
@@ -6428,7 +6442,7 @@ static uint64_t L_tisp_set_sensor_analog_gain(uint32_t r_a0, uint32_t r_a1, uint
 	r_a0 = (uint32_t)(r_v0 + 0u);
 	r_v0 = (uint32_t)(0x2010000u);
 	r_a1 = (uint32_t)(0u + (uint32_t)16);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-18112));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_math_exp2 + 0))) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)16);
 	{ uint64_t q_ = L_tisp_math_exp2(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_s1 = (uint32_t)(r_v0 + 0u);
@@ -6496,7 +6510,7 @@ static uint64_t L_fix_point_mult3_32(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2
 	*(uint32_t *)(uintptr_t)(sp_base + 24) = r_s2;
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_s1;
 	r_s2 = (uint32_t)(r_a3 + 0u);
-	r_s0 = (uint32_t)(LIFT_XLATE(r_s0 + (uint32_t)-15620));
+	r_s0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult2_32 + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 28) = r_ra;
 	r_s1 = (uint32_t)(r_a0 + 0u);
 	{ uint64_t q_ = L_fix_point_mult2_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
@@ -6537,7 +6551,7 @@ static uint64_t L_tisp_math_exp2(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, ui
 	r_a0 = (uint32_t)(0u + (uint32_t)5);
 	r_a1 = (uint32_t)(r_a0 - r_a1);
 	r_v1 = (uint32_t)(r_v1 << (r_a1 & 31));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)1632));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 1632u)));
 	r_v1 = (uint32_t)(r_v1 << 2);
 	r_v1 = (uint32_t)(r_v1 + r_v0);
 	r_v0 = (uint32_t)(0u + (uint32_t)30);
@@ -6563,7 +6577,7 @@ L_b9a8:
 	{ uint64_t p = (uint64_t)r_a0 * r_v1; r_lo = (uint32_t)p; r_hi = (uint32_t)(p >> 32); }
 	r_v0 = (uint32_t)(0xe0000000u);
 	r_a0 = (uint32_t)(r_lo);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)48));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&__lshrdi3) + 0u)));
 	r_a1 = (uint32_t)(r_hi);
 	{ uint64_t v_ = (((uint64_t)r_a1 << 32) | r_a0) >> (r_a2 & 63); r_v0 = (uint32_t)v_; r_v1 = (uint32_t)(v_ >> 32); }
 	r_v1 = (uint32_t)(0u + (uint32_t)30);
@@ -6587,8 +6601,8 @@ static uint64_t L_tiziano_deflicker_expt(uint32_t r_a0, uint32_t r_a1, uint32_t 
 	uint32_t r_at = 0, r_v0 = 0, r_v1 = 0, r_t0 = 0, r_t1 = 0, r_t2 = 0, r_t3 = 0, r_t4 = 0, r_t5 = 0, r_t6 = 0, r_t7 = 0, r_s0 = 0, r_s1 = 0, r_s2 = 0, r_s3 = 0, r_s4 = 0, r_s5 = 0, r_s6 = 0, r_s7 = 0, r_t8 = 0, r_t9 = 0, r_k0 = 0, r_k1 = 0, r_gp = 0, r_s8 = 0, r_ra = 0, r_hi = 0, r_lo = 0;
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_v1 = (uint32_t)(0x14040000u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)18644) = r_a0;
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)18644));
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_flicker_t + 0))) + 0u)) = r_a0;
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_flicker_t + 0))) + 0u)));
 	r_v0 = (uint32_t)(r_a1 + 0u);
 	*(uint32_t *)(uintptr_t)(sp_base + 52) = r_ra;
 	*(uint32_t *)(uintptr_t)(sp_base + 40) = r_s6;
@@ -6607,7 +6621,7 @@ static uint64_t L_tiziano_deflicker_expt(uint32_t r_a0, uint32_t r_a1, uint32_t 
 	r_s4 = (uint32_t)(r_a0 + 0u);
 	r_a1 = (uint32_t)(r_v0 & r_a1);
 	r_a0 = (uint32_t)(0u + (uint32_t)16);
-	r_s6 = (uint32_t)(LIFT_XLATE(r_s5 + (uint32_t)-15472));
+	r_s6 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_div_32 + 0))) + 0u)));
 	r_s1 = (uint32_t)(r_a2 + 0u);
 	r_a2 = (uint32_t)(r_v0 << 16);
 	*(uint32_t *)(uintptr_t)(r_v1 + (uint32_t)12) = r_a3;
@@ -6691,7 +6705,7 @@ L_2c7ec:
 	r_s2 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 24));
 	r_s1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 20));
 	r_s0 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 16));
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)29112) = r_v1;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&trig_deflick + 0))) + 0u)) = r_v1;
 	return ((uint64_t)r_v1 << 32) | r_v0;
 	return ((uint64_t)r_v1 << 32) | r_v0;
 }
@@ -6703,7 +6717,7 @@ static uint64_t L_tisp_s_max_again(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, 
 	uint32_t r_at = 0, r_v0 = 0, r_v1 = 0, r_t0 = 0, r_t1 = 0, r_t2 = 0, r_t3 = 0, r_t4 = 0, r_t5 = 0, r_t6 = 0, r_t7 = 0, r_s0 = 0, r_s1 = 0, r_s2 = 0, r_s3 = 0, r_s4 = 0, r_s5 = 0, r_s6 = 0, r_s7 = 0, r_t8 = 0, r_t9 = 0, r_k0 = 0, r_k1 = 0, r_gp = 0, r_s8 = 0, r_ra = 0, r_hi = 0, r_lo = 0;
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_t9 = (uint32_t)(0x2030000u);
-	r_t9 = (uint32_t)(LIFT_XLATE(r_t9 + (uint32_t)-14832));
+	r_t9 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tiziano_ae_s_max_again + 0))) + 0u)));
 	{ uint64_t q_ = L_tiziano_ae_s_max_again(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	return ((uint64_t)r_v1 << 32) | r_v0;
 	return ((uint64_t)r_v1 << 32) | r_v0;
@@ -6720,8 +6734,8 @@ static uint64_t L_tisp_s_Hilightdepress(uint32_t r_a0, uint32_t r_a1, uint32_t r
 	r_s1 = (uint32_t)(0x14000000u);
 	r_s0 = (uint32_t)(0xe0000000u);
 	*(uint32_t *)(uintptr_t)(sp_base + 72) = r_s2;
-	r_a1 = (uint32_t)(LIFT_XLATE(r_s1 + (uint32_t)29292));
-	r_s0 = (uint32_t)(LIFT_XLATE(r_s0 + (uint32_t)32));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tparams + 0))) + 26652u)));
+	r_s0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&memcpy) + 0u)));
 	r_s2 = (uint32_t)(r_a0 + 0u);
 	r_v0 = (uint32_t)(0u + (uint32_t)44);
 	r_a0 = (uint32_t)((sp_base + 16));
@@ -6740,7 +6754,7 @@ static uint64_t L_tisp_s_Hilightdepress(uint32_t r_a0, uint32_t r_a1, uint32_t r
 	r_v0 = (uint32_t)(0x2030000u);
 	r_a1 = (uint32_t)((sp_base + 16));
 	r_a2 = (uint32_t)((sp_base + 60));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-9988));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_ae_param_array_set + 0))) + 0u)));
 	r_a0 = (uint32_t)(0u + (uint32_t)12);
 	{ uint64_t q_ = L_tisp_ae_param_array_set(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 76));
@@ -6759,7 +6773,7 @@ static uint64_t L_tisp_s_drc_strength(uint32_t r_a0, uint32_t r_a1, uint32_t r_a
 	uint32_t r_at = 0, r_v0 = 0, r_v1 = 0, r_t0 = 0, r_t1 = 0, r_t2 = 0, r_t3 = 0, r_t4 = 0, r_t5 = 0, r_t6 = 0, r_t7 = 0, r_s0 = 0, r_s1 = 0, r_s2 = 0, r_s3 = 0, r_s4 = 0, r_s5 = 0, r_s6 = 0, r_s7 = 0, r_t8 = 0, r_t9 = 0, r_k0 = 0, r_k1 = 0, r_gp = 0, r_s8 = 0, r_ra = 0, r_hi = 0, r_lo = 0;
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-30304));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_s_adr_str_internal + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_ra;
 	{ uint64_t q_ = L_tisp_s_adr_str_internal(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 20));
@@ -6788,13 +6802,13 @@ static uint64_t L_tisp_s_antiflick(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, 
 	*(uint32_t *)(uintptr_t)(sp_base + 60) = r_v0;
 	if (c_) goto L_30070; }
 	r_v0 = (uint32_t)(0x14040000u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)20736) = r_a0;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&flicker_hz + 0))) + 0u)) = r_a0;
 L_30070:
 	r_s3 = (uint32_t)(0x14000000u);
 	r_s0 = (uint32_t)(0xe0000000u);
-	r_s4 = (uint32_t)(LIFT_XLATE(r_s0 + (uint32_t)32));
+	r_s4 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&memcpy) + 0u)));
 	r_a0 = (uint32_t)((sp_base + 48));
-	r_a1 = (uint32_t)(LIFT_XLATE(r_s3 + (uint32_t)29256));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tparams + 0))) + 26616u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)12);
 	r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2);
 	r_s2 = (uint32_t)(0x14000000u);
@@ -6826,21 +6840,21 @@ L_300d4:
 	*(uint32_t *)(uintptr_t)(sp_base + 16) = r_s1;
 	r_a0 = (uint32_t)(0u + (uint32_t)2);
 	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)8652));
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)6656));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 6656u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_a3 = (uint32_t)(0u + (uint32_t)392);
 	r_v0 = 0;
 	r_v0 = (uint32_t)(0u + (uint32_t)-1);
 	goto L_301e8;
 L_30100:
 	r_s1 = (uint32_t)(0x19000000u);
-	r_s1 = (uint32_t)(LIFT_XLATE(r_s1 + (uint32_t)8752));
+	r_s1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&sensor_info + 0))) + 0u)));
 	r_s2 = (uint32_t)(0x14040000u);
 	r_a3 = (uint32_t)(*(uint16_t *)(uintptr_t)(r_s1 + (uint32_t)60));
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)44));
 	r_a2 = (uint32_t)(*(uint16_t *)(uintptr_t)(r_s1 + (uint32_t)62));
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-14280));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tiziano_deflicker_expt_tune + 0))) + 0u)));
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s2 + (uint32_t)20736));
 	{ uint64_t q_ = L_tiziano_deflicker_expt_tune(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s2 + (uint32_t)20736));
@@ -6855,7 +6869,7 @@ L_30100:
 	r_v0 = (uint32_t)(*(uint16_t *)(uintptr_t)(r_s1 + (uint32_t)60));
 	r_a1 = (uint32_t)((sp_base + 48));
 	r_s1 = (uint32_t)(0x2030000u);
-	r_s1 = (uint32_t)(LIFT_XLATE(r_s1 + (uint32_t)-9988));
+	r_s1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_ae_param_array_set + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 36) = r_v0;
 	r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2);
 	r_a0 = (uint32_t)(0u + (uint32_t)10);
@@ -6872,22 +6886,22 @@ L_30100:
 	{ uint64_t q_ = L_tisp_ae_param_array_set(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 64));
 	r_a0 = (uint32_t)(0x14020000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)-14904));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tparams_day + 0))) + 26616u)));
 	r_a1 = (uint32_t)((sp_base + 48));
 	r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2);
 	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 64));
 	r_a0 = (uint32_t)(0x14030000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)6472));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tparams_night + 0))) + 26616u)));
 	r_a1 = (uint32_t)((sp_base + 48));
 	r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2);
 	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 60));
 	r_a0 = (uint32_t)(0x14020000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)-14892));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tparams_day + 0))) + 26628u)));
 	r_a1 = (uint32_t)((sp_base + 24));
 	r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2);
 	r_a0 = (uint32_t)(0x14030000u);
 	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 60));
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)6484));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tparams_night + 0))) + 26628u)));
 	r_a1 = (uint32_t)((sp_base + 24));
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(0u + 0u);
@@ -6912,12 +6926,12 @@ static uint64_t L_tisp_set_brightness(uint32_t r_a0, uint32_t r_a1, uint32_t r_a
 	*(uint32_t *)(uintptr_t)(sp_base + 16) = r_s0;
 	r_s0 = (uint32_t)(r_a0 & 0xff);
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_ra;
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-14892));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tiziano_ae_compensation_set + 0))) + 0u)));
 	r_a0 = (uint32_t)(r_s0 + 0u);
 	{ uint64_t q_ = L_tiziano_ae_compensation_set(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 20));
 	r_v0 = (uint32_t)(0x19000000u);
-	*(uint8_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)9196) = (uint8_t)r_s0;
+	*(uint8_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&custom_eff + 0))) + 0u)) = (uint8_t)r_s0;
 	r_s0 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 16));
 	return ((uint64_t)r_v1 << 32) | r_v0;
 	return ((uint64_t)r_v1 << 32) | r_v0;
@@ -6935,7 +6949,7 @@ static uint64_t L_tisp_set_fps(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, uint
 	*(uint32_t *)(uintptr_t)(sp_base + 24) = r_s0;
 	r_s0 = (uint32_t)(0x19000000u);
 	*(uint32_t *)(uintptr_t)(sp_base + 28) = r_ra;
-	r_s0 = (uint32_t)(LIFT_XLATE(r_s0 + (uint32_t)9684));
+	r_s0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&sensor_ctrl + 0))) + 0u)));
 	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s0 + (uint32_t)128));
 	r_a1 = (uint32_t)(r_s0 + 0u);
 	r_v1 = (uint32_t)(r_lo);
@@ -6947,7 +6961,7 @@ static uint64_t L_tisp_set_fps(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, uint
 	r_a1 = (uint32_t)(0xe000000u);
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)2);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)8556));
 	r_v0 = 0;
 	r_s0 = (uint32_t)(0u + (uint32_t)-1);
@@ -6956,9 +6970,9 @@ L_2f950:
 	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s0 + (uint32_t)36));
 	r_v1 = (uint32_t)(0x19010000u);
 	r_a0 = (uint32_t)(*(uint16_t *)(uintptr_t)(r_s0 + (uint32_t)32));
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)17524) = r_v0;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_ae_ctrls + 0))) + 28u)) = r_v0;
 	r_v1 = (uint32_t)(0x19000000u);
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)8752));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&sensor_info + 0))) + 0u)));
 	*(uint16_t *)(uintptr_t)(r_v1 + (uint32_t)48) = (uint16_t)r_a0;
 	*(uint16_t *)(uintptr_t)(r_v1 + (uint32_t)50) = (uint16_t)r_a0;
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s0 + (uint32_t)44));
@@ -6968,7 +6982,7 @@ L_2f950:
 	r_a3 = (uint32_t)(*(uint16_t *)(uintptr_t)(r_s0 + (uint32_t)2));
 	r_a2 = (uint32_t)(*(uint16_t *)(uintptr_t)(r_s0 + (uint32_t)4));
 	*(uint16_t *)(uintptr_t)(r_v1 + (uint32_t)54) = (uint16_t)r_a0;
-	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)20736));
+	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&flicker_hz + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v1 + (uint32_t)44) = r_a1;
 	*(uint16_t *)(uintptr_t)(r_v1 + (uint32_t)60) = (uint16_t)r_a3;
 	*(uint16_t *)(uintptr_t)(r_v1 + (uint32_t)62) = (uint16_t)r_a2;
@@ -6976,7 +6990,7 @@ L_2f950:
 	r_s0 = (uint32_t)(0u + 0u);
 	if (c_) goto L_2f9b4; }
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-14280));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tiziano_deflicker_expt_tune + 0))) + 0u)));
 	{ uint64_t q_ = L_tiziano_deflicker_expt_tune(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 L_2f9b4:
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 28));
@@ -7018,7 +7032,7 @@ L_30dac:
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 68));
 	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 72));
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-10716));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_ae_manual_set + 0))) + 0u)));
 	r_a3 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 76));
 	{ uint64_t q_ = L_tisp_ae_manual_set(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 132));
@@ -7052,7 +7066,7 @@ static uint64_t L_apical_isp_ae_s_roi_isra_45__body(uint32_t r_a0, uint32_t r_a1
 	*(uint32_t *)(uintptr_t)(sp_base + 260) = r_ra;
 	*(uint32_t *)(uintptr_t)(sp_base + 256) = r_s1;
 	r_s0 = (uint32_t)(r_a0 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)960));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&private_kmalloc + 0))) + 0u)));
 	r_a0 = (uint32_t)(0u + (uint32_t)900);
 	r_v0 = (uint32_t)((uint32_t (*)(uint32_t, uint32_t, uint32_t, uint32_t))LIFT_FNADDR(private_kmalloc))(r_a0, r_a1, r_a2, r_a3);
 	if (r_v0 != 0u) {
@@ -7061,7 +7075,7 @@ static uint64_t L_apical_isp_ae_s_roi_isra_45__body(uint32_t r_a0, uint32_t r_a1
 	r_a1 = (uint32_t)(0xe000000u);
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)2072));
 	r_v0 = 0;
 	r_s0 = (uint32_t)(0u + (uint32_t)-1);
@@ -7074,7 +7088,7 @@ L_38d8:
 	r_s0 = (uint32_t)((sp_base + 16));
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(r_s0 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)1064));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&private_copy_from_user + 0))) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)225);
 	r_v0 = (uint32_t)((uint32_t (*)(uint32_t, uint32_t, uint32_t, uint32_t))LIFT_FNADDR(private_copy_from_user))(r_a0, r_a1, r_a2, r_a3);
 	r_a1 = (uint32_t)(0u + 0u);
@@ -7092,9 +7106,9 @@ L_390c:
 	r_a2 = (uint32_t)(0xc000000u);
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)2112));
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)544));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem__LC3 + 0))) + 0u)));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 544u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_a3 = (uint32_t)(0u + (uint32_t)1257);
 	r_v0 = 0;
 	r_s0 = (uint32_t)(0u + (uint32_t)-1);
@@ -7127,14 +7141,14 @@ L_3980:
 	r_a2 = (uint32_t)(0xc000000u);
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)2040));
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)544));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem__LC1 + 0))) + 0u)));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 544u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_a3 = (uint32_t)(0u + (uint32_t)1267);
 	r_v0 = 0;
 L_39b8:
 	r_v0 = (uint32_t)(0x2000000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)1048));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&private_kfree + 0))) + 0u)));
 	r_a0 = (uint32_t)(r_s1 + 0u);
 	r_v0 = (uint32_t)((uint32_t (*)(uint32_t, uint32_t, uint32_t, uint32_t))LIFT_FNADDR(private_kfree))(r_a0, r_a1, r_a2, r_a3);
 L_39c8:
@@ -7153,7 +7167,7 @@ static uint64_t L_tisp_s_max_isp_dgain(uint32_t r_a0, uint32_t r_a1, uint32_t r_
 	uint32_t r_at = 0, r_v0 = 0, r_v1 = 0, r_t0 = 0, r_t1 = 0, r_t2 = 0, r_t3 = 0, r_t4 = 0, r_t5 = 0, r_t6 = 0, r_t7 = 0, r_s0 = 0, r_s1 = 0, r_s2 = 0, r_s3 = 0, r_s4 = 0, r_s5 = 0, r_s6 = 0, r_s7 = 0, r_t8 = 0, r_t9 = 0, r_k0 = 0, r_k1 = 0, r_gp = 0, r_s8 = 0, r_ra = 0, r_hi = 0, r_lo = 0;
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_t9 = (uint32_t)(0x2030000u);
-	r_t9 = (uint32_t)(LIFT_XLATE(r_t9 + (uint32_t)-14724));
+	r_t9 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tiziano_ae_s_max_isp_dgain + 0))) + 0u)));
 	{ uint64_t q_ = L_tiziano_ae_s_max_isp_dgain(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	return ((uint64_t)r_v1 << 32) | r_v0;
 	return ((uint64_t)r_v1 << 32) | r_v0;
@@ -7184,7 +7198,7 @@ static uint64_t L_apical_isp_ae_zone_weight_s_attr_isra_50__body(uint32_t r_a0, 
 	*(uint32_t *)(uintptr_t)(sp_base + 260) = r_ra;
 	*(uint32_t *)(uintptr_t)(sp_base + 256) = r_s1;
 	r_s0 = (uint32_t)(r_a0 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)960));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&private_kmalloc + 0))) + 0u)));
 	r_a0 = (uint32_t)(0u + (uint32_t)900);
 	r_v0 = (uint32_t)((uint32_t (*)(uint32_t, uint32_t, uint32_t, uint32_t))LIFT_FNADDR(private_kmalloc))(r_a0, r_a1, r_a2, r_a3);
 	if (r_v0 != 0u) {
@@ -7193,7 +7207,7 @@ static uint64_t L_apical_isp_ae_zone_weight_s_attr_isra_50__body(uint32_t r_a0, 
 	r_a1 = (uint32_t)(0xe000000u);
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)2144));
 	r_v0 = 0;
 	r_s0 = (uint32_t)(0u + (uint32_t)-1);
@@ -7206,7 +7220,7 @@ L_3a30:
 	r_s0 = (uint32_t)((sp_base + 16));
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(r_s0 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)1064));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&private_copy_from_user + 0))) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)225);
 	r_v0 = (uint32_t)((uint32_t (*)(uint32_t, uint32_t, uint32_t, uint32_t))LIFT_FNADDR(private_copy_from_user))(r_a0, r_a1, r_a2, r_a3);
 	r_a1 = (uint32_t)(0u + 0u);
@@ -7224,9 +7238,9 @@ L_3a64:
 	r_a2 = (uint32_t)(0xc000000u);
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)2180));
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)624));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem__LC5 + 0))) + 0u)));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 624u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_a3 = (uint32_t)(0u + (uint32_t)1328);
 	r_v0 = 0;
 	r_s0 = (uint32_t)(0u + (uint32_t)-1);
@@ -7259,14 +7273,14 @@ L_3ad8:
 	r_a2 = (uint32_t)(0xc000000u);
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)2040));
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)624));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem__LC1 + 0))) + 0u)));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 624u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_a3 = (uint32_t)(0u + (uint32_t)1338);
 	r_v0 = 0;
 L_3b10:
 	r_v0 = (uint32_t)(0x2000000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)1048));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&private_kfree + 0))) + 0u)));
 	r_a0 = (uint32_t)(r_s1 + 0u);
 	r_v0 = (uint32_t)((uint32_t (*)(uint32_t, uint32_t, uint32_t, uint32_t))LIFT_FNADDR(private_kfree))(r_a0, r_a1, r_a2, r_a3);
 L_3b20:
@@ -7285,7 +7299,7 @@ static uint64_t L_tisp_s_ae_min(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, uin
 	uint32_t r_at = 0, r_v0 = 0, r_v1 = 0, r_t0 = 0, r_t1 = 0, r_t2 = 0, r_t3 = 0, r_t4 = 0, r_t5 = 0, r_t6 = 0, r_t7 = 0, r_s0 = 0, r_s1 = 0, r_s2 = 0, r_s3 = 0, r_s4 = 0, r_s5 = 0, r_s6 = 0, r_s7 = 0, r_t8 = 0, r_t9 = 0, r_k0 = 0, r_k1 = 0, r_gp = 0, r_s8 = 0, r_ra = 0, r_hi = 0, r_lo = 0;
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-17780));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_ae_s_min + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_ra;
 	*(uint32_t *)(uintptr_t)(csp + 0) = r_a0;
 	*(uint32_t *)(uintptr_t)(csp + 4) = r_a1;
@@ -7341,7 +7355,7 @@ L_30910:
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(csp + 4));
 	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)(csp + 8));
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-24508));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_ae_set_hist_custome + 0))) + 0u)));
 	r_a3 = (uint32_t)(*(uint32_t *)(uintptr_t)(csp + 12));
 	{ uint64_t q_ = L_tisp_ae_set_hist_custome(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 1076));
@@ -7375,7 +7389,7 @@ static uint64_t L_apical_isp_af_weight_s_attr_isra_54__body(uint32_t r_a0, uint3
 	*(uint32_t *)(uintptr_t)(sp_base + 260) = r_ra;
 	*(uint32_t *)(uintptr_t)(sp_base + 256) = r_s1;
 	r_s0 = (uint32_t)(r_a0 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)960));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&private_kmalloc + 0))) + 0u)));
 	r_a0 = (uint32_t)(0u + (uint32_t)900);
 	r_v0 = (uint32_t)((uint32_t (*)(uint32_t, uint32_t, uint32_t, uint32_t))LIFT_FNADDR(private_kmalloc))(r_a0, r_a1, r_a2, r_a3);
 	if (r_v0 != 0u) {
@@ -7384,7 +7398,7 @@ static uint64_t L_apical_isp_af_weight_s_attr_isra_54__body(uint32_t r_a0, uint3
 	r_a1 = (uint32_t)(0xe000000u);
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)2216));
 	r_v0 = 0;
 	r_s0 = (uint32_t)(0u + (uint32_t)-1);
@@ -7397,7 +7411,7 @@ L_3b88:
 	r_s0 = (uint32_t)((sp_base + 16));
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(r_s0 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)1064));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&private_copy_from_user + 0))) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)225);
 	r_v0 = (uint32_t)((uint32_t (*)(uint32_t, uint32_t, uint32_t, uint32_t))LIFT_FNADDR(private_copy_from_user))(r_a0, r_a1, r_a2, r_a3);
 	r_a1 = (uint32_t)(0u + 0u);
@@ -7415,9 +7429,9 @@ L_3bbc:
 	r_a2 = (uint32_t)(0xc000000u);
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)2112));
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)688));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem__LC3 + 0))) + 0u)));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 688u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_a3 = (uint32_t)(0u + (uint32_t)1403);
 	r_v0 = 0;
 	r_s0 = (uint32_t)(0u + (uint32_t)-1);
@@ -7450,14 +7464,14 @@ L_3c30:
 	r_a2 = (uint32_t)(0xc000000u);
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)2040));
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)688));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem__LC1 + 0))) + 0u)));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 688u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_a3 = (uint32_t)(0u + (uint32_t)1413);
 	r_v0 = 0;
 L_3c68:
 	r_v0 = (uint32_t)(0x2000000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)1048));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&private_kfree + 0))) + 0u)));
 	r_a0 = (uint32_t)(r_s1 + 0u);
 	r_v0 = (uint32_t)((uint32_t (*)(uint32_t, uint32_t, uint32_t, uint32_t))LIFT_FNADDR(private_kfree))(r_a0, r_a1, r_a2, r_a3);
 L_3c78:
@@ -7476,7 +7490,7 @@ static uint64_t L_tisp_s_ev_start(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, u
 	uint32_t r_at = 0, r_v0 = 0, r_v1 = 0, r_t0 = 0, r_t1 = 0, r_t2 = 0, r_t3 = 0, r_t4 = 0, r_t5 = 0, r_t6 = 0, r_t7 = 0, r_s0 = 0, r_s1 = 0, r_s2 = 0, r_s3 = 0, r_s4 = 0, r_s5 = 0, r_s6 = 0, r_s7 = 0, r_t8 = 0, r_t9 = 0, r_k0 = 0, r_k1 = 0, r_gp = 0, r_s8 = 0, r_ra = 0, r_hi = 0, r_lo = 0;
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_t9 = (uint32_t)(0x2030000u);
-	r_t9 = (uint32_t)(LIFT_XLATE(r_t9 + (uint32_t)-14856));
+	r_t9 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tiziano_ae_s_ev_start + 0))) + 0u)));
 	{ uint64_t q_ = L_tiziano_ae_s_ev_start(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	return ((uint64_t)r_v1 << 32) | r_v0;
 	return ((uint64_t)r_v1 << 32) | r_v0;
@@ -7495,7 +7509,7 @@ static uint64_t L_tisp_g_Hilightdepress(uint32_t r_a0, uint32_t r_a1, uint32_t r
 	r_s0 = (uint32_t)(r_a0 + 0u);
 	r_a2 = (uint32_t)((sp_base + 60));
 	r_a0 = (uint32_t)(0u + (uint32_t)12);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-10436));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_ae_param_array_get + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 60) = 0u;
 	{ uint64_t q_ = L_tisp_ae_param_array_get(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 60));
@@ -7507,9 +7521,9 @@ static uint64_t L_tisp_g_Hilightdepress(uint32_t r_a0, uint32_t r_a1, uint32_t r
 	r_a2 = (uint32_t)(0xc000000u);
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)2);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)8688));
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)6676));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem__LC5 + 0))) + 0u)));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 6676u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_a3 = (uint32_t)(0u + (uint32_t)445);
 	r_v0 = 0;
 	r_v0 = (uint32_t)(0u + (uint32_t)-1);
@@ -7545,7 +7559,7 @@ static uint64_t L_tisp_g_ae_min(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, uin
 	uint32_t r_at = 0, r_v0 = 0, r_v1 = 0, r_t0 = 0, r_t1 = 0, r_t2 = 0, r_t3 = 0, r_t4 = 0, r_t5 = 0, r_t6 = 0, r_t7 = 0, r_s0 = 0, r_s1 = 0, r_s2 = 0, r_s3 = 0, r_s4 = 0, r_s5 = 0, r_s6 = 0, r_s7 = 0, r_t8 = 0, r_t9 = 0, r_k0 = 0, r_k1 = 0, r_gp = 0, r_s8 = 0, r_ra = 0, r_hi = 0, r_lo = 0;
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-17812));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_ae_g_min + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 28) = r_ra;
 	*(uint32_t *)(uintptr_t)(sp_base + 24) = r_s0;
 	r_s0 = (uint32_t)(r_a0 + 0u);
@@ -7569,7 +7583,7 @@ static uint64_t L_tisp_g_drc_strength(uint32_t r_a0, uint32_t r_a1, uint32_t r_a
 	uint32_t r_at = 0, r_v0 = 0, r_v1 = 0, r_t0 = 0, r_t1 = 0, r_t2 = 0, r_t3 = 0, r_t4 = 0, r_t5 = 0, r_t6 = 0, r_t7 = 0, r_s0 = 0, r_s1 = 0, r_s2 = 0, r_s3 = 0, r_s4 = 0, r_s5 = 0, r_s6 = 0, r_s7 = 0, r_t8 = 0, r_t9 = 0, r_k0 = 0, r_k1 = 0, r_gp = 0, r_s8 = 0, r_ra = 0, r_hi = 0, r_lo = 0;
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-30320));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_g_adr_str_internal + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_ra;
 	{ uint64_t q_ = L_tisp_g_adr_str_internal(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 20));
@@ -7604,7 +7618,7 @@ static uint64_t L_apical_isp_ae_g_roi_isra_64__body(uint32_t r_a0, uint32_t r_a1
 	*(uint32_t *)(uintptr_t)(sp_base + 252) = r_s1;
 	*(uint32_t *)(uintptr_t)(sp_base + 248) = r_s0;
 	r_s2 = (uint32_t)(r_a0 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)960));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&private_kmalloc + 0))) + 0u)));
 	r_a0 = (uint32_t)(0u + (uint32_t)900);
 	r_v0 = (uint32_t)((uint32_t (*)(uint32_t, uint32_t, uint32_t, uint32_t))LIFT_FNADDR(private_kmalloc))(r_a0, r_a1, r_a2, r_a3);
 	if (r_v0 != 0u) {
@@ -7613,7 +7627,7 @@ static uint64_t L_apical_isp_ae_g_roi_isra_64__body(uint32_t r_a0, uint32_t r_a1
 	r_a1 = (uint32_t)(0xe000000u);
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)2072));
 	r_v0 = 0;
 	r_s1 = (uint32_t)(0u + (uint32_t)-1);
@@ -7621,7 +7635,7 @@ static uint64_t L_apical_isp_ae_g_roi_isra_64__body(uint32_t r_a0, uint32_t r_a1
 L_4a1c:
 	r_s0 = (uint32_t)(r_v0 + 0u);
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)1260));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_g_aeroi_weight + 0))) + 0u)));
 	{ uint64_t q_ = L_tisp_g_aeroi_weight(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_s1 = (uint32_t)(r_v0 + 0u);
 	{ int c_ = (r_v0 == 0u);
@@ -7631,9 +7645,9 @@ L_4a1c:
 	r_a2 = (uint32_t)(0xc000000u);
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)2592));
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)824));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem__LC17 + 0))) + 0u)));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 824u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_a3 = (uint32_t)(0u + (uint32_t)1289);
 	r_v0 = 0;
 	r_v0 = (uint32_t)(0x2000000u);
@@ -7705,7 +7719,7 @@ static uint64_t L_apical_isp_ae_zone_g_ctrl_isra_69__body(uint32_t r_a0, uint32_
 	uint32_t r_at = 0, r_v0 = 0, r_v1 = 0, r_t0 = 0, r_t1 = 0, r_t2 = 0, r_t3 = 0, r_t4 = 0, r_t5 = 0, r_t6 = 0, r_t7 = 0, r_s0 = 0, r_s1 = 0, r_s2 = 0, r_s3 = 0, r_s4 = 0, r_s5 = 0, r_s6 = 0, r_s7 = 0, r_t8 = 0, r_t9 = 0, r_k0 = 0, r_k1 = 0, r_gp = 0, r_s8 = 0, r_ra = 0, r_hi = 0, r_lo = 0;
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)3688));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_g_ae_zone + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 924) = r_ra;
 	*(uint32_t *)(uintptr_t)(sp_base + 920) = r_s0;
 	r_s0 = (uint32_t)(r_a0 + 0u);
@@ -7714,7 +7728,7 @@ static uint64_t L_apical_isp_ae_zone_g_ctrl_isra_69__body(uint32_t r_a0, uint32_
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s0 + (uint32_t)4));
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a1 = (uint32_t)((sp_base + 16));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)1192));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&private_copy_to_user + 0))) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)900);
 	r_v0 = (uint32_t)((uint32_t (*)(uint32_t, uint32_t, uint32_t, uint32_t))LIFT_FNADDR(private_copy_to_user))(r_a0, r_a1, r_a2, r_a3);
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 924));
@@ -7750,7 +7764,7 @@ static uint64_t L_apical_isp_ae_zone_weight_g_attr_isra_70__body(uint32_t r_a0, 
 	*(uint32_t *)(uintptr_t)(sp_base + 252) = r_s1;
 	*(uint32_t *)(uintptr_t)(sp_base + 248) = r_s0;
 	r_s2 = (uint32_t)(r_a0 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)960));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&private_kmalloc + 0))) + 0u)));
 	r_a0 = (uint32_t)(0u + (uint32_t)900);
 	r_v0 = (uint32_t)((uint32_t (*)(uint32_t, uint32_t, uint32_t, uint32_t))LIFT_FNADDR(private_kmalloc))(r_a0, r_a1, r_a2, r_a3);
 	if (r_v0 != 0u) {
@@ -7759,7 +7773,7 @@ static uint64_t L_apical_isp_ae_zone_weight_g_attr_isra_70__body(uint32_t r_a0, 
 	r_a1 = (uint32_t)(0xe000000u);
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)2144));
 	r_v0 = 0;
 	r_s1 = (uint32_t)(0u + (uint32_t)-1);
@@ -7767,7 +7781,7 @@ static uint64_t L_apical_isp_ae_zone_weight_g_attr_isra_70__body(uint32_t r_a0, 
 L_4cdc:
 	r_s0 = (uint32_t)(r_v0 + 0u);
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)1460));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_g_aezone_weight + 0))) + 0u)));
 	{ uint64_t q_ = L_tisp_g_aezone_weight(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_s1 = (uint32_t)(r_v0 + 0u);
 	{ int c_ = (r_v0 == 0u);
@@ -7777,9 +7791,9 @@ L_4cdc:
 	r_a2 = (uint32_t)(0xc000000u);
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)2592));
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)984));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem__LC17 + 0))) + 0u)));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 984u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_a3 = (uint32_t)(0u + (uint32_t)1362);
 	r_v0 = 0;
 	r_v0 = (uint32_t)(0x2000000u);
@@ -7838,7 +7852,7 @@ static uint64_t L_tisp_g_ae_hist(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, ui
 	uint32_t r_at = 0, r_v0 = 0, r_v1 = 0, r_t0 = 0, r_t1 = 0, r_t2 = 0, r_t3 = 0, r_t4 = 0, r_t5 = 0, r_t6 = 0, r_t7 = 0, r_s0 = 0, r_s1 = 0, r_s2 = 0, r_s3 = 0, r_s4 = 0, r_s5 = 0, r_s6 = 0, r_s7 = 0, r_t8 = 0, r_t9 = 0, r_k0 = 0, r_k1 = 0, r_gp = 0, r_s8 = 0, r_ra = 0, r_hi = 0, r_lo = 0;
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-24624));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_ae_get_hist_custome + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_ra;
 	{ uint64_t q_ = L_tisp_ae_get_hist_custome(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 20));
@@ -7873,7 +7887,7 @@ static uint64_t L_apical_isp_af_weight_g_attr_isra_74__body(uint32_t r_a0, uint3
 	*(uint32_t *)(uintptr_t)(sp_base + 252) = r_s1;
 	*(uint32_t *)(uintptr_t)(sp_base + 248) = r_s0;
 	r_s2 = (uint32_t)(r_a0 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)960));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&private_kmalloc + 0))) + 0u)));
 	r_a0 = (uint32_t)(0u + (uint32_t)900);
 	r_v0 = (uint32_t)((uint32_t (*)(uint32_t, uint32_t, uint32_t, uint32_t))LIFT_FNADDR(private_kmalloc))(r_a0, r_a1, r_a2, r_a3);
 	if (r_v0 != 0u) {
@@ -7882,7 +7896,7 @@ static uint64_t L_apical_isp_af_weight_g_attr_isra_74__body(uint32_t r_a0, uint3
 	r_a1 = (uint32_t)(0xe000000u);
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)2216));
 	r_v0 = 0;
 	r_s1 = (uint32_t)(0u + (uint32_t)-1);
@@ -7890,7 +7904,7 @@ static uint64_t L_apical_isp_af_weight_g_attr_isra_74__body(uint32_t r_a0, uint3
 L_4ebc:
 	r_s0 = (uint32_t)(r_v0 + 0u);
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)1660));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_g_af_weight + 0))) + 0u)));
 	{ uint64_t q_ = L_tisp_g_af_weight(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_s1 = (uint32_t)(r_v0 + 0u);
 	{ int c_ = (r_v0 == 0u);
@@ -7900,9 +7914,9 @@ L_4ebc:
 	r_a2 = (uint32_t)(0xc000000u);
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)2592));
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)1020));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem__LC17 + 0))) + 0u)));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 1020u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_a3 = (uint32_t)(0u + (uint32_t)1435);
 	r_v0 = 0;
 	r_v0 = (uint32_t)(0x2000000u);
@@ -8009,7 +8023,7 @@ static uint64_t L_Tiziano_awb_fpga(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, 
 	r_s5 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s0 + (uint32_t)20));
 	r_s6 = (uint32_t)(r_a2 + 0u);
 	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s2 + (uint32_t)0));
-	r_s8 = (uint32_t)(LIFT_XLATE(r_s3 + (uint32_t)-15620));
+	r_s8 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult2_32 + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_s4 + 0u);
 	r_a0 = (uint32_t)(r_s1 + 0u);
 	*(uint32_t *)(uintptr_t)(sp_base + 140) = r_t0;
@@ -8028,7 +8042,7 @@ static uint64_t L_Tiziano_awb_fpga(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, 
 	r_t0 = (uint32_t)(r_t0 * r_t7);
 	r_s3 = (uint32_t)(0x19000000u);
 	r_t2 = (uint32_t)(r_t0 << 2);
-	r_s3 = (uint32_t)(LIFT_XLATE(r_s3 + (uint32_t)11860));
+	r_s3 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&zone_rgbg + 0))) + 0u)));
 	r_s5 = (uint32_t)(r_t2 + r_s3);
 	r_s8 = (uint32_t)(r_v0 + 0u);
 	r_s4 = (uint32_t)(0u + 0u);
@@ -8043,7 +8057,7 @@ L_f618:
 	r_a0 = (uint32_t)(r_a0 << (r_s1 & 31));
 	if (r_v0) { r_lo = r_a0 / r_v0; r_hi = r_a0 % r_v0; }
 	r_v0 = (uint32_t)(0x2010000u);
-	r_t5 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-15620));
+	r_t5 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult2_32 + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 212) = r_t0;
 	*(uint32_t *)(uintptr_t)(sp_base + 208) = r_t1;
 	*(uint32_t *)(uintptr_t)(sp_base + 216) = r_t2;
@@ -8112,7 +8126,7 @@ L_f718:
 	*(uint32_t *)(uintptr_t)(sp_base + 172) = r_s5;
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 156));
 	r_s5 = (uint32_t)(0x19000000u);
-	r_s5 = (uint32_t)(LIFT_XLATE(r_s5 + (uint32_t)10960));
+	r_s5 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&zone_pix_cnt + 0))) + 0u)));
 	r_t8 = (uint32_t)(r_t7 + r_s4);
 	r_t3 = (uint32_t)(0u + 0u);
 	r_t9 = (uint32_t)(r_v1 + r_s4);
@@ -8123,10 +8137,10 @@ L_f750:
 	r_s6 = (uint32_t)(0x19000000u);
 	r_s4 = (uint32_t)(0x19000000u);
 	r_s5 = (uint32_t)(0x19000000u);
-	r_s3 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)11860));
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s6 + (uint32_t)19160) = 0u;
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s4 + (uint32_t)19164) = 0u;
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s5 + (uint32_t)19168) = r_t0;
+	r_s3 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&zone_rgbg + 0))) + 0u)));
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&awb_rg_global + 0))) + 0u)) = 0u;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&awb_bg_global + 0))) + 0u)) = 0u;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&awb_pix_cnt + 0))) + 0u)) = r_t0;
 	r_a2 = (uint32_t)(0u + 0u);
 	r_a3 = (uint32_t)(0u + 0u);
 	r_a1 = (uint32_t)(r_t0 + 0u);
@@ -8169,7 +8183,7 @@ L_f7d8:
 	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s4 + (uint32_t)19164) = r_a3;
 	r_a0 = (uint32_t)(r_s1 + 0u);
 	r_a3 = (uint32_t)(0u + 0u);
-	r_s8 = (uint32_t)(LIFT_XLATE(r_s8 + (uint32_t)-17168));
+	r_s8 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_div + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 16) = r_v0;
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = 0u;
 	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s6 + (uint32_t)19160) = r_a2;
@@ -8177,7 +8191,7 @@ L_f7d8:
 	r_s7 = (uint32_t)(0xe0000000u);
 	{ uint64_t q_ = L_fix_point_div(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a1 = (uint32_t)(r_v1 + 0u);
-	r_s7 = (uint32_t)(LIFT_XLATE(r_s7 + (uint32_t)48));
+	r_s7 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&__lshrdi3) + 0u)));
 	r_a0 = (uint32_t)(r_v0 + 0u);
 	r_a2 = (uint32_t)(r_s1 + 0u);
 	{ uint64_t v_ = (((uint64_t)r_a1 << 32) | r_a0) >> (r_a2 & 63); r_v0 = (uint32_t)v_; r_v1 = (uint32_t)(v_ >> 32); }
@@ -8196,7 +8210,7 @@ L_f7d8:
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s5 + (uint32_t)19168));
 	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s4 + (uint32_t)19164) = r_v0;
 	r_s4 = (uint32_t)(0x19000000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_s4 + (uint32_t)19176));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_wb_attr + 0))) + 0u)));
 	r_t0 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 212));
 	r_t1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 208));
 	{ int c_ = (r_v1 != 0u);
@@ -8207,7 +8221,7 @@ L_f7d8:
 	goto L_f8a0;
 L_f88c:
 	r_a1 = (uint32_t)(0x19000000u);
-	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_a1 + (uint32_t)19160));
+	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&awb_rg_global + 0))) + 0u)));
 	if (r_v1) { r_lo = r_a1 / r_v1; r_hi = r_a1 % r_v1; }
 	r_a2 = (uint32_t)(r_lo);
 	*(uint32_t *)(uintptr_t)(r_a0 + (uint32_t)12) = r_a2;
@@ -8216,7 +8230,7 @@ L_f8a0:
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s5 + (uint32_t)4));
 	r_a0 = (uint32_t)(0x19000000u);
 	{ int c_ = (r_v1 != 0u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)19176));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_wb_attr + 0))) + 0u)));
 	if (c_) goto L_f8c0; }
 	r_v0 = (uint32_t)(0u + (uint32_t)256);
 	*(uint32_t *)(uintptr_t)(r_a0 + (uint32_t)16) = r_v0;
@@ -8230,7 +8244,7 @@ L_f8cc:
 	r_v0 = (uint32_t)(0u + 0u);
 	r_a1 = (uint32_t)(0u + 0u);
 	r_t6 = (uint32_t)(r_t2 + r_s3);
-	r_a3 = (uint32_t)(LIFT_XLATE(r_a3 + (uint32_t)10960));
+	r_a3 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&zone_pix_cnt + 0))) + 0u)));
 	goto L_f928;
 L_f8e4:
 	r_t7 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_t7 + (uint32_t)0));
@@ -8268,7 +8282,7 @@ L_f928:
 	goto L_f914;
 L_f950:
 	r_s5 = (uint32_t)(0x14040000u);
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s5 + (uint32_t)7476));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&first_frame + 0))) + 0u)));
 	if (r_v0 == 0u) {
 	r_t5 = (uint32_t)(0x19000000u);
 	goto L_f97c; }
@@ -8330,9 +8344,9 @@ L_fa14:
 	r_a0 = (uint32_t)(r_a0 >> (r_s1 & 31));
 	if (r_t0) { r_lo = r_a0 / r_t0; r_hi = r_a0 % r_t0; }
 	r_v0 = (uint32_t)(0x14040000u);
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)7280));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_AwbPointPos + 0))) + 4u)));
 	r_v1 = (uint32_t)(0x14040000u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)7480) = r_v0;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_offet_thres + 0))) + 0u)) = r_v0;
 	r_v1 = (uint32_t)(r_lo);
 	r_v0 = (uint32_t)(r_v1 < r_v0);
 	{ int c_ = (r_v0 == 0u);
@@ -8340,10 +8354,10 @@ L_fa14:
 	if (c_) goto L_f964; }
 	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s4 + (uint32_t)19176));
 	if (r_v0 != 0u) {
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)13660));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&zone_rgbg_last + 0))) + 0u)));
 	goto L_f968; }
 	r_v0 = (uint32_t)(0x19000000u);
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)19204));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&awb_moa + 0))) + 0u)));
 	{ int c_ = (r_v0 == 0u);
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 260));
 	if (c_) goto L_fe84; }
@@ -8394,12 +8408,12 @@ L_fae4:
 	r_t7 = (uint32_t)((csp + 48));
 	if (c_) goto L_fad0; }
 	r_v0 = (uint32_t)(0x19000000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)11860));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&zone_rgbg + 0))) + 0u)));
 	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)(csp + 40));
 	r_a3 = (uint32_t)(*(uint32_t *)(uintptr_t)(csp + 44));
 	r_a1 = (uint32_t)(0x19000000u);
 	r_v0 = (uint32_t)(0x2010000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)5236));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_Tiziano_Awb_Ct_Detect + 0))) + 0u)));
 	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)10960));
 	{ uint64_t q_ = L_Tiziano_Awb_Ct_Detect(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s5 + (uint32_t)7476));
@@ -8407,12 +8421,12 @@ L_fae4:
 	{ int c_ = (r_v1 != 0u);
 	r_s5 = (uint32_t)(0x19000000u);
 	if (c_) goto L_fb88; }
-	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)19208));
+	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&awb_gain_original + 0))) + 0u)));
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 96));
 	{ int c_ = (r_a0 != r_v1);
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 100));
 	if (c_) goto L_fba0; }
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)19208));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&awb_gain_original + 0))) + 0u)));
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v1 + (uint32_t)4));
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 100));
 	{ int c_ = (r_a0 != r_v1);
@@ -8422,7 +8436,7 @@ L_fae4:
 	{ int c_ = (r_v1 != 0u);
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 100));
 	if (c_) goto L_fba0; }
-	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s5 + (uint32_t)19204));
+	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&awb_moa + 0))) + 0u)));
 	{ int c_ = (r_v1 != 0u);
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 100));
 	if (c_) goto L_fba0; }
@@ -8441,7 +8455,7 @@ L_fae4:
 L_fb88:
 	r_v1 = (uint32_t)(0x14040000u);
 	r_t0 = (uint32_t)(0u + (uint32_t)1);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)7476) = 0u;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&first_frame + 0))) + 0u)) = 0u;
 	*(uint32_t *)(uintptr_t)(sp_base + 112) = r_t0;
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 96));
 L_fb9c:
@@ -8583,7 +8597,7 @@ L_fd68:
 	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s0 + (uint32_t)20));
 	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s2 + (uint32_t)0));
 	r_a0 = (uint32_t)(r_s1 + 0u);
-	r_s0 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)-15620));
+	r_s0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult2_32 + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 88) = r_a1;
 	r_a1 = (uint32_t)(r_a1 << (r_s1 & 31));
 	*(uint32_t *)(uintptr_t)(sp_base + 92) = r_v0;
@@ -8642,13 +8656,13 @@ L_fe3c:
 	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s5 + (uint32_t)19204) = 0u;
 	{ uint64_t q_ = L_JZ_Isp_Awb_Awbg2reg(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(0x19000000u);
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)19216));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&awb_frz + 0))) + 0u)));
 	{ int c_ = (r_v0 != 0u);
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 260));
 	if (c_) goto L_fe84; }
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 80));
 	r_s0 = (uint32_t)(0x2030000u);
-	r_s0 = (uint32_t)(LIFT_XLATE(r_s0 + (uint32_t)10240));
+	r_s0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&system_reg_write + 0))) + 0u)));
 	r_a0 = (uint32_t)(0u + (uint32_t)1540);
 	system_reg_write(r_a0, r_a1); r_v0 = 0;
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 84));
@@ -8676,14 +8690,14 @@ static uint64_t L_jz_isp_ccm(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, uint32
 	uint32_t r_at = 0, r_v0 = 0, r_v1 = 0, r_t0 = 0, r_t1 = 0, r_t2 = 0, r_t3 = 0, r_t4 = 0, r_t5 = 0, r_t6 = 0, r_t7 = 0, r_s0 = 0, r_s1 = 0, r_s2 = 0, r_s3 = 0, r_s4 = 0, r_s5 = 0, r_s6 = 0, r_s7 = 0, r_t8 = 0, r_t9 = 0, r_k0 = 0, r_k1 = 0, r_gp = 0, r_s8 = 0, r_ra = 0, r_hi = 0, r_lo = 0;
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_v0 = (uint32_t)(0x14040000u);
-	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)8144));
+	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ev + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 100) = r_s0;
 	r_v0 = (uint32_t)(0x14040000u);
 	r_s0 = (uint32_t)(0x19010000u);
 	*(uint32_t *)(uintptr_t)(sp_base + 104) = r_s1;
-	r_a0 = (uint32_t)(LIFT_XLATE(r_s0 + (uint32_t)-13800));
-	r_s1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)8148));
-	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s0 + (uint32_t)-13800));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ccm_real + 0))) + 0u)));
+	r_s1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ct + 0))) + 0u)));
+	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ccm_real + 0))) + 0u)));
 	r_v0 = (uint32_t)(0u + (uint32_t)100);
 	*(uint32_t *)(uintptr_t)(sp_base + 108) = r_ra;
 	*(uint32_t *)(uintptr_t)(r_a0 + (uint32_t)16) = r_v0;
@@ -8704,7 +8718,7 @@ static uint64_t L_jz_isp_ccm(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, uint32
 L_1a388:
 	r_a2 = (uint32_t)(0x19010000u);
 	r_v0 = (uint32_t)(0u + 0u);
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)-14116));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&cm_ev_list + 0))) + 0u)));
 	r_a3 = (uint32_t)(0u + (uint32_t)9);
 	r_a0 = (uint32_t)(r_v0 << 2);
 L_1a39c:
@@ -8718,7 +8732,7 @@ L_1a39c:
 	r_a3 = (uint32_t)(0x19010000u);
 	if (c_) goto L_1a3c4; }
 	r_v0 = (uint32_t)(LIFT_XLATE(r_s0 + (uint32_t)-13800));
-	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_a3 + (uint32_t)-14152));
+	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&cm_sat_list + 0))) + 0u)));
 	goto L_1a4f8;
 L_1a3c4:
 	r_v0 = (uint32_t)(r_v0 + (uint32_t)-1);
@@ -8788,7 +8802,7 @@ L_1a48c:
 	r_v0 = (uint32_t)(LIFT_XLATE(r_s0 + (uint32_t)-13800));
 	if (c_) goto L_1a4d4; }
 	r_a0 = (uint32_t)(0x19010000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)-13800));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ccm_real + 0))) + 0u)));
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_a0 + (uint32_t)12));
 	r_a1 = (uint32_t)(r_v1 < r_s1);
 	r_v0 = (uint32_t)(r_s1 - r_v1);
@@ -8802,7 +8816,7 @@ L_1a48c:
 L_1a4d4:
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)16));
 	r_v0 = (uint32_t)(0x2020000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-24400));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tiziano_ct_ccm_interpolation + 0))) + 0u)));
 	r_a0 = (uint32_t)(r_s1 + 0u);
 	{ uint64_t q_ = L_tiziano_ct_ccm_interpolation(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(LIFT_XLATE(r_s0 + (uint32_t)-13800));
@@ -8818,16 +8832,16 @@ L_1a500:
 	r_a0 = (uint32_t)(0x19010000u);
 	r_v0 = (uint32_t)(0x2010000u);
 	r_a2 = (uint32_t)((sp_base + 52));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)22544));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_cm_control + 0))) + 0u)));
 	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)-13972));
 	{ uint64_t q_ = L_cm_control(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(0x2020000u);
 	r_a0 = (uint32_t)((sp_base + 16));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-24544));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_jz_isp_ccm_para2reg + 0))) + 0u)));
 	r_a1 = (uint32_t)((sp_base + 52));
 	{ uint64_t q_ = L_jz_isp_ccm_para2reg(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(0x2020000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-24768));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tiziano_ccm_lut_parameter + 0))) + 0u)));
 	r_a0 = (uint32_t)((sp_base + 16));
 	{ uint64_t q_ = L_tiziano_ccm_lut_parameter(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 108));
@@ -8846,7 +8860,7 @@ static uint64_t L_jz_isp_lsc_ct(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, uin
 	uint32_t r_at = 0, r_v0 = 0, r_v1 = 0, r_t0 = 0, r_t1 = 0, r_t2 = 0, r_t3 = 0, r_t4 = 0, r_t5 = 0, r_t6 = 0, r_t7 = 0, r_s0 = 0, r_s1 = 0, r_s2 = 0, r_s3 = 0, r_s4 = 0, r_s5 = 0, r_s6 = 0, r_s7 = 0, r_t8 = 0, r_t9 = 0, r_k0 = 0, r_k1 = 0, r_gp = 0, r_s8 = 0, r_ra = 0, r_hi = 0, r_lo = 0;
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_v0 = (uint32_t)(0x19010000u);
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)-32340));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&lsc_lut_num + 0))) + 0u)));
 	r_v1 = (uint32_t)(0x14040000u);
 	*(uint32_t *)(uintptr_t)(sp_base + 92) = r_s1;
 	*(uint32_t *)(uintptr_t)(sp_base + 124) = r_ra;
@@ -8859,15 +8873,15 @@ static uint64_t L_jz_isp_lsc_ct(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, uin
 	*(uint32_t *)(uintptr_t)(sp_base + 96) = r_s2;
 	*(uint32_t *)(uintptr_t)(sp_base + 88) = r_s0;
 	*(uint32_t *)(uintptr_t)(sp_base + 72) = r_v0;
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)8096));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tiziano_lsc_ct_points + 0))) + 0u)));
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)8));
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)12));
 	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)4));
 	*(uint32_t *)(uintptr_t)(sp_base + 60) = r_a1;
 	*(uint32_t *)(uintptr_t)(sp_base + 64) = r_v0;
 	r_v0 = (uint32_t)(0x14040000u);
-	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)8096));
-	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)8112));
+	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tiziano_lsc_ct_points + 0))) + 0u)));
+	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&lsc_gain_old + 0))) + 0u)));
 	r_v0 = (uint32_t)(0u + (uint32_t)-1);
 	*(uint32_t *)(uintptr_t)(sp_base + 56) = r_a0;
 	*(uint32_t *)(uintptr_t)(sp_base + 68) = r_v1;
@@ -8877,20 +8891,20 @@ static uint64_t L_jz_isp_lsc_ct(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, uin
 	r_a2 = (uint32_t)(0x19010000u);
 	r_v0 = (uint32_t)(0x2010000u);
 	r_a0 = (uint32_t)(r_a1 >> 16);
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)-32336));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-14756));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&mesh_lsc_str + 0))) + 0u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_simple_intp + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_a1 & 0xffff);
 	{ uint64_t q_ = L_tisp_simple_intp(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_s1 = (uint32_t)(r_v0 + 0u);
 L_1779c:
 	r_v1 = (uint32_t)(0x14040000u);
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)8116));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ct + 0))) + 0u)));
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 56));
 	r_a0 = (uint32_t)(r_a1 < r_v0);
 	{ int c_ = (r_a0 == 0u);
 	r_s4 = (uint32_t)(0x19010000u);
 	if (c_) goto L_177bc; }
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s4 + (uint32_t)-32300) = 0u;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&lsc_change_flag + 0))) + 0u)) = 0u;
 	goto L_177fc;
 L_177bc:
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 60));
@@ -8921,7 +8935,7 @@ L_177fc:
 	r_a1 = (uint32_t)(0u + (uint32_t)2);
 	if (c_) goto L_17820; }
 	r_v0 = (uint32_t)(0x19010000u);
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)-32296));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&lsc_change_flag_last + 0))) + 0u)));
 	if (r_v0 == 0u) {
 	r_v0 = (uint32_t)(0x19010000u);
 	goto L_178b8; }
@@ -8972,9 +8986,9 @@ L_17888:
 L_1788c:
 	r_s3 = (uint32_t)(0x19010000u);
 	r_s5 = (uint32_t)(0x19000000u);
-	r_s3 = (uint32_t)(LIFT_XLATE(r_s3 + (uint32_t)-32288));
+	r_s3 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&t_linear + 0))) + 0u)));
 	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-24100));
-	r_s5 = (uint32_t)(LIFT_XLATE(r_s5 + (uint32_t)25008));
+	r_s5 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&d_linear + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 40) = r_s3;
 	*(uint32_t *)(uintptr_t)(sp_base + 44) = r_v0;
 	*(uint32_t *)(uintptr_t)(sp_base + 48) = r_s5;
@@ -8995,7 +9009,7 @@ L_178cc:
 	goto L_17a7c; }
 	r_a0 = (uint32_t)(0xc000000u);
 	r_v0 = (uint32_t)(r_v0 << 2);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)2912));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 2912u)));
 	r_v0 = (uint32_t)(r_a0 + r_v0);
 	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)0));
 	switch (r_v0) {
@@ -9007,13 +9021,13 @@ L_178cc:
 	default: WARN_ON_ONCE(1); return 0; }
 L_178f4:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_s7 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_a1 + (uint32_t)8116));
+	r_s7 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ct + 0))) + 0u)));
 	r_s6 = (uint32_t)(r_s5 + 0u);
 	r_s2 = (uint32_t)(0u + 0u);
 	goto L_17a30;
 L_17908:
 	r_v0 = (uint32_t)(0x14040000u);
-	r_s7 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)8116));
+	r_s7 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ct + 0))) + 0u)));
 	r_s6 = (uint32_t)(r_s5 + 0u);
 	r_s2 = (uint32_t)(0u + 0u);
 	goto L_1799c;
@@ -9046,7 +9060,7 @@ L_17958:
 	r_v1 = (uint32_t)(0x2010000u);
 	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 60));
 	*(uint32_t *)(uintptr_t)(sp_base + 16) = r_v0;
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)30340));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_jz_isp_lsc_interpolate + 0))) + 0u)));
 	r_a0 = (uint32_t)(r_s7 + 0u);
 	{ uint64_t q_ = L_jz_isp_lsc_interpolate(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a1 = (uint32_t)((sp_base + 24));
@@ -9090,7 +9104,7 @@ L_179ec:
 	r_v1 = (uint32_t)(0x2010000u);
 	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 68));
 	*(uint32_t *)(uintptr_t)(sp_base + 16) = r_v0;
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)30340));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_jz_isp_lsc_interpolate + 0))) + 0u)));
 	r_a0 = (uint32_t)(r_s7 + 0u);
 	{ uint64_t q_ = L_jz_isp_lsc_interpolate(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a1 = (uint32_t)((sp_base + 24));
@@ -9139,7 +9153,7 @@ L_17a7c:
 	*(uint32_t *)(uintptr_t)(sp_base + 76) = r_v0;
 	r_v0 = (uint32_t)(0x19000000u);
 	r_a0 = (uint32_t)(r_a0 & 0xff);
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)24992));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&mesh_scale + 0))) + 0u)));
 	r_s8 = (uint32_t)(r_s7 >> 8);
 	*(uint32_t *)(uintptr_t)(sp_base + 52) = r_a0;
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
@@ -9167,7 +9181,7 @@ L_17b00:
 L_17b08:
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)2);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)7648));
 	r_v0 = 0;
 	r_a2 = (uint32_t)(r_s2 + 0u);
@@ -9178,7 +9192,7 @@ L_17b28:
 	r_a2 = (uint32_t)(r_s2 + 0u);
 L_17b2c:
 	r_s2 = (uint32_t)(0x2010000u);
-	r_s2 = (uint32_t)(LIFT_XLATE(r_s2 + (uint32_t)30436));
+	r_s2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_jz_isp_lsc_inter_str + 0))) + 0u)));
 	r_a0 = (uint32_t)(r_s1 + 0u);
 	r_a1 = (uint32_t)(r_s0 + 0u);
 	{ uint64_t q_ = L_jz_isp_lsc_inter_str(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
@@ -9226,7 +9240,7 @@ L_17b2c:
 	r_a1 = (uint32_t)(r_a1 | r_s8);
 	r_s2 = (uint32_t)(0x2030000u);
 	r_a1 = (uint32_t)(r_a1 | r_a3);
-	r_s2 = (uint32_t)(LIFT_XLATE(r_s2 + (uint32_t)10240));
+	r_s2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&system_reg_write + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 80) = r_t2;
 	r_s3 = (uint32_t)(r_s3 + (uint32_t)3);
 	r_v0 = (uint32_t)(r_lo);
@@ -9267,7 +9281,7 @@ L_17c5c:
 	r_s2 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 96));
 	r_s1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 92));
 	r_s0 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 88));
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)-32296) = r_v1;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&lsc_change_flag_last + 0))) + 0u)) = r_v1;
 	r_v0 = (uint32_t)(0u + 0u);
 	return ((uint64_t)r_v1 << 32) | r_v0;
 	return ((uint64_t)r_v1 << 32) | r_v0;
@@ -9287,7 +9301,7 @@ static uint64_t L_Tiziano_adr_fpga(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, 
 	r_t2 = (uint32_t)(*(uint32_t *)(uintptr_t)(csp + 40));
 	r_t3 = (uint32_t)(*(uint32_t *)(uintptr_t)(csp + 44));
 	r_t4 = (uint32_t)(*(uint32_t *)(uintptr_t)(csp + 48));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)2464));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 2464u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 3492) = r_s5;
 	*(uint32_t *)(uintptr_t)(sp_base + 3488) = r_s4;
 	*(uint32_t *)(uintptr_t)(sp_base + 3484) = r_s3;
@@ -9336,7 +9350,7 @@ L_13384:
 	r_v0 = (uint32_t)(0x2010000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)16);
 	r_a1 = (uint32_t)(0x385b0000u);
-	r_s7 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-15472));
+	r_s7 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_div_32 + 0))) + 0u)));
 	r_a2 = (uint32_t)(0x27100000u);
 	{ uint64_t q_ = L_fix_point_div_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_t6 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s2 + (uint32_t)0));
@@ -9501,7 +9515,7 @@ L_135dc:
 	r_v0 = (uint32_t)(r_lo);
 	*(uint32_t *)(uintptr_t)(sp_base + 3412) = r_v0;
 	r_v0 = (uint32_t)(0x2010000u);
-	r_s8 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-15620));
+	r_s8 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult2_32 + 0))) + 0u)));
 	goto L_13648;
 L_13640:
 	{ int c_ = (r_s6 == r_s0);
@@ -9551,7 +9565,7 @@ L_136cc:
 	*(uint32_t *)(uintptr_t)(sp_base + 3244) = r_s6;
 	r_a1 = (uint32_t)(0u + 0u);
 	r_s6 = (uint32_t)(r_s0 + 0u);
-	r_s4 = (uint32_t)(LIFT_XLATE(r_s4 + (uint32_t)11588));
+	r_s4 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_subsection + 0))) + 0u)));
 	r_s0 = (uint32_t)(r_s1 + 0u);
 	r_s3 = (uint32_t)(0u + (uint32_t)8);
 	r_s2 = (uint32_t)(0u + (uint32_t)10);
@@ -9989,7 +10003,7 @@ L_13c58:
 	r_a3 = (uint32_t)(0x2010000u);
 	r_a0 = (uint32_t)(r_a2 + 0u);
 	r_a1 = (uint32_t)(0u + (uint32_t)16);
-	r_a3 = (uint32_t)(LIFT_XLATE(r_a3 + (uint32_t)-18112));
+	r_a3 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_math_exp2 + 0))) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)16);
 	{ uint64_t q_ = L_tisp_math_exp2(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 3364));
@@ -10487,7 +10501,7 @@ L_14360:
 	r_a3 = (uint32_t)(0x2010000u);
 	r_a0 = (uint32_t)(r_a2 + 0u);
 	r_a1 = (uint32_t)(0u + (uint32_t)16);
-	r_a3 = (uint32_t)(LIFT_XLATE(r_a3 + (uint32_t)-18112));
+	r_a3 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_math_exp2 + 0))) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)16);
 	{ uint64_t q_ = L_tisp_math_exp2(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 3364));
@@ -10540,7 +10554,7 @@ L_143fc:
 	r_a3 = (uint32_t)(0x2010000u);
 	r_a0 = (uint32_t)(r_v0 + 0u);
 	r_a1 = (uint32_t)(0u + (uint32_t)16);
-	r_a3 = (uint32_t)(LIFT_XLATE(r_a3 + (uint32_t)-18112));
+	r_a3 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_math_exp2 + 0))) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)16);
 	{ uint64_t q_ = L_tisp_math_exp2(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 3408));
@@ -10928,7 +10942,7 @@ L_149d8:
 	r_a3 = (uint32_t)(0x2010000u);
 	r_a0 = (uint32_t)(r_v0 + 0u);
 	r_a1 = (uint32_t)(0u + (uint32_t)16);
-	r_a3 = (uint32_t)(LIFT_XLATE(r_a3 + (uint32_t)-18112));
+	r_a3 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_math_exp2 + 0))) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)16);
 	{ uint64_t q_ = L_tisp_math_exp2(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 3408));
@@ -10988,7 +11002,7 @@ L_14aa8:
 	r_t0 = (uint32_t)(0x2010000u);
 	r_a0 = (uint32_t)(r_v0 + 0u);
 	r_a1 = (uint32_t)(0u + (uint32_t)16);
-	r_t0 = (uint32_t)(LIFT_XLATE(r_t0 + (uint32_t)-18112));
+	r_t0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_math_exp2 + 0))) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)16);
 	{ uint64_t q_ = L_tisp_math_exp2(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a2 = (uint32_t)(r_v0 + 0u);
@@ -11014,7 +11028,7 @@ L_14b18:
 	r_a0 = (uint32_t)(0u + (uint32_t)16);
 	{ uint64_t q_ = L_dispatch(r_s8, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v1 = (uint32_t)(0x2010000u);
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)-18112));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_math_exp2 + 0))) + 0u)));
 	r_a0 = (uint32_t)(r_v0 + 0u);
 	r_a1 = (uint32_t)(0u + (uint32_t)16);
 	r_a2 = (uint32_t)(0u + (uint32_t)16);
@@ -11044,7 +11058,7 @@ L_14b80:
 	r_t0 = (uint32_t)(0x2010000u);
 	r_a0 = (uint32_t)(r_v0 + 0u);
 	r_a1 = (uint32_t)(0u + (uint32_t)16);
-	r_t0 = (uint32_t)(LIFT_XLATE(r_t0 + (uint32_t)-18112));
+	r_t0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_math_exp2 + 0))) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)16);
 	{ uint64_t q_ = L_tisp_math_exp2(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a2 = (uint32_t)(r_v0 + 0u);
@@ -11191,7 +11205,7 @@ L_14da8:
 	r_a0 = (uint32_t)(0u + (uint32_t)16);
 	{ uint64_t q_ = L_dispatch(r_s8, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a3 = (uint32_t)(0x2010000u);
-	r_a3 = (uint32_t)(LIFT_XLATE(r_a3 + (uint32_t)-18112));
+	r_a3 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_math_exp2 + 0))) + 0u)));
 	r_a0 = (uint32_t)(r_v0 + 0u);
 	r_a1 = (uint32_t)(0u + (uint32_t)16);
 	r_a2 = (uint32_t)(0u + (uint32_t)16);
@@ -12001,7 +12015,7 @@ L_15c48:
 	*(uint32_t *)(uintptr_t)(sp_base + 156) = r_t5;
 	*(uint32_t *)(uintptr_t)(sp_base + 152) = r_ra;
 	r_s1 = (uint32_t)(0u + 0u);
-	r_s3 = (uint32_t)(LIFT_XLATE(r_s3 + (uint32_t)-15620));
+	r_s3 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult2_32 + 0))) + 0u)));
 L_15d54:
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 204));
 	r_t4 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 192));
@@ -12054,7 +12068,7 @@ L_15d54:
 L_15e10:
 	r_a2 = (uint32_t)(0x10000u);
 	r_v1 = (uint32_t)(0x2010000u);
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)-15472));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_div_32 + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_s4 << 10);
 	r_a0 = (uint32_t)(0u + (uint32_t)10);
 	r_a2 = (uint32_t)(r_a2 | 0x9000);
@@ -12067,7 +12081,7 @@ L_15e10:
 	r_a3 = (uint32_t)(0x2010000u);
 	r_a1 = (uint32_t)(r_v0 + 0u);
 	r_a0 = (uint32_t)(0u + (uint32_t)10);
-	r_a3 = (uint32_t)(LIFT_XLATE(r_a3 + (uint32_t)-15708));
+	r_a3 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_add_32 + 0))) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)512);
 	{ uint64_t q_ = L_fix_point_add_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_t4 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 164));
@@ -12089,7 +12103,7 @@ L_15e10:
 	r_v1 = (uint32_t)(0x2010000u);
 	r_a2 = (uint32_t)(r_a2 << 10);
 	r_a0 = (uint32_t)(0u + (uint32_t)10);
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)-15472));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_div_32 + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_a1 << 10);
 	{ uint64_t q_ = L_fix_point_div_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a3 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 164));
@@ -12269,7 +12283,7 @@ L_160b0:
 	r_t4 = (uint32_t)(0x2010000u);
 	r_a2 = (uint32_t)(r_a2 << 10);
 	r_a0 = (uint32_t)(0u + (uint32_t)10);
-	r_t4 = (uint32_t)(LIFT_XLATE(r_t4 + (uint32_t)-15472));
+	r_t4 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_div_32 + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_a1 << 10);
 	{ uint64_t q_ = L_fix_point_div_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a2 = (uint32_t)(r_s7 - r_s8);
@@ -12318,7 +12332,7 @@ L_16150:
 	r_a2 = (uint32_t)(r_a2 << 10);
 	*(uint32_t *)(uintptr_t)(sp_base + 228) = r_v1;
 	r_a0 = (uint32_t)(0u + (uint32_t)10);
-	r_a3 = (uint32_t)(LIFT_XLATE(r_a3 + (uint32_t)-15472));
+	r_a3 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_div_32 + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_a1 << 10);
 	{ uint64_t q_ = L_fix_point_div_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 228));
@@ -12370,7 +12384,7 @@ L_16218:
 	r_a1 = (uint32_t)(r_a1 << 10);
 	*(uint32_t *)(uintptr_t)(sp_base + 228) = r_v1;
 	r_a0 = (uint32_t)(0u + (uint32_t)10);
-	r_t4 = (uint32_t)(LIFT_XLATE(r_t4 + (uint32_t)-15472));
+	r_t4 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_div_32 + 0))) + 0u)));
 	r_a2 = (uint32_t)(r_a2 << 10);
 	{ uint64_t q_ = L_fix_point_div_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a1 = (uint32_t)(r_v0 + 0u);
@@ -12425,7 +12439,7 @@ L_162c8:
 	r_v1 = (uint32_t)(0x2010000u);
 	r_a1 = (uint32_t)(r_a1 << 10);
 	r_a0 = (uint32_t)(0u + (uint32_t)10);
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)-15472));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_div_32 + 0))) + 0u)));
 	r_a2 = (uint32_t)(r_a2 << 10);
 	{ uint64_t q_ = L_fix_point_div_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a1 = (uint32_t)(r_v0 + 0u);
@@ -12446,7 +12460,7 @@ L_162e8:
 	r_v1 = (uint32_t)(0x2010000u);
 	r_a2 = (uint32_t)(r_a2 << 10);
 	r_a0 = (uint32_t)(0u + (uint32_t)10);
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)-15472));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_div_32 + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_a1 << 10);
 	{ uint64_t q_ = L_fix_point_div_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a2 = (uint32_t)(r_s7 - r_s8);
@@ -12464,7 +12478,7 @@ L_1634c:
 	r_v1 = (uint32_t)(0x2010000u);
 	r_a1 = (uint32_t)(r_a1 << 10);
 	r_a0 = (uint32_t)(0u + (uint32_t)10);
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)-15472));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_div_32 + 0))) + 0u)));
 	r_a2 = (uint32_t)(r_a2 << 10);
 	{ uint64_t q_ = L_fix_point_div_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a1 = (uint32_t)(r_v0 + 0u);
@@ -12475,7 +12489,7 @@ L_16370:
 	r_t4 = (uint32_t)(0x2010000u);
 	r_a2 = (uint32_t)(r_a2 << 10);
 	r_a0 = (uint32_t)(0u + (uint32_t)10);
-	r_t4 = (uint32_t)(LIFT_XLATE(r_t4 + (uint32_t)-15472));
+	r_t4 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_div_32 + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_a1 << 10);
 	{ uint64_t q_ = L_fix_point_div_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 164));
@@ -12495,7 +12509,7 @@ L_163b8:
 	r_v1 = (uint32_t)(0x2010000u);
 	r_a2 = (uint32_t)(r_a2 << 10);
 	r_a0 = (uint32_t)(0u + (uint32_t)10);
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)-15472));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_div_32 + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_a1 << 10);
 	{ uint64_t q_ = L_fix_point_div_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a2 = (uint32_t)(r_s7 - r_s8);
@@ -12529,7 +12543,7 @@ L_16428:
 	r_t4 = (uint32_t)(0x2010000u);
 	r_a1 = (uint32_t)(r_a1 << 10);
 	r_a2 = (uint32_t)(r_a2 << 10);
-	r_t4 = (uint32_t)(LIFT_XLATE(r_t4 + (uint32_t)-15472));
+	r_t4 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_div_32 + 0))) + 0u)));
 	r_a0 = (uint32_t)(0u + (uint32_t)10);
 	{ uint64_t q_ = L_fix_point_div_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a1 = (uint32_t)(r_v0 + 0u);
@@ -12544,7 +12558,7 @@ L_16458:
 	r_a3 = (uint32_t)(0x2010000u);
 	r_a2 = (uint32_t)(r_a2 << 10);
 	r_a0 = (uint32_t)(0u + (uint32_t)10);
-	r_a3 = (uint32_t)(LIFT_XLATE(r_a3 + (uint32_t)-15472));
+	r_a3 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_div_32 + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_a1 << 10);
 	{ uint64_t q_ = L_fix_point_div_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a2 = (uint32_t)(r_s7 - r_s8);
@@ -12562,7 +12576,7 @@ L_16494:
 	r_a1 = (uint32_t)(r_a1 << 10);
 	r_a2 = (uint32_t)(r_a2 << 10);
 	*(uint32_t *)(uintptr_t)(sp_base + 228) = r_a3;
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)-15472));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_div_32 + 0))) + 0u)));
 	r_a0 = (uint32_t)(0u + (uint32_t)10);
 	{ uint64_t q_ = L_fix_point_div_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a3 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 228));
@@ -12579,7 +12593,7 @@ L_164cc:
 	r_a2 = (uint32_t)(r_a2 << 10);
 	*(uint32_t *)(uintptr_t)(sp_base + 228) = r_v1;
 	r_a0 = (uint32_t)(0u + (uint32_t)10);
-	r_t4 = (uint32_t)(LIFT_XLATE(r_t4 + (uint32_t)-15472));
+	r_t4 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_div_32 + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_a1 << 10);
 	{ uint64_t q_ = L_fix_point_div_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 228));
@@ -12598,7 +12612,7 @@ L_16510:
 	r_a1 = (uint32_t)(r_a1 << 10);
 	r_a2 = (uint32_t)(r_a2 << 10);
 	*(uint32_t *)(uintptr_t)(sp_base + 228) = r_v1;
-	r_a3 = (uint32_t)(LIFT_XLATE(r_a3 + (uint32_t)-15472));
+	r_a3 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_div_32 + 0))) + 0u)));
 	r_a0 = (uint32_t)(0u + (uint32_t)10);
 	{ uint64_t q_ = L_fix_point_div_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 228));
@@ -12734,7 +12748,7 @@ L_2bc38:
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(csp + 4));
 	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)(csp + 8));
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-24220));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_ae_weight_mean2 + 0))) + 0u)));
 	r_a3 = (uint32_t)(*(uint32_t *)(uintptr_t)(csp + 12));
 	{ uint64_t q_ = L_ae_weight_mean2(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(r_s3 + 0u);
@@ -12878,7 +12892,7 @@ L_2be30:
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(csp + 64));
 	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)(csp + 68));
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-22400));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_ae_tune2 + 0))) + 0u)));
 	r_a3 = (uint32_t)(*(uint32_t *)(uintptr_t)(csp + 72));
 	{ uint64_t q_ = L_ae_tune2(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 204));
@@ -12916,7 +12930,7 @@ static uint64_t L_tisp_set_ag_func(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, 
 	r_s2 = (uint32_t)(*(uint32_t *)(uintptr_t)(csp + 20));
 	*(uint32_t *)(uintptr_t)(csp + 8) = r_a2;
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(csp + 52));
-	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s8 + (uint32_t)19052));
+	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ftune + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(csp + 0) = r_a0;
 	r_s6 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_a0 + (uint32_t)16));
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
@@ -12933,13 +12947,13 @@ static uint64_t L_tisp_set_ag_func(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, 
 	r_s0 = (uint32_t)(0x14040000u);
 	if (c_) goto L_2bf1c; }
 	if (r_s3 != r_a1) {
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s8 + (uint32_t)17496));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_ae_ctrls + 0))) + 0u)));
 	goto L_2bf20; }
 	{ int c_ = (r_s4 != r_v0);
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s8 + (uint32_t)17496));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_ae_ctrls + 0))) + 0u)));
 	if (c_) goto L_2bf20; }
 	{ int c_ = (r_v0 == 0u);
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s0 + (uint32_t)15136));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_dg_new + 0))) + 0u)));
 	if (c_) goto L_2bfe4; }
 L_2bf1c:
 	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s8 + (uint32_t)17496));
@@ -12948,24 +12962,24 @@ L_2bf20:
 	r_s7 = (uint32_t)(0x2010000u);
 	if (c_) goto L_2bf4c; }
 	r_v0 = (uint32_t)(0x19010000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)17496));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_ae_ctrls + 0))) + 0u)));
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)8));
 	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)16));
 	r_s3 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)4));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_s7 + (uint32_t)-15620));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult2_32 + 0))) + 0u)));
 	r_a0 = (uint32_t)(r_s1 + 0u);
 	{ uint64_t q_ = L_fix_point_mult2_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_s4 = (uint32_t)(r_v0 + 0u);
 L_2bf4c:
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-27360));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_set_sensor_analog_gain + 0))) + 0u)));
 	r_a0 = (uint32_t)(r_s3 + 0u);
 	{ uint64_t q_ = L_tisp_set_sensor_analog_gain(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_s8 = (uint32_t)(LIFT_XLATE(r_s8 + (uint32_t)17496));
 	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s5 + (uint32_t)15140) = r_v0;
 	*(uint32_t *)(uintptr_t)(r_s8 + (uint32_t)4) = r_v0;
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-27228));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_set_sensor_digital_gain + 0))) + 0u)));
 	r_a0 = (uint32_t)(r_s4 + 0u);
 	{ uint64_t q_ = L_tisp_set_sensor_digital_gain(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_s7 = (uint32_t)(LIFT_XLATE(r_s7 + (uint32_t)-15620));
@@ -12983,17 +12997,17 @@ L_2bf4c:
 	r_a2 = (uint32_t)(r_v0 + 0u);
 	r_v0 = (uint32_t)(0x2010000u);
 	r_a0 = (uint32_t)(r_s1 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-15472));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_div_32 + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_s3 + 0u);
 	{ uint64_t q_ = L_fix_point_div_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a0 = (uint32_t)(r_s6 < r_v0);
 	if (r_a0 == 0) r_s6 = r_v0;
 	r_a0 = (uint32_t)(0x14040000u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_a0 + (uint32_t)15136) = r_s6;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_dg_new + 0))) + 0u)) = r_s6;
 	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s0 + (uint32_t)15136));
 	*(uint32_t *)(uintptr_t)(r_s8 + (uint32_t)16) = r_v0;
 	r_v0 = (uint32_t)(0x14040000u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)19052) = 0u;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ftune + 0))) + 0u)) = 0u;
 	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s0 + (uint32_t)15136));
 L_2bfe4:
 	*(uint32_t *)(uintptr_t)(r_s2 + (uint32_t)4) = r_v0;
@@ -13051,7 +13065,7 @@ static uint64_t L_JZ_Isp_Ae_Dg2reg(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, 
 	r_s1 = (uint32_t)(r_a1 + 0u);
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_a3 + (uint32_t)0));
 	*(uint32_t *)(uintptr_t)(sp_base + 32) = r_s3;
-	r_s2 = (uint32_t)(LIFT_XLATE(r_s2 + (uint32_t)-15620));
+	r_s2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult2_32 + 0))) + 0u)));
 	r_s3 = (uint32_t)(r_a3 + 0u);
 	*(uint32_t *)(uintptr_t)(sp_base + 44) = r_ra;
 	*(uint32_t *)(uintptr_t)(sp_base + 40) = r_s5;
@@ -13099,7 +13113,7 @@ static uint64_t L_tisp_log2_fixed_to_fixed(uint32_t r_a0, uint32_t r_a1, uint32_
 	*(uint32_t *)(uintptr_t)(sp_base + 24) = r_s1;
 	r_a2 = (uint32_t)(0u + 0u);
 	r_s1 = (uint32_t)(r_a1 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-14636));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_log2_int_to_fixed + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_s0 + 0u);
 	{ uint64_t q_ = L_tisp_log2_int_to_fixed(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 28));
@@ -13154,7 +13168,7 @@ L_c3f8:
 L_c400:
 	r_v0 = (uint32_t)(0xe0000000u);
 	r_a1 = (uint32_t)(0u + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)64));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&__ashldi3) + 0u)));
 	r_a2 = (uint32_t)(r_a3 + 0u);
 	{ uint64_t v_ = (((uint64_t)r_a1 << 32) | r_a0) << (r_a2 & 63); r_v0 = (uint32_t)v_; r_v1 = (uint32_t)(v_ >> 32); }
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 20));
@@ -13180,7 +13194,7 @@ static uint64_t L_tisp_ae_param_array_set(uint32_t r_a0, uint32_t r_a1, uint32_t
 	if (c_) goto L_2db30; }
 	r_v1 = (uint32_t)(0xc000000u);
 	r_v0 = (uint32_t)(r_v0 << 2);
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)6260));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 6260u)));
 	r_v0 = (uint32_t)(r_v1 + r_v0);
 	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)0));
 	r_s0 = (uint32_t)(r_a0 + 0u);
@@ -13214,44 +13228,44 @@ L_2d93c:
 L_2d944:
 	r_a0 = (uint32_t)(0x14040000u);
 	r_v0 = (uint32_t)(0xe0000000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)18888));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)32));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ae_parameter + 0))) + 0u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&memcpy) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)152);
 	r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2);
 	r_v0 = (uint32_t)(0u + (uint32_t)152);
 	goto L_2db64;
 L_2d964:
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)18872));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ae_switch_night_mode + 0))) + 0u)));
 	goto L_2d9c4;
 L_2d970:
 	r_a0 = (uint32_t)(0x14040000u);
 	r_v0 = (uint32_t)(0xe0000000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)18864));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)32));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_AePointPos + 0))) + 0u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&memcpy) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)8);
 	r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2);
 	r_v0 = (uint32_t)(0u + (uint32_t)8);
 	goto L_2db64;
 L_2d990:
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)18820));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_exp_parameter + 0))) + 0u)));
 	goto L_2daa8;
 L_2d99c:
 	r_a0 = (uint32_t)(0x14040000u);
 	r_v0 = (uint32_t)(0xe0000000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)18800));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)32));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ae_ev_step + 0))) + 0u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&memcpy) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)20);
 	r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2);
 	r_v0 = (uint32_t)(0u + (uint32_t)20);
 	goto L_2db64;
 L_2d9bc:
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)18784));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ae_stable_tol + 0))) + 0u)));
 L_2d9c4:
 	r_v0 = (uint32_t)(0xe0000000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)32));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&memcpy) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)16);
 	r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2);
 L_2d9d4:
@@ -13259,23 +13273,23 @@ L_2d9d4:
 	goto L_2db64;
 L_2d9dc:
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)18744));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ev_list + 0))) + 0u)));
 	goto L_2da10;
 L_2d9e8:
 	r_a0 = (uint32_t)(0x14040000u);
 	r_v0 = (uint32_t)(0xe0000000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)18720));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)32));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_lum_list + 0))) + 0u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&memcpy) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)24);
 	r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2);
 	r_v0 = (uint32_t)(0u + (uint32_t)24);
 	goto L_2db64;
 L_2da08:
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)18680));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_at_list + 0))) + 0u)));
 L_2da10:
 	r_v0 = (uint32_t)(0xe0000000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)32));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&memcpy) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)40);
 	r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2);
 	r_v0 = (uint32_t)(0u + (uint32_t)40);
@@ -13283,8 +13297,8 @@ L_2da10:
 L_2da28:
 	r_a0 = (uint32_t)(0x14040000u);
 	r_v0 = (uint32_t)(0xe0000000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)18668));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)32));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_deflicker_para + 0))) + 0u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&memcpy) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)12);
 	r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2);
 	r_v0 = (uint32_t)(0u + (uint32_t)12);
@@ -13292,68 +13306,68 @@ L_2da28:
 L_2da48:
 	r_s1 = (uint32_t)(0x14040000u);
 	r_v0 = (uint32_t)(0xe0000000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_s1 + (uint32_t)18644));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)32));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_flicker_t + 0))) + 0u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&memcpy) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)24);
 	r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2);
 	r_v0 = (uint32_t)(0x14040000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)18164));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_deflick_lut + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 16) = r_v0;
 	r_v0 = (uint32_t)(0x14040000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)18160));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_nodes_num + 0))) + 0u)));
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s1 + (uint32_t)18644));
 	r_s1 = (uint32_t)(LIFT_XLATE(r_s1 + (uint32_t)18644));
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_v0;
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)4));
 	r_v0 = (uint32_t)(0x2030000u);
 	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)8));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-14672));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tiziano_deflicker_expt + 0))) + 0u)));
 	r_a3 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)12));
 	{ uint64_t q_ = L_tiziano_deflicker_expt(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(0u + (uint32_t)24);
 	goto L_2db64;
 L_2daa0:
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)18116));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_scene_para + 0))) + 0u)));
 L_2daa8:
 	r_v0 = (uint32_t)(0xe0000000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)32));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&memcpy) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)44);
 	r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2);
 	r_v0 = (uint32_t)(0u + (uint32_t)44);
 	goto L_2db64;
 L_2dac0:
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)18100));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ae_scene_mode_th + 0))) + 0u)));
 	goto L_2d9c4;
 L_2dacc:
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)18020));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_log2_lut + 0))) + 0u)));
 	goto L_2dae0;
 L_2dad8:
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)17940));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_weight_lut + 0))) + 0u)));
 L_2dae0:
 	r_v0 = (uint32_t)(0xe0000000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)32));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&memcpy) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)80);
 	r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2);
 	r_v0 = (uint32_t)(0u + (uint32_t)80);
 	goto L_2db64;
 L_2daf8:
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)17040));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ae_zone_weight + 0))) + 0u)));
 	goto L_2db18;
 L_2db04:
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)16140));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_scene_roui_weight + 0))) + 0u)));
 	goto L_2db18;
 L_2db10:
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)15240));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_scene_roi_weight + 0))) + 0u)));
 L_2db18:
 	r_v0 = (uint32_t)(0xe0000000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)32));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&memcpy) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)900);
 	r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2);
 	r_v0 = (uint32_t)(0u + (uint32_t)900);
@@ -13363,10 +13377,10 @@ L_2db30:
 	r_a2 = (uint32_t)(0xc000000u);
 	r_v0 = (uint32_t)(0x2000000u);
 	*(uint32_t *)(uintptr_t)(sp_base + 16) = r_a0;
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)8348));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem__LC11 + 0))) + 0u)));
 	r_a0 = (uint32_t)(0u + (uint32_t)2);
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)6368));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 6368u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_a3 = (uint32_t)(0u + (uint32_t)2503);
 	r_v0 = 0;
 	r_v0 = (uint32_t)(0u + (uint32_t)-1);
@@ -13385,20 +13399,20 @@ L_2db64:
 	*(uint32_t *)(uintptr_t)(sp_base + 16) = r_s0;
 	*(uint32_t *)(uintptr_t)(sp_base + 24) = r_v1;
 	r_a0 = (uint32_t)(0u + (uint32_t)2);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)8384));
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)6368));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem__LC12 + 0))) + 0u)));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 6368u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_a3 = (uint32_t)(0u + (uint32_t)2508);
 	r_v0 = 0;
 	r_v0 = (uint32_t)(0u + (uint32_t)-1);
 	goto L_2dbcc;
 L_2dba8:
 	r_v1 = (uint32_t)(0x19010000u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)29124) = r_v0;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&trig + 0))) + 0u)) = r_v0;
 	r_v1 = (uint32_t)(0x19010000u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)29108) = r_v0;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&force_trig + 0))) + 0u)) = r_v0;
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-12324));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tiziano_ae_set_hardware_param + 0))) + 0u)));
 	{ uint64_t q_ = L_tiziano_ae_set_hardware_param(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(0u + 0u);
 L_2dbcc:
@@ -13451,8 +13465,8 @@ L_3045c:
 	r_a0 = (uint32_t)(0x14000000u);
 	r_s1 = (uint32_t)(0xe0000000u);
 	r_a1 = (uint32_t)(r_s0 + 0u);
-	r_s1 = (uint32_t)(LIFT_XLATE(r_s1 + (uint32_t)32));
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)31312));
+	r_s1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&memcpy) + 0u)));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tparams + 0))) + 28672u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)900);
 	r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2);
 	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 916));
@@ -13463,7 +13477,7 @@ L_3045c:
 	r_a1 = (uint32_t)(r_s0 + 0u);
 	r_s0 = (uint32_t)(0x2030000u);
 	r_a2 = (uint32_t)((sp_base + 916));
-	r_s0 = (uint32_t)(LIFT_XLATE(r_s0 + (uint32_t)-9988));
+	r_s0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_ae_param_array_set + 0))) + 0u)));
 	r_a0 = (uint32_t)(0u + (uint32_t)18);
 	{ uint64_t q_ = L_tisp_ae_param_array_set(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a1 = (uint32_t)((sp_base + 16));
@@ -13492,14 +13506,14 @@ static uint64_t L_tisp_s_aezone_weight(uint32_t r_a0, uint32_t r_a1, uint32_t r_
 	r_a0 = (uint32_t)(0x14000000u);
 	*(uint32_t *)(uintptr_t)(sp_base + 28) = r_ra;
 	r_a1 = (uint32_t)(r_s0 + 0u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)29512));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)32));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tparams + 0))) + 26872u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&memcpy) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)900);
 	r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2);
 	r_v0 = (uint32_t)(0x2030000u);
 	r_a1 = (uint32_t)(r_s0 + 0u);
 	r_a2 = (uint32_t)((sp_base + 16));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-9988));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_ae_param_array_set + 0))) + 0u)));
 	r_a0 = (uint32_t)(0u + (uint32_t)16);
 	{ uint64_t q_ = L_tisp_ae_param_array_set(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 28));
@@ -13521,22 +13535,22 @@ static uint64_t L_tisp_ae_set_hist_custome(uint32_t r_a0, uint32_t r_a1, uint32_
 	*(uint32_t *)(uintptr_t)(sp_base + 28) = r_ra;
 	*(uint32_t *)(uintptr_t)(csp + 0) = r_a0;
 	*(uint32_t *)(uintptr_t)(csp + 4) = r_a1;
-	r_a0 = (uint32_t)(LIFT_XLATE(r_s0 + (uint32_t)0));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem___key_34044 + 0))) + 0u)));
 	r_a1 = (uint32_t)((sp_base + 16));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)244));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&__private_spin_lock_irqsave + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(csp + 12) = r_a3;
 	*(uint32_t *)(uintptr_t)(csp + 8) = r_a2;
 	{ unsigned long f_; spin_lock_irqsave(&lift_lock, f_); *(uint32_t *)(uintptr_t)r_a1 = (uint32_t)f_; } r_v0 = 0;
 	r_a0 = (uint32_t)(0x19010000u);
 	r_v0 = (uint32_t)(0xe0000000u);
 	r_a1 = (uint32_t)((csp + 1044));
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)27280));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)32));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_ae_hist_last + 0))) + 1044u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&memcpy) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)16);
 	r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2);
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 16));
 	r_v0 = (uint32_t)(0x2000000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)24776));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&private_spin_unlock_irqrestore + 0))) + 0u)));
 	r_a0 = (uint32_t)(LIFT_XLATE(r_s0 + (uint32_t)0));
 	spin_unlock_irqrestore(&lift_lock, (unsigned long)r_a1); r_v0 = 0;
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 28));
@@ -13560,14 +13574,14 @@ static uint64_t L_tisp_s_af_weight(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, 
 	r_a0 = (uint32_t)(0x14010000u);
 	*(uint32_t *)(uintptr_t)(sp_base + 28) = r_ra;
 	r_a1 = (uint32_t)(r_s0 + 0u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)23116));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)32));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tparams + 0))) + 86012u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&memcpy) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)900);
 	r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2);
 	r_v0 = (uint32_t)(0x2030000u);
 	r_a1 = (uint32_t)(r_s0 + 0u);
 	r_a2 = (uint32_t)((sp_base + 16));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-2940));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_af_param_array_set + 0))) + 0u)));
 	r_a0 = (uint32_t)(0u + (uint32_t)408);
 	{ uint64_t q_ = L_tisp_af_param_array_set(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 28));
@@ -13593,7 +13607,7 @@ static uint64_t L_tisp_ae_param_array_get(uint32_t r_a0, uint32_t r_a1, uint32_t
 	*(uint32_t *)(uintptr_t)(sp_base + 28) = r_s0;
 	if (c_) goto L_2d884; }
 	r_v0 = (uint32_t)(0xc000000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)6176));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 6176u)));
 	r_v1 = (uint32_t)(r_v1 << 2);
 	r_v1 = (uint32_t)(r_v0 + r_v1);
 	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v1 + (uint32_t)0));
@@ -13623,93 +13637,93 @@ static uint64_t L_tisp_ae_param_array_get(uint32_t r_a0, uint32_t r_a1, uint32_t
 	default: WARN_ON_ONCE(1); return 0; }
 L_2d77c:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)18864));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_AePointPos + 0))) + 0u)));
 	r_s0 = (uint32_t)(0u + (uint32_t)8);
 	goto L_2d8d0;
 L_2d78c:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)18820));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_exp_parameter + 0))) + 0u)));
 	goto L_2d800;
 L_2d798:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)18800));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ae_ev_step + 0))) + 0u)));
 	goto L_2d86c;
 L_2d7a4:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)18784));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ae_stable_tol + 0))) + 0u)));
 	goto L_2d8cc;
 L_2d7b0:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)18744));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ev_list + 0))) + 0u)));
 	goto L_2d7d0;
 L_2d7bc:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)18720));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_lum_list + 0))) + 0u)));
 	goto L_2d7f0;
 L_2d7c8:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)18680));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_at_list + 0))) + 0u)));
 L_2d7d0:
 	r_s0 = (uint32_t)(0u + (uint32_t)40);
 	goto L_2d8d0;
 L_2d7d8:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)18668));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_deflicker_para + 0))) + 0u)));
 	r_s0 = (uint32_t)(0u + (uint32_t)12);
 	goto L_2d8d0;
 L_2d7e8:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)18644));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_flicker_t + 0))) + 0u)));
 L_2d7f0:
 	r_s0 = (uint32_t)(0u + (uint32_t)24);
 	goto L_2d8d0;
 L_2d7f8:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)18116));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_scene_para + 0))) + 0u)));
 L_2d800:
 	r_s0 = (uint32_t)(0u + (uint32_t)44);
 	goto L_2d8d0;
 L_2d808:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)18100));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ae_scene_mode_th + 0))) + 0u)));
 	goto L_2d8cc;
 L_2d814:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)18020));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_log2_lut + 0))) + 0u)));
 	goto L_2d828;
 L_2d820:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)17940));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_weight_lut + 0))) + 0u)));
 L_2d828:
 	r_s0 = (uint32_t)(0u + (uint32_t)80);
 	goto L_2d8d0;
 L_2d830:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)17040));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ae_zone_weight + 0))) + 0u)));
 	goto L_2d850;
 L_2d83c:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)16140));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_scene_roui_weight + 0))) + 0u)));
 	goto L_2d850;
 L_2d848:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)15240));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_scene_roi_weight + 0))) + 0u)));
 L_2d850:
 	r_s0 = (uint32_t)(0u + (uint32_t)900);
 	goto L_2d8d0;
 L_2d858:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)15224));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ae_result + 0))) + 0u)));
 	goto L_2d8cc;
 L_2d864:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)15204));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ae_stat + 0))) + 0u)));
 L_2d86c:
 	r_s0 = (uint32_t)(0u + (uint32_t)20);
 	goto L_2d8d0;
 L_2d874:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)15144));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ae_wm_q + 0))) + 0u)));
 	r_s0 = (uint32_t)(0u + (uint32_t)60);
 	goto L_2d8d0;
 L_2d884:
@@ -13718,26 +13732,26 @@ L_2d884:
 	r_a2 = (uint32_t)(0xc000000u);
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)2);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)8348));
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)6344));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem__LC11 + 0))) + 0u)));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 6344u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_a3 = (uint32_t)(0u + (uint32_t)2383);
 	r_v0 = 0;
 	r_v0 = (uint32_t)(0u + (uint32_t)-1);
 	goto L_2d8e8;
 L_2d8b4:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)18888));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ae_parameter + 0))) + 0u)));
 	r_s0 = (uint32_t)(0u + (uint32_t)152);
 	goto L_2d8d0;
 L_2d8c4:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)18872));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ae_switch_night_mode + 0))) + 0u)));
 L_2d8cc:
 	r_s0 = (uint32_t)(0u + (uint32_t)16);
 L_2d8d0:
 	r_v0 = (uint32_t)(0xe0000000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)32));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&memcpy) + 0u)));
 	r_a2 = (uint32_t)(r_s0 + 0u);
 	r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2);
 	*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)0) = r_s0;
@@ -13757,7 +13771,7 @@ static uint64_t L_tisp_g_adr_str_internal(uint32_t r_a0, uint32_t r_a1, uint32_t
 	uint32_t r_at = 0, r_v0 = 0, r_v1 = 0, r_t0 = 0, r_t1 = 0, r_t2 = 0, r_t3 = 0, r_t4 = 0, r_t5 = 0, r_t6 = 0, r_t7 = 0, r_s0 = 0, r_s1 = 0, r_s2 = 0, r_s3 = 0, r_s4 = 0, r_s5 = 0, r_s6 = 0, r_s7 = 0, r_t8 = 0, r_t9 = 0, r_k0 = 0, r_k1 = 0, r_gp = 0, r_s8 = 0, r_ra = 0, r_hi = 0, r_lo = 0;
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_v0 = (uint32_t)(0x14040000u);
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)15124));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&adr_ratio + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_a0 + (uint32_t)0) = r_v0;
 	return ((uint64_t)r_v1 << 32) | r_v0;
 	return ((uint64_t)r_v1 << 32) | r_v0;
@@ -13774,7 +13788,7 @@ static uint64_t L_tisp_g_aeroi_weight(uint32_t r_a0, uint32_t r_a1, uint32_t r_a
 	*(uint32_t *)(uintptr_t)(sp_base + 28) = r_ra;
 	r_a0 = (uint32_t)(0u + (uint32_t)18);
 	r_a2 = (uint32_t)((sp_base + 16));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-10436));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_ae_param_array_get + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 16) = 0u;
 	{ uint64_t q_ = L_tisp_ae_param_array_get(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 16));
@@ -13786,9 +13800,9 @@ static uint64_t L_tisp_g_aeroi_weight(uint32_t r_a0, uint32_t r_a1, uint32_t r_a
 	r_a2 = (uint32_t)(0xc000000u);
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)2);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)8760));
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)6716));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem__LC7 + 0))) + 0u)));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 6716u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_a3 = (uint32_t)(0u + (uint32_t)514);
 	r_v0 = 0;
 	r_v0 = (uint32_t)(0u + (uint32_t)-1);
@@ -13805,7 +13819,7 @@ static uint64_t L_tisp_g_ae_zone(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, ui
 	uint32_t r_at = 0, r_v0 = 0, r_v1 = 0, r_t0 = 0, r_t1 = 0, r_t2 = 0, r_t3 = 0, r_t4 = 0, r_t5 = 0, r_t6 = 0, r_t7 = 0, r_s0 = 0, r_s1 = 0, r_s2 = 0, r_s3 = 0, r_s4 = 0, r_s5 = 0, r_s6 = 0, r_s7 = 0, r_t8 = 0, r_t9 = 0, r_k0 = 0, r_k1 = 0, r_gp = 0, r_s8 = 0, r_ra = 0, r_hi = 0, r_lo = 0;
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-10664));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_ae_get_y_zone + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_ra;
 	{ uint64_t q_ = L_tisp_ae_get_y_zone(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 20));
@@ -13825,7 +13839,7 @@ static uint64_t L_tisp_g_aezone_weight(uint32_t r_a0, uint32_t r_a1, uint32_t r_
 	*(uint32_t *)(uintptr_t)(sp_base + 28) = r_ra;
 	r_a0 = (uint32_t)(0u + (uint32_t)16);
 	r_a2 = (uint32_t)((sp_base + 16));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-10436));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_ae_param_array_get + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 16) = 0u;
 	{ uint64_t q_ = L_tisp_ae_param_array_get(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 16));
@@ -13837,9 +13851,9 @@ static uint64_t L_tisp_g_aezone_weight(uint32_t r_a0, uint32_t r_a1, uint32_t r_
 	r_a2 = (uint32_t)(0xc000000u);
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)2);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)8792));
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)6736));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem__LC8 + 0))) + 0u)));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 6736u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_a3 = (uint32_t)(0u + (uint32_t)539);
 	r_v0 = 0;
 	r_v0 = (uint32_t)(0u + (uint32_t)-1);
@@ -13862,19 +13876,19 @@ static uint64_t L_tisp_ae_get_hist_custome(uint32_t r_a0, uint32_t r_a1, uint32_
 	*(uint32_t *)(uintptr_t)(sp_base + 32) = r_s1;
 	r_a1 = (uint32_t)((sp_base + 16));
 	r_s1 = (uint32_t)(r_a0 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)244));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&__private_spin_lock_irqsave + 0))) + 0u)));
 	r_a0 = (uint32_t)(LIFT_XLATE(r_s0 + (uint32_t)0));
 	{ unsigned long f_; spin_lock_irqsave(&lift_lock, f_); *(uint32_t *)(uintptr_t)r_a1 = (uint32_t)f_; } r_v0 = 0;
 	r_a1 = (uint32_t)(0x19010000u);
 	r_v0 = (uint32_t)(0xe0000000u);
 	r_a0 = (uint32_t)(r_s1 + 0u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)26236));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)32));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_ae_hist_last + 0))) + 0u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&memcpy) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)1068);
 	r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2);
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 16));
 	r_v0 = (uint32_t)(0x2000000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)24776));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&private_spin_unlock_irqrestore + 0))) + 0u)));
 	r_a0 = (uint32_t)(LIFT_XLATE(r_s0 + (uint32_t)0));
 	spin_unlock_irqrestore(&lift_lock, (unsigned long)r_a1); r_v0 = 0;
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 36));
@@ -13896,7 +13910,7 @@ static uint64_t L_tisp_g_af_weight(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, 
 	*(uint32_t *)(uintptr_t)(sp_base + 28) = r_ra;
 	r_a0 = (uint32_t)(0u + (uint32_t)408);
 	r_a2 = (uint32_t)((sp_base + 16));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-3360));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_af_param_array_get + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 16) = 0u;
 	{ uint64_t q_ = L_tisp_af_param_array_get(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 16));
@@ -13908,9 +13922,9 @@ static uint64_t L_tisp_g_af_weight(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, 
 	r_a2 = (uint32_t)(0xc000000u);
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)2);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)8832));
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)6760));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem__LC9 + 0))) + 0u)));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 6760u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_a3 = (uint32_t)(0u + (uint32_t)564);
 	r_v0 = 0;
 	r_v0 = (uint32_t)(0u + (uint32_t)-1);
@@ -13942,7 +13956,7 @@ static uint64_t L_fix_point_div(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, uin
 	*(uint32_t *)(uintptr_t)(sp_base + 44) = r_ra;
 	r_a3 = (uint32_t)(r_s3 + 0u);
 	r_s4 = (uint32_t)(r_a0 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)80));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&div64_u64) + 0u)));
 	r_a0 = (uint32_t)(r_a2 + 0u);
 	r_a2 = (uint32_t)(r_s2 + 0u);
 	{ uint64_t q_ = div64_u64(((uint64_t)r_a1 << 32) | r_a0, ((uint64_t)r_a3 << 32) | r_a2); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
@@ -14001,7 +14015,7 @@ L_bde4:
 	r_v0 = (uint32_t)(0xe0000000u);
 	r_a0 = (uint32_t)(r_s0 | 0x1);
 	r_a1 = (uint32_t)(r_s1 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)64));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&__ashldi3) + 0u)));
 	r_a2 = (uint32_t)(r_a2 - r_t2);
 	{ uint64_t v_ = (((uint64_t)r_a1 << 32) | r_a0) << (r_a2 & 63); r_v0 = (uint32_t)v_; r_v1 = (uint32_t)(v_ >> 32); }
 	r_s0 = (uint32_t)(r_v0 + 0u);
@@ -14017,7 +14031,7 @@ L_be28:
 	r_v0 = (uint32_t)(0xe0000000u);
 	r_a0 = (uint32_t)(r_s5 + 0u);
 	r_a1 = (uint32_t)(r_s6 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)64));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&__ashldi3) + 0u)));
 	r_a2 = (uint32_t)(r_s4 + 0u);
 	{ uint64_t v_ = (((uint64_t)r_a1 << 32) | r_a0) << (r_a2 & 63); r_v0 = (uint32_t)v_; r_v1 = (uint32_t)(v_ >> 32); }
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 44));
@@ -14088,7 +14102,7 @@ static uint64_t L_Tiziano_Awb_Ct_Detect(uint32_t r_a0, uint32_t r_a1, uint32_t r
 	r_s0 = (uint32_t)(r_a2 + 0u);
 	r_a1 = (uint32_t)(0u + 0u);
 	r_a2 = (uint32_t)(0u + (uint32_t)80);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)16));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&memset) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 172) = r_t0;
 	*(uint32_t *)(uintptr_t)(sp_base + 176) = r_v1;
 	r_v0 = (uint32_t)(uintptr_t)memset((void *)(uintptr_t)r_a0, (int)r_a1, r_a2);
@@ -14168,12 +14182,12 @@ L_1161c:
 	r_t0 = (uint32_t)(r_s7 << 2);
 	r_t0 = (uint32_t)(r_v0 - r_t0);
 	r_v0 = (uint32_t)(0x19000000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)19232));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_zone_pix_wgh + 0))) + 0u)));
 	r_v1 = (uint32_t)(0x2010000u);
 	r_s2 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 120));
 	r_s8 = (uint32_t)(r_v0 + r_t0);
 	r_s5 = (uint32_t)(0u + 0u);
-	r_s4 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)-15472));
+	r_s4 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_div_32 + 0))) + 0u)));
 L_11650:
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s2 + (uint32_t)0));
 	r_a0 = (uint32_t)(r_s3 + 0u);
@@ -14264,7 +14278,7 @@ L_11764:
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 132));
 	r_t3 = (uint32_t)(r_a0 - r_v0);
 	r_a0 = (uint32_t)(0x19000000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)21932));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_rgbg_wght + 0))) + 0u)));
 	r_t2 = (uint32_t)(r_t0 + r_v1);
 	r_t3 = (uint32_t)(r_a0 + r_t3);
 	r_t4 = (uint32_t)(0u + 0u);
@@ -14377,7 +14391,7 @@ L_11888:
 	*(uint32_t *)(uintptr_t)(sp_base + 224) = r_t7;
 	*(uint32_t *)(uintptr_t)(sp_base + 216) = r_t8;
 	r_a0 = (uint32_t)(r_s2 + 0u);
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)4512));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_ISPAWBInterpolation1 + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_v0;
 	{ uint64_t q_ = L_ISPAWBInterpolation1(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v1 = (uint32_t)(r_v0 + 0u);
@@ -14395,7 +14409,7 @@ L_11888:
 	*(uint32_t *)(uintptr_t)(sp_base + 16) = r_a0;
 	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)0));
 	r_t0 = (uint32_t)(0x2010000u);
-	r_t0 = (uint32_t)(LIFT_XLATE(r_t0 + (uint32_t)4512));
+	r_t0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_ISPAWBInterpolation1 + 0))) + 0u)));
 	r_a0 = (uint32_t)(r_s2 + 0u);
 	*(uint32_t *)(uintptr_t)(sp_base + 220) = r_v1;
 	r_s0 = (uint32_t)(r_s8 + (uint32_t)-1);
@@ -14412,7 +14426,7 @@ L_11888:
 	*(uint32_t *)(uintptr_t)(sp_base + 16) = r_v1;
 	r_v1 = (uint32_t)(0x2010000u);
 	r_a0 = (uint32_t)(r_s2 + 0u);
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)4752));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_ISPAWBInterpolation2 + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_v0;
 	{ uint64_t q_ = L_ISPAWBInterpolation2(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_t3 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 232));
@@ -14454,7 +14468,7 @@ L_11a18:
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 136));
 	if (c_) goto L_11c88; }
 	r_v0 = (uint32_t)(0x19000000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)21932));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_rgbg_wght + 0))) + 0u)));
 	r_s7 = (uint32_t)(r_t1 * r_v1);
 	*(uint32_t *)(uintptr_t)(sp_base + 148) = r_v0;
 	r_t0 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 148));
@@ -14564,7 +14578,7 @@ L_11b80:
 	r_a0 = (uint32_t)(r_s7 << 6);
 	r_v1 = (uint32_t)(0x19000000u);
 	r_a0 = (uint32_t)(r_a0 - r_v0);
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)19232));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_zone_pix_wgh + 0))) + 0u)));
 	r_v1 = (uint32_t)(r_a0 + r_v1);
 	r_v0 = (uint32_t)(0u + (uint32_t)256);
 	*(uint32_t *)(uintptr_t)(r_v1 + (uint32_t)0) = 0u;
@@ -14600,7 +14614,7 @@ L_11bf4:
 	r_a0 = (uint32_t)(r_s3 + 0u);
 	r_a1 = (uint32_t)(r_s1 + 0u);
 	r_a2 = (uint32_t)(r_a2 << (r_s3 & 31));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-15472));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_div_32 + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 120) = r_v0;
 	{ uint64_t q_ = L_fix_point_div_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a2 = (uint32_t)(r_s4 - r_s2);
@@ -14640,7 +14654,7 @@ L_11c88:
 	r_t0 = (uint32_t)(r_t1 << 2);
 	if (c_) goto L_11eb8; }
 	r_v0 = (uint32_t)(0x19000000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)21932));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_rgbg_wght + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 160) = r_t0;
 	r_a2 = (uint32_t)(r_v0 + r_t0);
 	*(uint32_t *)(uintptr_t)(sp_base + 148) = r_v0;
@@ -14707,8 +14721,8 @@ L_11d58:
 	r_v0 = (uint32_t)(0x19000000u);
 	r_t0 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 148));
 	r_a0 = (uint32_t)(0x2010000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)19232));
-	r_s6 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)-15620));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_zone_pix_wgh + 0))) + 0u)));
+	r_s6 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult2_32 + 0))) + 0u)));
 	r_s1 = (uint32_t)(r_t0 + r_s0);
 	r_v1 = (uint32_t)(0x2010000u);
 	r_s0 = (uint32_t)(r_v0 + r_s0);
@@ -14716,7 +14730,7 @@ L_11d58:
 	r_v0 = (uint32_t)(r_s6 + 0u);
 	r_s5 = (uint32_t)(0u + 0u);
 	r_s6 = (uint32_t)(r_s8 + 0u);
-	r_s2 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)-15552));
+	r_s2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult3_32 + 0))) + 0u)));
 	r_s8 = (uint32_t)(r_v0 + 0u);
 L_11db0:
 	r_a3 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s0 + (uint32_t)0));
@@ -14812,7 +14826,7 @@ L_11ee8:
 	r_v0 = (uint32_t)(0x2010000u);
 	*(uint32_t *)(uintptr_t)(sp_base + 236) = r_t1;
 	*(uint32_t *)(uintptr_t)(sp_base + 240) = r_t6;
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-15472));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_div_32 + 0))) + 0u)));
 	r_a0 = (uint32_t)(r_s3 + 0u);
 	r_a2 = (uint32_t)(r_s4 + 0u);
 	*(uint32_t *)(uintptr_t)(sp_base + 120) = r_v0;
@@ -14921,7 +14935,7 @@ L_12004:
 	*(uint32_t *)(uintptr_t)(sp_base + 232) = r_t3;
 	*(uint32_t *)(uintptr_t)(sp_base + 228) = r_t4;
 	*(uint32_t *)(uintptr_t)(sp_base + 240) = r_t6;
-	r_s0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)4512));
+	r_s0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_ISPAWBInterpolation1 + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_t7 + 0u);
 	{ uint64_t q_ = L_ISPAWBInterpolation1(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_t3 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 232));
@@ -14962,7 +14976,7 @@ L_120a4:
 	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_t3 + (uint32_t)0));
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 156));
 	*(uint32_t *)(uintptr_t)(sp_base + 16) = r_v0;
-	r_v0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)4972));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_func_zone_ct_weight + 0))) + 0u)));
 	r_a0 = (uint32_t)(r_lo);
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_t0;
 	*(uint32_t *)(uintptr_t)(sp_base + 24) = r_v1;
@@ -15005,7 +15019,7 @@ L_12148:
 	*(uint32_t *)(uintptr_t)(sp_base + 236) = r_t1;
 	*(uint32_t *)(uintptr_t)(sp_base + 232) = r_t3;
 	*(uint32_t *)(uintptr_t)(sp_base + 228) = r_t4;
-	r_s0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)4512));
+	r_s0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_ISPAWBInterpolation1 + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 240) = r_t6;
 	{ uint64_t q_ = L_ISPAWBInterpolation1(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_t3 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 232));
@@ -15035,7 +15049,7 @@ L_121e4:
 	r_t0 = (uint32_t)(0x2010000u);
 	*(uint32_t *)(uintptr_t)(sp_base + 232) = r_t3;
 	r_a0 = (uint32_t)(r_s2 + 0u);
-	r_t0 = (uint32_t)(LIFT_XLATE(r_t0 + (uint32_t)4512));
+	r_t0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_ISPAWBInterpolation1 + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_v0;
 	{ uint64_t q_ = L_ISPAWBInterpolation1(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 144));
@@ -15050,7 +15064,7 @@ L_121e4:
 	*(uint32_t *)(uintptr_t)(sp_base + 16) = r_v0;
 	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)0));
 	r_v1 = (uint32_t)(0x2010000u);
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)4512));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_ISPAWBInterpolation1 + 0))) + 0u)));
 	r_a0 = (uint32_t)(r_s2 + 0u);
 	*(uint32_t *)(uintptr_t)(sp_base + 224) = r_t7;
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_v0;
@@ -15062,7 +15076,7 @@ L_121e4:
 	r_t0 = (uint32_t)(0x2010000u);
 	r_a0 = (uint32_t)(r_s2 + 0u);
 	*(uint32_t *)(uintptr_t)(sp_base + 16) = r_t7;
-	r_t0 = (uint32_t)(LIFT_XLATE(r_t0 + (uint32_t)4752));
+	r_t0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_ISPAWBInterpolation2 + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_v0;
 	{ uint64_t q_ = L_ISPAWBInterpolation2(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v1 = (uint32_t)(0xf0000u);
@@ -15075,7 +15089,7 @@ L_121e4:
 	r_a0 = (uint32_t)(0x2010000u);
 	*(uint32_t *)(uintptr_t)(sp_base + 16) = r_v0;
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 128));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)4972));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_func_zone_ct_weight + 0))) + 0u)));
 	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 160));
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_t0;
 	r_a3 = (uint32_t)(r_s2 + 0u);
@@ -15110,7 +15124,7 @@ L_122f8:
 	r_a0 = (uint32_t)(0x2010000u);
 	*(uint32_t *)(uintptr_t)(sp_base + 16) = r_v0;
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 128));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)4972));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_func_zone_ct_weight + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_t0;
 	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 160));
 	r_a3 = (uint32_t)(r_s2 + 0u);
@@ -15150,8 +15164,8 @@ L_123a4:
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 148));
 	r_a1 = (uint32_t)(0x19000000u);
 	r_t0 = (uint32_t)(r_t0 - r_v0);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)19232));
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)21032));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_zone_pix_wgh + 0))) + 0u)));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_rgbg_dis + 0))) + 0u)));
 	r_s1 = (uint32_t)(r_s4 + 0u);
 	r_t7 = (uint32_t)(r_a0 + r_t0);
 	r_t6 = (uint32_t)(r_a1 + r_t0);
@@ -15184,7 +15198,7 @@ L_12434:
 	r_t0 = (uint32_t)(0x2010000u);
 	r_a2 = (uint32_t)(r_a1 + 0u);
 	r_a0 = (uint32_t)(r_s3 + 0u);
-	r_t0 = (uint32_t)(LIFT_XLATE(r_t0 + (uint32_t)-15620));
+	r_t0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult2_32 + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 216) = r_a3;
 	{ uint64_t q_ = L_fix_point_mult2_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a3 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 216));
@@ -15192,7 +15206,7 @@ L_12434:
 	r_a1 = (uint32_t)(r_a3 + 0u);
 	r_a2 = (uint32_t)(r_a3 + 0u);
 	r_a0 = (uint32_t)(r_s3 + 0u);
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)-15620));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult2_32 + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 232) = r_v0;
 	{ uint64_t q_ = L_fix_point_mult2_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_t3 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 232));
@@ -15293,21 +15307,21 @@ L_12594:
 	r_s4 = (uint32_t)(r_s6 << 6);
 	r_a0 = (uint32_t)(0x19000000u);
 	r_s4 = (uint32_t)(r_s4 - r_v0);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)21032));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_rgbg_dis + 0))) + 0u)));
 	r_s8 = (uint32_t)(r_a0 + r_s4);
 	r_s5 = (uint32_t)(r_t0 + r_v1);
 	r_a0 = (uint32_t)(0x19000000u);
 	r_t0 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 148));
 	r_a1 = (uint32_t)(0x19000000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)19232));
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)20132));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_zone_pix_wgh + 0))) + 0u)));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_rgbg_d_wght + 0))) + 0u)));
 	r_s2 = (uint32_t)(r_a0 + r_s4);
 	r_s0 = (uint32_t)(r_a1 + r_s4);
 	r_v1 = (uint32_t)(0x2010000u);
 	r_s4 = (uint32_t)(r_t0 + r_s4);
 	r_t0 = (uint32_t)(0x2010000u);
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)-15552));
-	r_t0 = (uint32_t)(LIFT_XLATE(r_t0 + (uint32_t)-15620));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult3_32 + 0))) + 0u)));
+	r_t0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult2_32 + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 168) = r_v1;
 	*(uint32_t *)(uintptr_t)(sp_base + 184) = r_t0;
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 192));
@@ -15437,7 +15451,7 @@ L_127b0:
 	r_v1 = (uint32_t)(0x2010000u);
 	r_a0 = (uint32_t)(r_s3 + 0u);
 	r_a1 = (uint32_t)(r_v0 + 0u);
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)-15620));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult2_32 + 0))) + 0u)));
 	r_a2 = (uint32_t)(r_a2 << (r_s3 & 31));
 	{ uint64_t q_ = L_fix_point_mult2_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_s0 = (uint32_t)(r_s0 + r_v0);
@@ -15511,7 +15525,7 @@ L_12848:
 	*(uint32_t *)(uintptr_t)(sp_base + 16) = r_a0;
 	r_t1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)0));
 	r_v0 = (uint32_t)(0x2010000u);
-	r_t0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)4512));
+	r_t0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_ISPAWBInterpolation1 + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 220) = r_v1;
 	r_a0 = (uint32_t)(r_s3 + 0u);
 	r_a1 = (uint32_t)(r_s0 + 0u);
@@ -15547,7 +15561,7 @@ L_12848:
 	r_v0 = (uint32_t)(0x2010000u);
 	*(uint32_t *)(uintptr_t)(sp_base + 16) = r_s8;
 	r_a0 = (uint32_t)(r_s3 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)4752));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_ISPAWBInterpolation2 + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_s1 + 0u);
 	{ uint64_t q_ = L_ISPAWBInterpolation2(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 L_12970:
@@ -15599,7 +15613,7 @@ L_129dc:
 	r_a1 = (uint32_t)(r_s1 + 0u);
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_v0;
 	r_v0 = (uint32_t)(0x2010000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)4512));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_ISPAWBInterpolation1 + 0))) + 0u)));
 	r_a0 = (uint32_t)(r_s3 + 0u);
 	{ uint64_t q_ = L_ISPAWBInterpolation1(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	goto L_12970;
@@ -15630,7 +15644,7 @@ L_12a34:
 	r_a0 = (uint32_t)(r_s3 + 0u);
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_v0;
 	r_v0 = (uint32_t)(0x2010000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)4512));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_ISPAWBInterpolation1 + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_s0 + 0u);
 	{ uint64_t q_ = L_ISPAWBInterpolation1(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	goto L_12970;
@@ -15696,14 +15710,14 @@ static uint64_t L_jz_isp_ccm_parameter_convert(uint32_t r_a0, uint32_t r_a1, uin
 	r_a1 = (uint32_t)(0x19010000u);
 	*(uint32_t *)(uintptr_t)(sp_base + 16) = r_s0;
 	r_s0 = (uint32_t)(0x2020000u);
-	r_s0 = (uint32_t)(LIFT_XLATE(r_s0 + (uint32_t)-24596));
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)-14008));
+	r_s0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_jz_isp_ccm_reg2par + 0))) + 0u)));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ccm_a_parameter + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_ra;
 	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)-13860));
 	{ uint64_t q_ = L_jz_isp_ccm_reg2par(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a0 = (uint32_t)(0x19010000u);
 	r_a1 = (uint32_t)(0x19010000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)-14044));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ccm_t_parameter + 0))) + 0u)));
 	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)-13896));
 	{ uint64_t q_ = L_jz_isp_ccm_reg2par(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 20));
@@ -15711,8 +15725,8 @@ static uint64_t L_jz_isp_ccm_parameter_convert(uint32_t r_a0, uint32_t r_a1, uin
 	r_a1 = (uint32_t)(0x19010000u);
 	r_t9 = (uint32_t)(r_s0 + 0u);
 	r_s0 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 16));
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)-14080));
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)-13932));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ccm_d_parameter + 0))) + 0u)));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tiziano_ccm_d_linear + 0))) + 0u)));
 	{ uint64_t q_ = L_dispatch(r_t9, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	return ((uint64_t)r_v1 << 32) | r_v0;
 	return ((uint64_t)r_v1 << 32) | r_v0;
@@ -15731,16 +15745,16 @@ static uint64_t L_tiziano_ct_ccm_interpolation(uint32_t r_a0, uint32_t r_a1, uin
 	r_t0 = (uint32_t)(r_t0 - r_a1);
 	r_v1 = (uint32_t)(r_a1 + (uint32_t)3800);
 	r_a1 = (uint32_t)(r_a3 - r_a1);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_a2 + (uint32_t)-13820) = r_v0;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_ct_list_18619 + 0))) + 0u)) = r_v0;
 	r_a3 = (uint32_t)(r_a1 < r_a0);
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)-13820));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_ct_list_18619 + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_a2 + (uint32_t)4) = r_t0;
 	*(uint32_t *)(uintptr_t)(r_a2 + (uint32_t)8) = r_v1;
 	*(uint32_t *)(uintptr_t)(r_a2 + (uint32_t)12) = r_a1;
 	{ int c_ = (r_a3 == 0u);
 	r_a2 = (uint32_t)(0x19010000u);
 	if (c_) goto L_1a0f8; }
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_a2 + (uint32_t)-13804) = 0u;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_ct_flag_18620 + 0))) + 0u)) = 0u;
 	goto L_1a12c;
 L_1a0f8:
 	r_a3 = (uint32_t)(r_v1 < r_a0);
@@ -15764,7 +15778,7 @@ L_1a128:
 	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_a2 + (uint32_t)-13804) = r_a3;
 L_1a12c:
 	r_a3 = (uint32_t)(0x19010000u);
-	r_a3 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_a3 + (uint32_t)-13800));
+	r_a3 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ccm_real + 0))) + 0u)));
 	{ int c_ = (r_a3 != 0u);
 	r_t1 = (uint32_t)(0x19010000u);
 	if (c_) goto L_1a17c; }
@@ -15772,7 +15786,7 @@ L_1a12c:
 	{ int c_ = (r_a3 != 0u);
 	r_t2 = (uint32_t)(0u + (uint32_t)2);
 	if (c_) goto L_1a15c; }
-	r_a3 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_t1 + (uint32_t)-13776));
+	r_a3 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_ct_flag_last_18621 + 0))) + 0u)));
 	if (r_a3 != 0u) {
 	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_a2 + (uint32_t)-13804));
 	goto L_1a180; }
@@ -15798,7 +15812,7 @@ L_1a180:
 	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_t1 + (uint32_t)-13776) = r_a2;
 	if (c_) goto L_1a318; }
 	r_a3 = (uint32_t)(0xc000000u);
-	r_a3 = (uint32_t)(LIFT_XLATE(r_a3 + (uint32_t)3488));
+	r_a3 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 3488u)));
 	r_a2 = (uint32_t)(r_a2 << 2);
 	r_a2 = (uint32_t)(r_a3 + r_a2);
 	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_a2 + (uint32_t)0));
@@ -15813,7 +15827,7 @@ L_1a180:
 L_1a1a8:
 	r_a1 = (uint32_t)(0x19010000u);
 	r_a0 = (uint32_t)(LIFT_XLATE(r_a3 + (uint32_t)-13972));
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)-14080));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ccm_d_parameter + 0))) + 0u)));
 	goto L_1a304;
 L_1a1b8:
 	r_v0 = (uint32_t)(r_v1 - r_a0);
@@ -15826,9 +15840,9 @@ L_1a1b8:
 	r_t2 = (uint32_t)(0x19010000u);
 	r_v1 = (uint32_t)(r_a1 < r_v1);
 	if (r_v1 == 0) r_a2 = r_v0;
-	r_t1 = (uint32_t)(LIFT_XLATE(r_t1 + (uint32_t)-14044));
+	r_t1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ccm_t_parameter + 0))) + 0u)));
 	r_v0 = (uint32_t)(0u + 0u);
-	r_t2 = (uint32_t)(LIFT_XLATE(r_t2 + (uint32_t)-14080));
+	r_t2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ccm_d_parameter + 0))) + 0u)));
 	r_a3 = (uint32_t)(LIFT_XLATE(r_a3 + (uint32_t)-13972));
 	r_a1 = (uint32_t)(0u + (uint32_t)36);
 L_1a1f4:
@@ -15861,7 +15875,7 @@ L_1a238:
 L_1a250:
 	r_a1 = (uint32_t)(0x19010000u);
 	r_a0 = (uint32_t)(LIFT_XLATE(r_a3 + (uint32_t)-13972));
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)-14044));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ccm_t_parameter + 0))) + 0u)));
 	goto L_1a304;
 L_1a260:
 	r_v1 = (uint32_t)(r_v0 - r_a0);
@@ -15874,9 +15888,9 @@ L_1a260:
 	r_t2 = (uint32_t)(0x19010000u);
 	r_v0 = (uint32_t)(r_t0 < r_v0);
 	if (r_v0 == 0) r_v1 = r_a0;
-	r_t1 = (uint32_t)(LIFT_XLATE(r_t1 + (uint32_t)-14008));
+	r_t1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ccm_a_parameter + 0))) + 0u)));
 	r_v0 = (uint32_t)(0u + 0u);
-	r_t2 = (uint32_t)(LIFT_XLATE(r_t2 + (uint32_t)-14044));
+	r_t2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ccm_t_parameter + 0))) + 0u)));
 	r_a3 = (uint32_t)(LIFT_XLATE(r_a3 + (uint32_t)-13972));
 	r_t0 = (uint32_t)(0u + (uint32_t)36);
 L_1a29c:
@@ -15909,11 +15923,11 @@ L_1a2e0:
 L_1a2f8:
 	r_a1 = (uint32_t)(0x19010000u);
 	r_a0 = (uint32_t)(LIFT_XLATE(r_a3 + (uint32_t)-13972));
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)-14008));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ccm_a_parameter + 0))) + 0u)));
 L_1a304:
 	r_t9 = (uint32_t)(0xe0000000u);
 	r_a2 = (uint32_t)(0u + (uint32_t)36);
-	r_t9 = (uint32_t)(LIFT_XLATE(r_t9 + (uint32_t)32));
+	r_t9 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&memcpy) + 0u)));
 	r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2);
 	return ((uint64_t)r_v1 << 32) | r_v0;
 L_1a318:
@@ -15956,7 +15970,7 @@ static uint64_t L_cm_control(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, uint32
 	r_a1 = (uint32_t)(r_t0 - r_a1);
 	r_v1 = (uint32_t)(r_v0 - r_v1);
 	r_a3 = (uint32_t)(r_t4 - r_a3);
-	r_s0 = (uint32_t)(LIFT_XLATE(r_s0 + (uint32_t)22904));
+	r_s0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&cm_in + 0))) + 0u)));
 	r_v0 = (uint32_t)(r_t3 + r_v0);
 	r_t1 = (uint32_t)(r_t1 + (uint32_t)19595);
 	r_t0 = (uint32_t)(r_t2 + (uint32_t)7471);
@@ -16005,7 +16019,7 @@ L_15908:
 	if (c_) goto L_15908; }
 L_15930:
 	r_s8 = (uint32_t)(0x19000000u);
-	r_s1 = (uint32_t)(LIFT_XLATE(r_s8 + (uint32_t)22832));
+	r_s1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&s_in + 0))) + 0u)));
 	r_v1 = (uint32_t)((sp_base + 16));
 	r_v0 = (uint32_t)(r_s1 + 0u);
 	r_a1 = (uint32_t)((sp_base + 52));
@@ -16032,7 +16046,7 @@ L_15960:
 L_15980:
 	r_s3 = (uint32_t)(0x2010000u);
 	r_s2 = (uint32_t)(r_a2 + 0u);
-	r_s3 = (uint32_t)(LIFT_XLATE(r_s3 + (uint32_t)-15620));
+	r_s3 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult2_32 + 0))) + 0u)));
 L_1598c:
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s0 + (uint32_t)4));
 	r_s5 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s0 + (uint32_t)0));
@@ -16381,7 +16395,7 @@ static uint64_t L_subsection(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, uint32
 	r_a1 = (uint32_t)(r_v0 << (r_s5 & 31));
 	*(uint32_t *)(uintptr_t)(r_s4 + (uint32_t)0) = 0u;
 	*(uint32_t *)(uintptr_t)(r_s4 + (uint32_t)32) = r_v0;
-	r_s0 = (uint32_t)(LIFT_XLATE(r_s0 + (uint32_t)-15472));
+	r_s0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_div_32 + 0))) + 0u)));
 	r_s1 = (uint32_t)(r_a3 + 0u);
 	*(uint32_t *)(uintptr_t)(sp_base + 48) = r_t0;
 	*(uint32_t *)(uintptr_t)(sp_base + 40) = r_s7;
@@ -16397,7 +16411,7 @@ static uint64_t L_subsection(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, uint32
 	*(uint32_t *)(uintptr_t)(sp_base + 32) = r_v1;
 	r_v1 = (uint32_t)(0x2010000u);
 	r_a3 = (uint32_t)(r_s2 + 0u);
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)10992));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_subsection_map + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 16) = r_s1;
 	*(uint32_t *)(uintptr_t)(sp_base + 28) = r_s5;
 	r_a0 = (uint32_t)(0u + (uint32_t)5000);
@@ -16438,7 +16452,7 @@ L_12e20:
 	r_a1 = (uint32_t)(r_v0 + 0u);
 	r_v0 = (uint32_t)(0x2010000u);
 	r_a0 = (uint32_t)(r_s5 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-15620));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult2_32 + 0))) + 0u)));
 	r_a2 = (uint32_t)(r_s3 << (r_s5 & 31));
 	{ uint64_t q_ = L_fix_point_mult2_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(r_v0 + (uint32_t)512);
@@ -16480,7 +16494,7 @@ L_12e94:
 	*(uint32_t *)(uintptr_t)(sp_base + 32) = r_v1;
 	r_v1 = (uint32_t)(0x2010000u);
 	r_a3 = (uint32_t)(r_s2 + 0u);
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)10992));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_subsection_map + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 16) = r_s1;
 	*(uint32_t *)(uintptr_t)(sp_base + 28) = r_s5;
 	r_a1 = (uint32_t)((int32_t)r_v0 >> (r_s5 & 31));
@@ -16524,7 +16538,7 @@ L_12f58:
 	r_a1 = (uint32_t)(r_v0 + 0u);
 	r_v0 = (uint32_t)(0x2010000u);
 	r_a0 = (uint32_t)(r_s5 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-15620));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult2_32 + 0))) + 0u)));
 	r_a2 = (uint32_t)(r_v1 << (r_s5 & 31));
 	{ uint64_t q_ = L_fix_point_mult2_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a3 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 48));
@@ -16566,7 +16580,7 @@ L_12fe0:
 	r_a0 = (uint32_t)(r_v1 + 0u);
 	r_v1 = (uint32_t)(0x2010000u);
 	r_a1 = (uint32_t)((int32_t)r_v0 >> (r_s5 & 31));
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)10992));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_subsection_map + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 16) = r_s1;
 	*(uint32_t *)(uintptr_t)(sp_base + 28) = r_s5;
 	r_a3 = (uint32_t)(r_s2 + 0u);
@@ -16608,7 +16622,7 @@ L_13094:
 	r_a1 = (uint32_t)(r_v0 + 0u);
 	r_v0 = (uint32_t)(0x2010000u);
 	r_a0 = (uint32_t)(r_s5 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-15620));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult2_32 + 0))) + 0u)));
 	r_a2 = (uint32_t)(r_a3 << (r_s5 & 31));
 	{ uint64_t q_ = L_fix_point_mult2_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_t6 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 44));
@@ -16659,7 +16673,7 @@ L_13118:
 	*(uint32_t *)(uintptr_t)(sp_base + 16) = r_s1;
 	*(uint32_t *)(uintptr_t)(sp_base + 32) = r_v1;
 	r_v1 = (uint32_t)(0x2010000u);
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)10992));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_subsection_map + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 28) = r_s5;
 	r_a0 = (uint32_t)(r_s7 + 0u);
 	r_a1 = (uint32_t)((int32_t)r_v0 >> (r_s5 & 31));
@@ -16698,7 +16712,7 @@ L_131f4:
 	r_a1 = (uint32_t)(r_v0 + 0u);
 	r_v0 = (uint32_t)(0x2010000u);
 	r_a0 = (uint32_t)(r_s5 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-15620));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult2_32 + 0))) + 0u)));
 	r_a2 = (uint32_t)(r_s1 << (r_s5 & 31));
 	{ uint64_t q_ = L_fix_point_mult2_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(r_v0 + (uint32_t)512);
@@ -16908,7 +16922,7 @@ L_2a258:
 	r_a3 = (uint32_t)(r_t1 + (uint32_t)1);
 	if (c_) goto L_2a49c; }
 	r_v0 = (uint32_t)(0x2030000u);
-	r_t4 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-24388));
+	r_t4 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_AePweightCalculate + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 140) = r_v1;
 	*(uint32_t *)(uintptr_t)(sp_base + 144) = r_t0;
 	*(uint32_t *)(uintptr_t)(sp_base + 148) = r_t1;
@@ -16952,7 +16966,7 @@ L_2a258:
 	r_t9 = (uint32_t)(r_t6 + r_t9);
 	r_a1 = (uint32_t)(r_t9 + r_v0);
 	r_t6 = (uint32_t)(0x2010000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_t6 + (uint32_t)-15620));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult2_32 + 0))) + 0u)));
 	r_a2 = (uint32_t)(r_a1 + 0u);
 	{ uint64_t q_ = L_fix_point_mult2_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(r_v0 >> (r_s2 & 31));
@@ -16993,7 +17007,7 @@ L_2a4e8:
 	r_v0 = (uint32_t)(0u + (uint32_t)60);
 	if (c_) goto L_2a52c; }
 	r_a0 = (uint32_t)(0x19010000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)27304));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&y_zone + 0))) + 0u)));
 	r_lo = r_a0;
 	{ int64_t p = (int64_t)(((uint64_t)r_hi << 32) | r_lo) + (int64_t)(int32_t)r_s4 * (int32_t)r_v0; r_lo = (uint32_t)p; r_hi = (uint32_t)((uint64_t)p >> 32); }
 	r_t4 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 64));
@@ -17010,21 +17024,21 @@ L_2a52c:
 	r_s0 = (uint32_t)(0x18000000u);
 	r_v0 = (uint32_t)(0x2000000u);
 	*(uint32_t *)(uintptr_t)(sp_base + 160) = r_t2;
-	r_a0 = (uint32_t)(LIFT_XLATE(r_s0 + (uint32_t)0));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)244));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem___key_34044 + 0))) + 0u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&__private_spin_lock_irqsave + 0))) + 0u)));
 	r_a1 = (uint32_t)((sp_base + 24));
 	{ unsigned long f_; spin_lock_irqsave(&lift_lock, f_); *(uint32_t *)(uintptr_t)r_a1 = (uint32_t)f_; } r_v0 = 0;
 	r_a0 = (uint32_t)(0x19010000u);
 	r_a1 = (uint32_t)(0x19010000u);
 	r_v0 = (uint32_t)(0xe0000000u);
 	r_a2 = (uint32_t)(0u + (uint32_t)900);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)28204));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)32));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&y_zone_last + 0))) + 0u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&memcpy) + 0u)));
 	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)27304));
 	r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2);
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 24));
 	r_v0 = (uint32_t)(0x2000000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)24776));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&private_spin_unlock_irqrestore + 0))) + 0u)));
 	r_a0 = (uint32_t)(LIFT_XLATE(r_s0 + (uint32_t)0));
 	spin_unlock_irqrestore(&lift_lock, (unsigned long)r_a1); r_v0 = 0;
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 32));
@@ -17036,7 +17050,7 @@ L_2a52c:
 	r_s0 = (uint32_t)(0x2010000u);
 	r_a1 = (uint32_t)(r_t5 << (r_s2 & 31));
 	r_a0 = (uint32_t)(r_s2 + 0u);
-	r_s0 = (uint32_t)(LIFT_XLATE(r_s0 + (uint32_t)-15472));
+	r_s0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_div_32 + 0))) + 0u)));
 	r_v1 = (uint32_t)(r_lo);
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)0) = r_v1;
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 44));
@@ -17184,12 +17198,12 @@ static uint64_t L_ae_tune2(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, uint32_t
 	r_t0 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 228));
 	r_a3 = (uint32_t)(r_t0 << (r_s7 & 31));
 	r_t0 = (uint32_t)(0x2010000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_t0 + (uint32_t)-15552));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult3_32 + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 308) = r_t0;
 	{ uint64_t q_ = L_fix_point_mult3_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	*(uint32_t *)(uintptr_t)(sp_base + 172) = r_v0;
 	r_v0 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)18664));
+	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_flicker_t + 0))) + 20u)));
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s5 + (uint32_t)0));
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s5 + (uint32_t)28));
 	r_s4 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s5 + (uint32_t)32));
@@ -17200,7 +17214,7 @@ static uint64_t L_ae_tune2(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, uint32_t
 	*(uint32_t *)(uintptr_t)(sp_base + 284) = r_a0;
 	r_t1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 296));
 	r_a0 = (uint32_t)(0x14040000u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_a0 + (uint32_t)19048) = r_v0;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_min_dg + 0))) + 0u)) = r_v0;
 	*(uint32_t *)(uintptr_t)(sp_base + 280) = r_v1;
 	*(uint32_t *)(uintptr_t)(sp_base + 288) = r_s5;
 	r_v0 = (uint32_t)(0u + 0u);
@@ -17220,7 +17234,7 @@ L_2aa64:
 	*(uint32_t *)(uintptr_t)(r_a1 + (uint32_t)0) = r_a2;
 	if (c_) goto L_2aa64; }
 	r_v0 = (uint32_t)(0x19000000u);
-	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)24564));
+	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tiziano_gib_config_line + 0))) + 12u)));
 	r_v0 = (uint32_t)(0u + (uint32_t)1);
 	{ int c_ = (r_a0 != r_v0);
 	r_v1 = (uint32_t)((sp_base + 120));
@@ -17238,7 +17252,7 @@ L_2aab4:
 	r_v0 = (uint32_t)(r_v1 + r_v0);
 	if (c_) goto L_2aab4; }
 	r_v1 = (uint32_t)(0x14040000u);
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)18888));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ae_parameter + 0))) + 0u)));
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v1 + (uint32_t)16));
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v1 + (uint32_t)76));
 	r_s6 = (uint32_t)(0u + (uint32_t)255);
@@ -17257,7 +17271,7 @@ L_2aab4:
 	r_v0 = (uint32_t)(0x2010000u);
 	r_a0 = (uint32_t)(r_s7 + 0u);
 	r_a1 = (uint32_t)(r_a1 << (r_s7 & 31));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-15472));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_div_32 + 0))) + 0u)));
 	r_a2 = (uint32_t)(r_a2 << (r_s7 & 31));
 	{ uint64_t q_ = L_fix_point_div_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_s5 = (uint32_t)(r_v0 + 0u);
@@ -17300,7 +17314,7 @@ L_2ab38:
 	*(uint32_t *)(uintptr_t)(sp_base + 40) = r_v0;
 	r_v0 = (uint32_t)(0x2010000u);
 	r_a0 = (uint32_t)((sp_base + 32));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-4512));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_event_push + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 48) = r_s6;
 	*(uint32_t *)(uintptr_t)(sp_base + 52) = 0u;
 	r_v0 = (uint32_t)tisp_event_push((void *)(uintptr_t)r_a0);
@@ -17347,13 +17361,13 @@ L_2ac3c:
 	*(uint32_t *)(uintptr_t)(r_v1 + (uint32_t)0) = r_a1;
 	if (c_) goto L_2ac3c; }
 	r_v0 = (uint32_t)(0x14040000u);
-	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)19052));
+	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ftune + 0))) + 0u)));
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
 	*(uint32_t *)(uintptr_t)(r_s2 + (uint32_t)56) = r_s0;
 	{ int c_ = (r_v1 != r_a0);
 	r_v0 = (uint32_t)(0x19010000u);
 	if (c_) goto L_2ac6c; }
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)29104) = r_v1;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_ftune_wmeans_30316 + 0))) + 0u)) = r_v1;
 L_2ac6c:
 	r_t0 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 196));
 	r_a0 = (uint32_t)(0u + (uint32_t)1);
@@ -17366,7 +17380,7 @@ L_2ac7c:
 	{ int c_ = (r_v0 == r_a0);
 	r_v0 = (uint32_t)(0x14040000u);
 	if (c_) goto L_2ad00; }
-	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)18872));
+	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ae_switch_night_mode + 0))) + 0u)));
 	r_a2 = (uint32_t)(r_a1 < (uint32_t)16);
 	{ int c_ = (r_a2 != 0u);
 	if (c_) goto L_2aca4; }
@@ -17411,23 +17425,23 @@ L_2ad08:
 	if (r_s1 == 0) r_s1 = r_v0;
 	if (c_) goto L_2ad60; }
 	r_v0 = (uint32_t)(0x19010000u);
-	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)17560));
+	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ae_ev_init_en + 0))) + 0u)));
 	if (r_a0 != r_v1) {
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 172));
 	goto L_2ad44; }
 	r_v1 = (uint32_t)(0x14040000u);
-	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)19040));
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)17560) = 0u;
+	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_ae_ev_init_strict + 0))) + 0u)));
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&ae_ev_init_en + 0))) + 0u)) = 0u;
 	r_v1 = (uint32_t)(r_v1 << (r_s7 & 31));
 	*(uint32_t *)(uintptr_t)(sp_base + 172) = r_v1;
 	r_v1 = (uint32_t)(0x14040000u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)19056) = 0u;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&trig_cal + 0))) + 0u)) = 0u;
 	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 172));
 L_2ad44:
 	r_v0 = (uint32_t)(0x2030000u);
 	r_a1 = (uint32_t)((sp_base + 120));
 	r_a2 = (uint32_t)((sp_base + 80));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-22704));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_ae_target + 0))) + 0u)));
 	r_a3 = (uint32_t)(r_s7 + 0u);
 	{ uint64_t q_ = L_tisp_ae_target(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_s3 = (uint32_t)(r_v0 + 0u);
@@ -17436,7 +17450,7 @@ L_2ad60:
 	r_s8 = (uint32_t)(0x2010000u);
 	r_a0 = (uint32_t)(r_s7 + 0u);
 	r_a1 = (uint32_t)(r_s3 << (r_s7 & 31));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_s8 + (uint32_t)-15472));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_div_32 + 0))) + 0u)));
 	r_a2 = (uint32_t)(r_s2 + 0u);
 	{ uint64_t q_ = L_fix_point_div_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v1 = (uint32_t)(0x2010000u);
@@ -17444,7 +17458,7 @@ L_2ad60:
 	r_a2 = (uint32_t)(r_v0 + 0u);
 	*(uint32_t *)(uintptr_t)(sp_base + 292) = r_v1;
 	r_s5 = (uint32_t)(r_v0 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)-15620));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult2_32 + 0))) + 0u)));
 	r_a0 = (uint32_t)(r_s7 + 0u);
 	{ uint64_t q_ = L_fix_point_mult2_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_t0 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 196));
@@ -17488,7 +17502,7 @@ L_2adec:
 	*(uint32_t *)(uintptr_t)(sp_base + 176) = 0u;
 	goto L_2ae40; }
 	r_t0 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 168));
-	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)29108));
+	r_a0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&force_trig + 0))) + 0u)));
 	r_a1 = (uint32_t)(0u + (uint32_t)1);
 	*(uint32_t *)(uintptr_t)(r_t0 + (uint32_t)4) = r_a1;
 	*(uint32_t *)(uintptr_t)(r_t0 + (uint32_t)8) = r_s0;
@@ -17506,7 +17520,7 @@ L_2ae40:
 	r_a1 = (uint32_t)((sp_base + 120));
 	r_a2 = (uint32_t)((sp_base + 80));
 	r_a3 = (uint32_t)(r_s7 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-22704));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_ae_target + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)29108) = 0u;
 	{ uint64_t q_ = L_tisp_ae_target(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_t0 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 168));
@@ -17535,7 +17549,7 @@ L_2ae7c:
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_s0;
 	r_a1 = (uint32_t)((sp_base + 164));
 	r_a2 = (uint32_t)((sp_base + 160));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-22976));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_ae_tune + 0))) + 0u)));
 	r_a3 = (uint32_t)(r_s4 + 0u);
 	{ uint64_t q_ = L_tisp_ae_tune(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 L_2aec8:
@@ -17550,7 +17564,7 @@ L_2aec8:
 	r_a1 = (uint32_t)(0u + 0u);
 	r_a2 = (uint32_t)(r_s7 + 0u);
 	{ int c_ = (r_v0 == 0u);
-	r_s4 = (uint32_t)(LIFT_XLATE(r_s5 + (uint32_t)64));
+	r_s4 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&__ashldi3) + 0u)));
 	if (c_) goto L_2af78; }
 	{ uint64_t v_ = (((uint64_t)r_a1 << 32) | r_a0) << (r_a2 & 63); r_v0 = (uint32_t)v_; r_v1 = (uint32_t)(v_ >> 32); }
 	r_a3 = (uint32_t)(r_s7 << 1);
@@ -17609,7 +17623,7 @@ L_2af78:
 	*(uint32_t *)(uintptr_t)(sp_base + 24) = r_a3;
 	*(uint32_t *)(uintptr_t)(sp_base + 28) = r_s2;
 	r_a0 = (uint32_t)(r_t3 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-16208));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult3_64 + 0))) + 0u)));
 	r_a3 = (uint32_t)(r_v1 + 0u);
 	{ uint64_t q_ = L_fix_point_mult3_64(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_t1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 296));
@@ -17655,7 +17669,7 @@ L_2b004:
 	*(uint32_t *)(uintptr_t)(sp_base + 24) = r_t0;
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_a3;
 	*(uint32_t *)(uintptr_t)(sp_base + 28) = r_a3;
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-16208));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult3_64 + 0))) + 0u)));
 	r_a3 = (uint32_t)(r_v1 + 0u);
 	{ uint64_t q_ = L_fix_point_mult3_64(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	*(uint32_t *)(uintptr_t)(sp_base + 308) = r_v0;
@@ -17672,7 +17686,7 @@ L_2b004:
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_v1;
 	r_a0 = (uint32_t)(r_t4 + 0u);
 	r_a2 = (uint32_t)(r_t0 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-16092));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_div_64 + 0))) + 0u)));
 	r_a3 = (uint32_t)(r_t1 + 0u);
 	{ uint64_t q_ = L_fix_point_div_64(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_t3 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 312));
@@ -17813,7 +17827,7 @@ L_2b270:
 	r_a0 = (uint32_t)(r_v0 + 0u);
 	r_v0 = (uint32_t)(0xe0000000u);
 	r_a1 = (uint32_t)(r_v1 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)48));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&__lshrdi3) + 0u)));
 	r_a2 = (uint32_t)(r_s7 + 0u);
 	{ uint64_t v_ = (((uint64_t)r_a1 << 32) | r_a0) >> (r_a2 & 63); r_v0 = (uint32_t)v_; r_v1 = (uint32_t)(v_ >> 32); }
 	r_v1 = (uint32_t)(r_v0 >> (r_s7 & 31));
@@ -17832,21 +17846,21 @@ L_2b2e4:
 L_2b2e8:
 	r_t0 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 172));
 	r_v0 = (uint32_t)(0x19010000u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)17568) = r_s0;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ae_ev + 0))) + 0u)) = r_s0;
 	r_a0 = (uint32_t)(0x19010000u);
 	{ int c_ = (r_s0 != r_t0);
 	r_v0 = (uint32_t)(0x19010000u);
 	if (c_) goto L_2b32c; }
-	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_a0 + (uint32_t)29112));
+	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&trig_deflick + 0))) + 0u)));
 	if (r_v1 != 0u) {
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_a0 + (uint32_t)29112) = 0u;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&trig_deflick + 0))) + 0u)) = 0u;
 	goto L_2b330; }
 	r_a1 = (uint32_t)(0x14040000u);
-	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_a1 + (uint32_t)19056));
+	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&trig_cal + 0))) + 0u)));
 	if (r_v1 == 0u) {
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_a0 + (uint32_t)29112) = 0u;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&trig_deflick + 0))) + 0u)) = 0u;
 	goto L_2b330; }
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)17496));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tisp_ae_ctrls + 0))) + 0u)));
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v1 + (uint32_t)52));
 	{ int c_ = (r_v1 == 0u);
 	r_s5 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 224));
@@ -17859,18 +17873,18 @@ L_2b330:
 	r_v1 = (uint32_t)(0u + (uint32_t)1);
 	r_a3 = (uint32_t)(0x14040000u);
 	{ int c_ = (r_a1 != 0u);
-	*(uint32_t *)(uintptr_t)LIFT_XLATE(r_a3 + (uint32_t)19056) = r_v1;
+	*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&trig_cal + 0))) + 0u)) = r_v1;
 	if (c_) goto L_2b7c4; }
 	r_s2 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s2 + (uint32_t)19060));
+	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&min_it + 0))) + 0u)));
 	r_t0 = (uint32_t)(0x14040000u);
 	r_s4 = (uint32_t)(0x14040000u);
-	r_a3 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_t0 + (uint32_t)19048));
-	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s4 + (uint32_t)19064));
+	r_a3 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_min_dg + 0))) + 0u)));
+	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&min_ag + 0))) + 0u)));
 	r_t0 = (uint32_t)(0x2010000u);
 	r_a0 = (uint32_t)(r_s7 + 0u);
 	*(uint32_t *)(uintptr_t)(sp_base + 292) = r_v1;
-	r_v0 = (uint32_t)(LIFT_XLATE(r_t0 + (uint32_t)-15552));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult3_32 + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_a1 << (r_s7 & 31));
 	{ uint64_t q_ = L_fix_point_mult3_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a0 = (uint32_t)(r_v0 < r_s0);
@@ -17881,7 +17895,7 @@ L_2b330:
 	r_v0 = (uint32_t)(0x14040000u);
 	r_s2 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s2 + (uint32_t)19060));
 	r_s0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s4 + (uint32_t)19064));
-	r_s5 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)19048));
+	r_s5 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_min_dg + 0))) + 0u)));
 	goto L_2b8bc;
 L_2b39c:
 	*(uint32_t *)(uintptr_t)(sp_base + 292) = r_v1;
@@ -17900,11 +17914,11 @@ L_2b39c:
 	r_s2 = (uint32_t)(r_v0 + 0u);
 	r_v0 = (uint32_t)(0x14040000u);
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 204));
-	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)19064));
+	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&min_ag + 0))) + 0u)));
 	r_a0 = (uint32_t)(r_s7 + 0u);
 	{ uint64_t q_ = L_fix_point_div_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a3 = (uint32_t)(0x14040000u);
-	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_a3 + (uint32_t)19048));
+	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_min_dg + 0))) + 0u)));
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 216));
 	r_a0 = (uint32_t)(r_s7 + 0u);
 	r_s6 = (uint32_t)(r_v0 + 0u);
@@ -17966,7 +17980,7 @@ L_2b4b8:
 	r_v1 = (uint32_t)(0x2010000u);
 	r_a3 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 172));
 	r_a1 = (uint32_t)(r_s2 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)-15552));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult3_32 + 0))) + 0u)));
 	r_a2 = (uint32_t)(r_s6 + 0u);
 	{ uint64_t q_ = L_fix_point_mult3_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(r_v0 < r_s0);
@@ -18026,7 +18040,7 @@ L_2b570:
 	r_v1 = (uint32_t)(0x2010000u);
 	r_a1 = (uint32_t)(r_t0 + 0u);
 	r_a2 = (uint32_t)(r_v0 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)-15620));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult2_32 + 0))) + 0u)));
 	r_a0 = (uint32_t)(r_s7 + 0u);
 	{ uint64_t q_ = L_fix_point_mult2_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(r_v0 >> (r_s7 & 31));
@@ -18167,7 +18181,7 @@ L_2b75c:
 L_2b768:
 	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s5 + (uint32_t)19060));
 	r_v0 = (uint32_t)(0x2010000u);
-	r_s5 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-15620));
+	r_s5 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult2_32 + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_s2 + 0u);
 	r_a0 = (uint32_t)(r_s7 + 0u);
 	r_a2 = (uint32_t)(r_a2 << (r_s7 & 31));
@@ -18177,11 +18191,11 @@ L_2b768:
 	r_a0 = (uint32_t)(r_s7 + 0u);
 	r_a1 = (uint32_t)(r_v1 + 0u);
 	r_v1 = (uint32_t)(0x14040000u);
-	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v1 + (uint32_t)19064));
+	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&min_ag + 0))) + 0u)));
 	r_s2 = (uint32_t)(r_v0 >> (r_s7 & 31));
 	{ uint64_t q_ = L_fix_point_mult2_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a3 = (uint32_t)(0x14040000u);
-	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_a3 + (uint32_t)19048));
+	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_min_dg + 0))) + 0u)));
 	r_a0 = (uint32_t)(r_s7 + 0u);
 	r_a1 = (uint32_t)(r_s8 + 0u);
 	r_s0 = (uint32_t)(r_v0 + 0u);
@@ -18194,7 +18208,7 @@ L_2b7c4:
 	if (c_) goto L_2b8c4; }
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_a0 + (uint32_t)12));
 	r_a0 = (uint32_t)(0x14040000u);
-	r_s2 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_a0 + (uint32_t)19060));
+	r_s2 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&min_it + 0))) + 0u)));
 	r_a0 = (uint32_t)(r_s2 < r_v1);
 	{ int c_ = (r_a0 == 0u);
 	r_s6 = (uint32_t)(0x14040000u);
@@ -18209,10 +18223,10 @@ L_2b7f4:
 	r_v1 = (uint32_t)(0x2010000u);
 	r_s5 = (uint32_t)(r_s2 << (r_s7 & 31));
 	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s6 + (uint32_t)19064));
-	r_a3 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s4 + (uint32_t)19048));
+	r_a3 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem_min_dg + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)12) = r_s2;
 	r_a0 = (uint32_t)(r_s7 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)-15552));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult3_32 + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_s5 + 0u);
 	{ uint64_t q_ = L_fix_point_mult3_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(r_v0 < r_s0);
@@ -18231,7 +18245,7 @@ L_2b838:
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 204));
 	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_s4 + (uint32_t)19048));
 	r_s6 = (uint32_t)(r_v0 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_a3 + (uint32_t)-15620));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult2_32 + 0))) + 0u)));
 	r_a0 = (uint32_t)(r_s7 + 0u);
 	{ uint64_t q_ = L_fix_point_mult2_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(r_v0 < r_s6);
@@ -18292,7 +18306,7 @@ L_2b8d0:
 	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 256));
 	r_s1 = (uint32_t)(r_t0 << (r_s7 & 31));
 	r_a0 = (uint32_t)(r_s7 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)-15620));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult2_32 + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_s1 + 0u);
 	{ uint64_t q_ = L_fix_point_mult2_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(r_v0 < r_s3);
@@ -18334,7 +18348,7 @@ L_2b984:
 	r_a2 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 260));
 	r_s1 = (uint32_t)(r_t0 << (r_s7 & 31));
 	r_a0 = (uint32_t)(r_s7 + 0u);
-	r_s3 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-15620));
+	r_s3 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult2_32 + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_s1 + 0u);
 	{ uint64_t q_ = L_fix_point_mult2_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(r_v0 < r_s6);
@@ -18401,9 +18415,9 @@ static uint64_t L_tisp_set_sensor_digital_gain(uint32_t r_a0, uint32_t r_a1, uin
 	*(uint32_t *)(uintptr_t)(sp_base + 44) = r_ra;
 	*(uint32_t *)(uintptr_t)(sp_base + 40) = r_s1;
 	r_a2 = (uint32_t)(0u + (uint32_t)16);
-	r_s0 = (uint32_t)(LIFT_XLATE(r_s0 + (uint32_t)9684));
+	r_s0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&sensor_ctrl + 0))) + 0u)));
 	r_a0 = (uint32_t)(r_a0 << 6);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-14376));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_log2_fixed_to_fixed + 0))) + 0u)));
 	r_a1 = (uint32_t)(0u + (uint32_t)16);
 	{ uint64_t q_ = L_tisp_log2_fixed_to_fixed(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s0 + (uint32_t)84));
@@ -18413,7 +18427,7 @@ static uint64_t L_tisp_set_sensor_digital_gain(uint32_t r_a0, uint32_t r_a1, uin
 	r_a0 = (uint32_t)(r_v0 + 0u);
 	r_v0 = (uint32_t)(0x2010000u);
 	r_a1 = (uint32_t)(0u + (uint32_t)16);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-18112));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_math_exp2 + 0))) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)16);
 	{ uint64_t q_ = L_tisp_math_exp2(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_s1 = (uint32_t)(r_v0 + 0u);
@@ -18539,7 +18553,7 @@ static uint64_t L_tisp_af_param_array_set(uint32_t r_a0, uint32_t r_a1, uint32_t
 	if (c_) goto L_2f5a8; }
 	r_v1 = (uint32_t)(0xc000000u);
 	r_v0 = (uint32_t)(r_v0 << 2);
-	r_v1 = (uint32_t)(LIFT_XLATE(r_v1 + (uint32_t)6476));
+	r_v1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 6476u)));
 	r_v0 = (uint32_t)(r_v1 + r_v0);
 	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)0));
 	r_s1 = (uint32_t)(r_a2 + 0u);
@@ -18566,82 +18580,82 @@ static uint64_t L_tisp_af_param_array_set(uint32_t r_a0, uint32_t r_a1, uint32_t
 	default: WARN_ON_ONCE(1); return 0; }
 L_2f4bc:
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)20416));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_FIR0_V + 0))) + 0u)));
 	goto L_2f4e8;
 L_2f4c8:
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)20436));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_FIR0_Ldg + 0))) + 0u)));
 	goto L_2f4f8;
 L_2f4d4:
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)20468));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_FIR0_Coring + 0))) + 0u)));
 	goto L_2f508;
 L_2f4e0:
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)20484));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_FIR1_V + 0))) + 0u)));
 L_2f4e8:
 	r_s0 = (uint32_t)(0u + (uint32_t)20);
 	goto L_2f5f4;
 L_2f4f0:
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)20504));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_FIR1_Ldg + 0))) + 0u)));
 L_2f4f8:
 	r_s0 = (uint32_t)(0u + (uint32_t)32);
 	goto L_2f5f4;
 L_2f500:
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)20536));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_FIR1_Coring + 0))) + 0u)));
 L_2f508:
 	r_s0 = (uint32_t)(0u + (uint32_t)16);
 	goto L_2f5f4;
 L_2f510:
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)20552));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_IIR0_H + 0))) + 0u)));
 	goto L_2f53c;
 L_2f51c:
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)20592));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_IIR0_Ldg + 0))) + 0u)));
 	goto L_2f4f8;
 L_2f528:
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)20624));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_IIR0_Coring + 0))) + 0u)));
 	goto L_2f508;
 L_2f534:
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)20640));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_IIR1_H + 0))) + 0u)));
 L_2f53c:
 	r_s0 = (uint32_t)(0u + (uint32_t)40);
 	goto L_2f5f4;
 L_2f544:
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)20680));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_IIR1_Ldg + 0))) + 0u)));
 	goto L_2f4f8;
 L_2f550:
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)20712));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_IIR1_Coring + 0))) + 0u)));
 	goto L_2f508;
 L_2f55c:
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)20356));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&AFParam_PointPos + 0))) + 0u)));
 	r_s0 = (uint32_t)(0u + (uint32_t)8);
 	goto L_2f5f4;
 L_2f56c:
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)20336));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&AFParam_Tilt + 0))) + 0u)));
 	goto L_2f4e8;
 L_2f578:
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)20276));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&AFParam_FvWmean + 0))) + 0u)));
 	r_s0 = (uint32_t)(0u + (uint32_t)60);
 	goto L_2f5f4;
 L_2f588:
 	r_a0 = (uint32_t)(0x19020000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)-30936));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&AFParam_Fv + 0))) + 0u)));
 	r_s0 = (uint32_t)(0u + (uint32_t)12);
 	goto L_2f5f4;
 L_2f598:
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)19376));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&AFWeight_Param + 0))) + 0u)));
 	r_s0 = (uint32_t)(0u + (uint32_t)900);
 	goto L_2f5f4;
 L_2f5a8:
@@ -18649,30 +18663,30 @@ L_2f5a8:
 	r_a2 = (uint32_t)(0xc000000u);
 	r_v0 = (uint32_t)(0x2000000u);
 	*(uint32_t *)(uintptr_t)(sp_base + 16) = r_a0;
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)8484));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem__LC2 + 0))) + 0u)));
 	r_a0 = (uint32_t)(0u + (uint32_t)2);
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)6576));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 6576u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_a3 = (uint32_t)(0u + (uint32_t)763);
 	r_v0 = 0;
 	r_v0 = (uint32_t)(0u + (uint32_t)-1);
 	goto L_2f618;
 L_2f5d8:
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)19232));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_Zone + 0))) + 0u)));
 	r_s0 = (uint32_t)(0u + (uint32_t)144);
 	goto L_2f5f4;
 L_2f5e8:
 	r_a0 = (uint32_t)(0x14040000u);
-	r_a0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)20364));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_ThresEnable + 0))) + 0u)));
 	r_s0 = (uint32_t)(0u + (uint32_t)52);
 L_2f5f4:
 	r_v0 = (uint32_t)(0xe0000000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)32));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&memcpy) + 0u)));
 	r_a2 = (uint32_t)(r_s0 + 0u);
 	r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2);
 	r_v0 = (uint32_t)(0x2030000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-5896));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tiziano_af_set_regs + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)0) = r_s0;
 	{ uint64_t q_ = L_tiziano_af_set_regs(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(0u + 0u);
@@ -18697,20 +18711,20 @@ static uint64_t L_tisp_ae_get_y_zone(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2
 	*(uint32_t *)(uintptr_t)(sp_base + 32) = r_s1;
 	r_a1 = (uint32_t)((sp_base + 16));
 	r_s1 = (uint32_t)(r_a0 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)244));
-	r_a0 = (uint32_t)(LIFT_XLATE(r_s0 + (uint32_t)0));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&__private_spin_lock_irqsave + 0))) + 0u)));
+	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem___key_34044 + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 16) = 0u;
 	{ unsigned long f_; spin_lock_irqsave(&lift_lock, f_); *(uint32_t *)(uintptr_t)r_a1 = (uint32_t)f_; } r_v0 = 0;
 	r_a1 = (uint32_t)(0x19010000u);
 	r_v0 = (uint32_t)(0xe0000000u);
 	r_a0 = (uint32_t)(r_s1 + 0u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)28204));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)32));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&y_zone_last + 0))) + 0u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&memcpy) + 0u)));
 	r_a2 = (uint32_t)(0u + (uint32_t)900);
 	r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2);
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 16));
 	r_v0 = (uint32_t)(0x2000000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)24776));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&private_spin_unlock_irqrestore + 0))) + 0u)));
 	r_a0 = (uint32_t)(LIFT_XLATE(r_s0 + (uint32_t)0));
 	spin_unlock_irqrestore(&lift_lock, (unsigned long)r_a1); r_v0 = 0;
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 36));
@@ -18737,7 +18751,7 @@ static uint64_t L_tisp_af_param_array_get(uint32_t r_a0, uint32_t r_a1, uint32_t
 	*(uint32_t *)(uintptr_t)(sp_base + 28) = r_s0;
 	if (c_) goto L_2f40c; }
 	r_v0 = (uint32_t)(0xc000000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)6400));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 6400u)));
 	r_v1 = (uint32_t)(r_v1 << 2);
 	r_v1 = (uint32_t)(r_v0 + r_v1);
 	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v1 + (uint32_t)0));
@@ -18765,82 +18779,82 @@ static uint64_t L_tisp_af_param_array_get(uint32_t r_a0, uint32_t r_a1, uint32_t
 	default: WARN_ON_ONCE(1); return 0; }
 L_2f320:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)20416));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_FIR0_V + 0))) + 0u)));
 	goto L_2f34c;
 L_2f32c:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)20436));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_FIR0_Ldg + 0))) + 0u)));
 	goto L_2f35c;
 L_2f338:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)20468));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_FIR0_Coring + 0))) + 0u)));
 	goto L_2f36c;
 L_2f344:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)20484));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_FIR1_V + 0))) + 0u)));
 L_2f34c:
 	r_s0 = (uint32_t)(0u + (uint32_t)20);
 	goto L_2f458;
 L_2f354:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)20504));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_FIR1_Ldg + 0))) + 0u)));
 L_2f35c:
 	r_s0 = (uint32_t)(0u + (uint32_t)32);
 	goto L_2f458;
 L_2f364:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)20536));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_FIR1_Coring + 0))) + 0u)));
 L_2f36c:
 	r_s0 = (uint32_t)(0u + (uint32_t)16);
 	goto L_2f458;
 L_2f374:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)20552));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_IIR0_H + 0))) + 0u)));
 	goto L_2f3a0;
 L_2f380:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)20592));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_IIR0_Ldg + 0))) + 0u)));
 	goto L_2f35c;
 L_2f38c:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)20624));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_IIR0_Coring + 0))) + 0u)));
 	goto L_2f36c;
 L_2f398:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)20640));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_IIR1_H + 0))) + 0u)));
 L_2f3a0:
 	r_s0 = (uint32_t)(0u + (uint32_t)40);
 	goto L_2f458;
 L_2f3a8:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)20680));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_IIR1_Ldg + 0))) + 0u)));
 	goto L_2f35c;
 L_2f3b4:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)20712));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_IIR1_Coring + 0))) + 0u)));
 	goto L_2f36c;
 L_2f3c0:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)20356));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&AFParam_PointPos + 0))) + 0u)));
 	r_s0 = (uint32_t)(0u + (uint32_t)8);
 	goto L_2f458;
 L_2f3d0:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)20336));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&AFParam_Tilt + 0))) + 0u)));
 	goto L_2f34c;
 L_2f3dc:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)20276));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&AFParam_FvWmean + 0))) + 0u)));
 	r_s0 = (uint32_t)(0u + (uint32_t)60);
 	goto L_2f458;
 L_2f3ec:
 	r_a1 = (uint32_t)(0x19020000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)-30936));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&AFParam_Fv + 0))) + 0u)));
 	r_s0 = (uint32_t)(0u + (uint32_t)12);
 	goto L_2f458;
 L_2f3fc:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)19376));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&AFWeight_Param + 0))) + 0u)));
 	r_s0 = (uint32_t)(0u + (uint32_t)900);
 	goto L_2f458;
 L_2f40c:
@@ -18849,25 +18863,25 @@ L_2f40c:
 	r_a2 = (uint32_t)(0xc000000u);
 	r_v0 = (uint32_t)(0x2000000u);
 	r_a0 = (uint32_t)(0u + (uint32_t)2);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)8484));
-	r_a2 = (uint32_t)(LIFT_XLATE(r_a2 + (uint32_t)6552));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)0));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&oem__LC2 + 0))) + 0u)));
+	r_a2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)oem_rodata) + 6552u)));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&isp_printf + 0))) + 0u)));
 	r_a3 = (uint32_t)(0u + (uint32_t)670);
 	r_v0 = 0;
 	r_v0 = (uint32_t)(0u + (uint32_t)-1);
 	goto L_2f470;
 L_2f43c:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)19232));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_Zone + 0))) + 0u)));
 	r_s0 = (uint32_t)(0u + (uint32_t)144);
 	goto L_2f458;
 L_2f44c:
 	r_a1 = (uint32_t)(0x14040000u);
-	r_a1 = (uint32_t)(LIFT_XLATE(r_a1 + (uint32_t)20364));
+	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_ThresEnable + 0))) + 0u)));
 	r_s0 = (uint32_t)(0u + (uint32_t)52);
 L_2f458:
 	r_v0 = (uint32_t)(0xe0000000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)32));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&memcpy) + 0u)));
 	r_a2 = (uint32_t)(r_s0 + 0u);
 	r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2);
 	*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)0) = r_s0;
@@ -18905,14 +18919,14 @@ static uint64_t L_ISPAWBInterpolation1(uint32_t r_a0, uint32_t r_a1, uint32_t r_
 	r_a2 = (uint32_t)(r_a2 << (r_a0 & 31));
 	r_v0 = (uint32_t)(0x2010000u);
 	r_a1 = (uint32_t)(r_a1 << (r_a0 & 31));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-15620));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult2_32 + 0))) + 0u)));
 	r_a2 = (uint32_t)(r_t0 - r_a2);
 	{ uint64_t q_ = L_fix_point_mult2_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a1 = (uint32_t)(r_v0 + 0u);
 	r_a2 = (uint32_t)(r_s2 - r_s1);
 	r_v0 = (uint32_t)(0x2010000u);
 	r_a0 = (uint32_t)(r_s0 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-15472));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_div_32 + 0))) + 0u)));
 	r_a2 = (uint32_t)(r_a2 << (r_s0 & 31));
 	{ uint64_t q_ = L_fix_point_div_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 36));
@@ -18928,14 +18942,14 @@ L_11234:
 	r_a2 = (uint32_t)(r_a2 << (r_a0 & 31));
 	r_v0 = (uint32_t)(0x2010000u);
 	r_a1 = (uint32_t)(r_a1 << (r_a0 & 31));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-15620));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult2_32 + 0))) + 0u)));
 	r_a2 = (uint32_t)(r_t0 - r_a2);
 	{ uint64_t q_ = L_fix_point_mult2_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a1 = (uint32_t)(r_v0 + 0u);
 	r_a2 = (uint32_t)(r_s2 - r_s1);
 	r_v0 = (uint32_t)(0x2010000u);
 	r_a0 = (uint32_t)(r_s0 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-15472));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_div_32 + 0))) + 0u)));
 	r_a2 = (uint32_t)(r_a2 << (r_s0 & 31));
 	{ uint64_t q_ = L_fix_point_div_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 36));
@@ -18971,14 +18985,14 @@ static uint64_t L_ISPAWBInterpolation2(uint32_t r_a0, uint32_t r_a1, uint32_t r_
 	if (c_) goto L_1131c; }
 	r_a1 = (uint32_t)(r_s0 - r_v0);
 	r_v0 = (uint32_t)(0x2010000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-15620));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult2_32 + 0))) + 0u)));
 	r_a2 = (uint32_t)(r_v1 - r_a2);
 	{ uint64_t q_ = L_fix_point_mult2_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a1 = (uint32_t)(r_v0 + 0u);
 	r_a2 = (uint32_t)(r_s3 - r_s1);
 	r_v0 = (uint32_t)(0x2010000u);
 	r_a0 = (uint32_t)(r_s2 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-15472));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_div_32 + 0))) + 0u)));
 	r_a2 = (uint32_t)(r_a2 << (r_s2 & 31));
 	{ uint64_t q_ = L_fix_point_div_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 36));
@@ -18991,14 +19005,14 @@ static uint64_t L_ISPAWBInterpolation2(uint32_t r_a0, uint32_t r_a1, uint32_t r_
 L_1131c:
 	r_a1 = (uint32_t)(r_v0 - r_s0);
 	r_v0 = (uint32_t)(0x2010000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-15620));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult2_32 + 0))) + 0u)));
 	r_a2 = (uint32_t)(r_v1 - r_a2);
 	{ uint64_t q_ = L_fix_point_mult2_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a1 = (uint32_t)(r_v0 + 0u);
 	r_a2 = (uint32_t)(r_s3 - r_s1);
 	r_v0 = (uint32_t)(0x2010000u);
 	r_a0 = (uint32_t)(r_s2 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-15472));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_div_32 + 0))) + 0u)));
 	r_a2 = (uint32_t)(r_a2 << (r_s2 & 31));
 	{ uint64_t q_ = L_fix_point_div_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 36));
@@ -19061,7 +19075,7 @@ L_113f8:
 	r_s1 = (uint32_t)(0x2010000u);
 	r_a2 = (uint32_t)(r_t0 << (r_s0 & 31));
 	r_s3 = (uint32_t)(r_s3 << (r_s0 & 31));
-	r_s1 = (uint32_t)(LIFT_XLATE(r_s1 + (uint32_t)-15620));
+	r_s1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult2_32 + 0))) + 0u)));
 L_1140c:
 	r_a0 = (uint32_t)(r_s0 + 0u);
 	r_a1 = (uint32_t)(r_s2 + 0u);
@@ -19075,7 +19089,7 @@ L_1140c:
 	r_s3 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 32));
 	r_t9 = (uint32_t)(0x2010000u);
 	r_a1 = (uint32_t)(r_v0 + 0u);
-	r_t9 = (uint32_t)(LIFT_XLATE(r_t9 + (uint32_t)-15472));
+	r_t9 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_div_32 + 0))) + 0u)));
 	{ uint64_t q_ = L_fix_point_div_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	return ((uint64_t)r_v1 << 32) | r_v0;
 L_11448:
@@ -19127,7 +19141,7 @@ static uint64_t L_subsection_map(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, ui
 	uint32_t r_at = 0, r_v0 = 0, r_v1 = 0, r_t0 = 0, r_t1 = 0, r_t2 = 0, r_t3 = 0, r_t4 = 0, r_t5 = 0, r_t6 = 0, r_t7 = 0, r_s0 = 0, r_s1 = 0, r_s2 = 0, r_s3 = 0, r_s4 = 0, r_s5 = 0, r_s6 = 0, r_s7 = 0, r_t8 = 0, r_t9 = 0, r_k0 = 0, r_k1 = 0, r_gp = 0, r_s8 = 0, r_ra = 0, r_hi = 0, r_lo = 0;
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_v0 = (uint32_t)(0xe0000000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)16));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&memset) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 2092) = r_s7;
 	*(uint32_t *)(uintptr_t)(sp_base + 2088) = r_s6;
 	*(uint32_t *)(uintptr_t)(sp_base + 2080) = r_s4;
@@ -19207,7 +19221,7 @@ L_12bec:
 	r_a2 = (uint32_t)(r_a2 << (r_s7 & 31));
 	r_s8 = (uint32_t)(r_s8 << (r_s7 & 31));
 	r_a0 = (uint32_t)(r_s7 + 0u);
-	r_s6 = (uint32_t)(LIFT_XLATE(r_s6 + (uint32_t)-15472));
+	r_s6 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_div_32 + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_a1 << (r_s7 & 31));
 	{ uint64_t q_ = L_fix_point_div_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v1 = (uint32_t)(r_s8 >> 31);
@@ -19251,7 +19265,7 @@ L_12c50:
 	r_a1 = (uint32_t)(r_v0 + 0u);
 	r_v0 = (uint32_t)(0x2010000u);
 	r_a0 = (uint32_t)(r_s7 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-15620));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult2_32 + 0))) + 0u)));
 	r_a2 = (uint32_t)(r_s2 << (r_s7 & 31));
 	{ uint64_t q_ = L_fix_point_mult2_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(r_s8 + r_v0);
@@ -19309,7 +19323,7 @@ static uint64_t L_AePweightCalculate(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2
 	*(uint32_t *)(uintptr_t)(sp_base + 24) = r_s1;
 	r_a1 = (uint32_t)(r_a1 << (r_a0 & 31));
 	r_s1 = (uint32_t)(r_a2 + 0u);
-	r_s2 = (uint32_t)(LIFT_XLATE(r_s2 + (uint32_t)-15472));
+	r_s2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_div_32 + 0))) + 0u)));
 	r_a2 = (uint32_t)(r_s3 + 0u);
 	*(uint32_t *)(uintptr_t)(sp_base + 36) = r_ra;
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_s0;
@@ -19318,13 +19332,13 @@ static uint64_t L_AePweightCalculate(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2
 	r_a0 = (uint32_t)(r_v0 + 0u);
 	r_v0 = (uint32_t)(0x2010000u);
 	r_a1 = (uint32_t)(r_s0 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-14376));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tisp_log2_fixed_to_fixed + 0))) + 0u)));
 	r_a2 = (uint32_t)(r_s0 & 0xff);
 	{ uint64_t q_ = L_tisp_log2_fixed_to_fixed(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a2 = (uint32_t)(r_v0 + 0u);
 	r_v0 = (uint32_t)(0x2010000u);
 	r_a0 = (uint32_t)(r_s0 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)-15620));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult2_32 + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_s3 + 0u);
 	{ uint64_t q_ = L_fix_point_mult2_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_a2 = (uint32_t)(r_s1 << (r_s0 & 31));
@@ -19477,14 +19491,14 @@ static uint64_t L_tisp_ae_tune(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, uint
 	r_a3 = (uint32_t)(r_a2 + 0u);
 	r_a0 = (uint32_t)(r_s0 + 0u);
 	r_a1 = (uint32_t)(r_s7 + 0u);
-	r_s6 = (uint32_t)(LIFT_XLATE(r_s6 + (uint32_t)-15552));
+	r_s6 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult3_32 + 0))) + 0u)));
 	r_s5 = (uint32_t)(0u + (uint32_t)128);
 	{ uint64_t q_ = L_fix_point_mult3_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_s5 = (uint32_t)(r_s5 << (r_s0 & 31));
 	r_s4 = (uint32_t)(0x2010000u);
 	r_a0 = (uint32_t)(r_s0 + 0u);
 	r_a2 = (uint32_t)(r_s5 + 0u);
-	r_s4 = (uint32_t)(LIFT_XLATE(r_s4 + (uint32_t)-15472));
+	r_s4 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_div_32 + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_v0 + 0u);
 	{ uint64_t q_ = L_fix_point_div_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(r_v0 + r_s3);
@@ -19528,7 +19542,7 @@ static uint64_t L_fix_point_mult2_64(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2
 	r_s2 = (uint32_t)(r_a0 + 0u);
 	r_s3 = (uint32_t)(0xe0000000u);
 	r_a2 = (uint32_t)(0u + (uint32_t)64);
-	r_s3 = (uint32_t)(LIFT_XLATE(r_s3 + (uint32_t)48));
+	r_s3 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&__lshrdi3) + 0u)));
 	r_a2 = (uint32_t)(r_a2 - r_s2);
 	r_a0 = (uint32_t)(0u + (uint32_t)-1);
 	r_a1 = (uint32_t)(0u + (uint32_t)-1);
@@ -19578,7 +19592,7 @@ static uint64_t L_fix_point_mult2_64(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2
 	*(uint32_t *)(uintptr_t)(sp_base + 16) = r_v1;
 	r_a1 = (uint32_t)(r_hi);
 	r_a0 = (uint32_t)(r_lo);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)64));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&__ashldi3) + 0u)));
 	r_a1 = (uint32_t)(r_t1 + r_a1);
 	{ uint64_t v_ = (((uint64_t)r_a1 << 32) | r_a0) << (r_a2 & 63); r_v0 = (uint32_t)v_; r_v1 = (uint32_t)(v_ >> 32); }
 	r_t0 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 16));
@@ -19640,7 +19654,7 @@ static uint64_t L_fix_point_mult3_64(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2
 	r_s0 = (uint32_t)(*(uint32_t *)(uintptr_t)(csp + 24));
 	r_s2 = (uint32_t)(0x2010000u);
 	*(uint32_t *)(uintptr_t)(sp_base + 40) = r_s3;
-	r_s2 = (uint32_t)(LIFT_XLATE(r_s2 + (uint32_t)-16620));
+	r_s2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_mult2_64 + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 16) = r_v0;
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_v1;
 	*(uint32_t *)(uintptr_t)(sp_base + 44) = r_ra;
@@ -19684,7 +19698,7 @@ static uint64_t L_fix_point_div_64(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, 
 	*(uint32_t *)(uintptr_t)(sp_base + 44) = r_ra;
 	r_a3 = (uint32_t)(r_s3 + 0u);
 	r_s4 = (uint32_t)(r_a0 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)80));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&div64_u64) + 0u)));
 	r_a0 = (uint32_t)(r_a2 + 0u);
 	r_a2 = (uint32_t)(r_s2 + 0u);
 	{ uint64_t q_ = div64_u64(((uint64_t)r_a1 << 32) | r_a0, ((uint64_t)r_a3 << 32) | r_a2); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
@@ -19743,7 +19757,7 @@ L_c218:
 	r_v0 = (uint32_t)(0xe0000000u);
 	r_a0 = (uint32_t)(r_s0 | 0x1);
 	r_a1 = (uint32_t)(r_s1 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)64));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&__ashldi3) + 0u)));
 	r_a2 = (uint32_t)(r_a2 - r_t2);
 	{ uint64_t v_ = (((uint64_t)r_a1 << 32) | r_a0) << (r_a2 & 63); r_v0 = (uint32_t)v_; r_v1 = (uint32_t)(v_ >> 32); }
 	r_s0 = (uint32_t)(r_v0 + 0u);
@@ -19759,7 +19773,7 @@ L_c25c:
 	r_v0 = (uint32_t)(0xe0000000u);
 	r_a0 = (uint32_t)(r_s5 + 0u);
 	r_a1 = (uint32_t)(r_s6 + 0u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)64));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)&__ashldi3) + 0u)));
 	r_a2 = (uint32_t)(r_s4 + 0u);
 	{ uint64_t v_ = (((uint64_t)r_a1 << 32) | r_a0) << (r_a2 & 63); r_v0 = (uint32_t)v_; r_v1 = (uint32_t)(v_ >> 32); }
 	r_ra = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 44));
@@ -19783,14 +19797,14 @@ static uint64_t L_tiziano_af_set_regs(uint32_t r_a0, uint32_t r_a1, uint32_t r_a
 	uint32_t r_at = 0, r_v0 = 0, r_v1 = 0, r_t0 = 0, r_t1 = 0, r_t2 = 0, r_t3 = 0, r_t4 = 0, r_t5 = 0, r_t6 = 0, r_t7 = 0, r_s0 = 0, r_s1 = 0, r_s2 = 0, r_s3 = 0, r_s4 = 0, r_s5 = 0, r_s6 = 0, r_s7 = 0, r_t8 = 0, r_t9 = 0, r_k0 = 0, r_k1 = 0, r_gp = 0, r_s8 = 0, r_ra = 0, r_hi = 0, r_lo = 0;
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_a0 = (uint32_t)(0x19020000u);
-	r_v0 = (uint32_t)(LIFT_XLATE(r_a0 + (uint32_t)-30996));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&IspAfStaticParam + 0))) + 0u)));
 	*(uint32_t *)(uintptr_t)(sp_base + 20) = r_s1;
 	*(uint32_t *)(uintptr_t)(sp_base + 28) = r_ra;
 	*(uint32_t *)(uintptr_t)(sp_base + 24) = r_s2;
 	*(uint32_t *)(uintptr_t)(sp_base + 16) = r_s0;
 	r_s1 = (uint32_t)(0x14040000u);
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)48));
-	r_v0 = (uint32_t)(LIFT_XLATE(r_s1 + (uint32_t)19232));
+	r_v0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_Zone + 0))) + 0u)));
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_v0 + (uint32_t)12));
 	r_v1 = (uint32_t)(r_v1 + (uint32_t)-15);
 	if (r_a1) { r_lo = r_v1 / r_a1; r_hi = r_v1 % r_a1; }
@@ -19853,11 +19867,11 @@ L_2e9c0:
 	r_v0 = (uint32_t)(r_v0 << 16);
 	r_a1 = (uint32_t)(r_a1 | r_v0);
 	r_v0 = (uint32_t)(0x14040000u);
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)19232));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_Zone + 0))) + 0u)));
 	r_v1 = (uint32_t)(r_v1 << 12);
 	r_a1 = (uint32_t)(r_a1 | r_v0);
 	r_s0 = (uint32_t)(0x2030000u);
-	r_s0 = (uint32_t)(LIFT_XLATE(r_s0 + (uint32_t)10240));
+	r_s0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&system_reg_write + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_a1 | r_v1);
 	r_a0 = (uint32_t)(0u + (uint32_t)2308);
 	system_reg_write(r_a0, r_a1); r_v0 = 0;
@@ -19952,14 +19966,14 @@ L_2e9c0:
 	r_a1 = (uint32_t)(r_a1 | r_v0);
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(0x14040000u);
-	r_s2 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)20364));
+	r_s2 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_ThresEnable + 0))) + 0u)));
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)140));
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s2 + (uint32_t)16));
 	r_a1 = (uint32_t)(r_a1 << 16);
 	r_v1 = (uint32_t)(r_v1 << 8);
 	r_a1 = (uint32_t)(r_a1 | r_v1);
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)136));
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)20364));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_ThresEnable + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_a1 | r_v1);
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s2 + (uint32_t)12));
 	r_v0 = (uint32_t)(r_v0 << 4);
@@ -19999,9 +20013,9 @@ L_2e9c0:
 	r_a1 = (uint32_t)(r_a1 | r_v0);
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(0x14040000u);
-	r_s1 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)20416));
+	r_s1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_FIR0_V + 0))) + 0u)));
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)4));
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)20416));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_FIR0_V + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_a1 << 16);
 	r_a0 = (uint32_t)(0u + (uint32_t)2352);
 	r_a1 = (uint32_t)(r_a1 | r_v0);
@@ -20016,9 +20030,9 @@ L_2e9c0:
 	r_a0 = (uint32_t)(0u + (uint32_t)2360);
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(0x14040000u);
-	r_s1 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)20484));
+	r_s1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_FIR1_V + 0))) + 0u)));
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)4));
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)20484));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_FIR1_V + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_a1 << 16);
 	r_a0 = (uint32_t)(0u + (uint32_t)2364);
 	r_a1 = (uint32_t)(r_a1 | r_v0);
@@ -20033,9 +20047,9 @@ L_2e9c0:
 	r_a0 = (uint32_t)(0u + (uint32_t)2372);
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(0x14040000u);
-	r_s1 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)20552));
+	r_s1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_IIR0_H + 0))) + 0u)));
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)8));
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)20552));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_IIR0_H + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_a1 << 16);
 	r_a0 = (uint32_t)(0u + (uint32_t)2376);
 	r_a1 = (uint32_t)(r_a1 | r_v0);
@@ -20059,9 +20073,9 @@ L_2e9c0:
 	r_a1 = (uint32_t)(r_a1 | r_v0);
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(0x14040000u);
-	r_s1 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)20640));
+	r_s1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_IIR1_H + 0))) + 0u)));
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)8));
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)20640));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_IIR1_H + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_a1 << 16);
 	r_a0 = (uint32_t)(0u + (uint32_t)2392);
 	r_a1 = (uint32_t)(r_a1 | r_v0);
@@ -20085,10 +20099,10 @@ L_2e9c0:
 	r_a1 = (uint32_t)(r_a1 | r_v0);
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(0x14040000u);
-	r_s1 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)20436));
+	r_s1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_FIR0_Ldg + 0))) + 0u)));
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)12));
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)8));
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)20436));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_FIR0_Ldg + 0))) + 0u)));
 	r_v1 = (uint32_t)(r_v1 << 16);
 	r_a1 = (uint32_t)(r_a1 << 24);
 	r_a1 = (uint32_t)(r_a1 | r_v1);
@@ -20111,10 +20125,10 @@ L_2e9c0:
 	r_a1 = (uint32_t)(r_a1 | r_v0);
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(0x14040000u);
-	r_s1 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)20504));
+	r_s1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_FIR1_Ldg + 0))) + 0u)));
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)12));
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)8));
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)20504));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_FIR1_Ldg + 0))) + 0u)));
 	r_v1 = (uint32_t)(r_v1 << 16);
 	r_a1 = (uint32_t)(r_a1 << 24);
 	r_a1 = (uint32_t)(r_a1 | r_v1);
@@ -20137,10 +20151,10 @@ L_2e9c0:
 	r_a1 = (uint32_t)(r_a1 | r_v0);
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(0x14040000u);
-	r_s1 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)20592));
+	r_s1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_IIR0_Ldg + 0))) + 0u)));
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)12));
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)8));
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)20592));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_IIR0_Ldg + 0))) + 0u)));
 	r_v1 = (uint32_t)(r_v1 << 16);
 	r_a1 = (uint32_t)(r_a1 << 24);
 	r_a1 = (uint32_t)(r_a1 | r_v1);
@@ -20163,10 +20177,10 @@ L_2e9c0:
 	r_a1 = (uint32_t)(r_a1 | r_v0);
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(0x14040000u);
-	r_s1 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)20680));
+	r_s1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_IIR1_Ldg + 0))) + 0u)));
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)12));
 	r_v1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)8));
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)20680));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_IIR1_Ldg + 0))) + 0u)));
 	r_v1 = (uint32_t)(r_v1 << 16);
 	r_a1 = (uint32_t)(r_a1 << 24);
 	r_a1 = (uint32_t)(r_a1 | r_v1);
@@ -20189,9 +20203,9 @@ L_2e9c0:
 	r_a1 = (uint32_t)(r_a1 | r_v0);
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(0x14040000u);
-	r_s1 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)20468));
+	r_s1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_FIR0_Coring + 0))) + 0u)));
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)4));
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)20468));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_FIR0_Coring + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_a1 << 16);
 	r_a0 = (uint32_t)(0u + (uint32_t)2440);
 	r_a1 = (uint32_t)(r_a1 | r_v0);
@@ -20203,9 +20217,9 @@ L_2e9c0:
 	r_a1 = (uint32_t)(r_a1 | r_v0);
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(0x14040000u);
-	r_s1 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)20536));
+	r_s1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_FIR1_Coring + 0))) + 0u)));
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)4));
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)20536));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_FIR1_Coring + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_a1 << 16);
 	r_a0 = (uint32_t)(0u + (uint32_t)2448);
 	r_a1 = (uint32_t)(r_a1 | r_v0);
@@ -20217,9 +20231,9 @@ L_2e9c0:
 	r_a1 = (uint32_t)(r_a1 | r_v0);
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(0x14040000u);
-	r_s1 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)20624));
+	r_s1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_IIR0_Coring + 0))) + 0u)));
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)4));
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)20624));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_IIR0_Coring + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_a1 << 16);
 	r_a0 = (uint32_t)(0u + (uint32_t)2456);
 	r_a1 = (uint32_t)(r_a1 | r_v0);
@@ -20231,9 +20245,9 @@ L_2e9c0:
 	r_a1 = (uint32_t)(r_a1 | r_v0);
 	{ uint64_t q_ = L_dispatch(r_s0, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	r_v0 = (uint32_t)(0x14040000u);
-	r_s1 = (uint32_t)(LIFT_XLATE(r_v0 + (uint32_t)20712));
+	r_s1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_IIR1_Coring + 0))) + 0u)));
 	r_a1 = (uint32_t)(*(uint32_t *)(uintptr_t)(r_s1 + (uint32_t)4));
-	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)LIFT_XLATE(r_v0 + (uint32_t)20712));
+	r_v0 = (uint32_t)(*(uint32_t *)(uintptr_t)((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&stAFParam_IIR1_Coring + 0))) + 0u)));
 	r_a1 = (uint32_t)(r_a1 << 16);
 	r_a0 = (uint32_t)(0u + (uint32_t)2464);
 	r_a1 = (uint32_t)(r_a1 | r_v0);
@@ -20253,131 +20267,140 @@ L_2e9c0:
 	return ((uint64_t)r_v1 << 32) | r_v0;
 }
 
+typedef uint64_t (*lift_fn_t)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+/* Indirect calls (jalr) of the stock code: a direct-mapped cache of known
+ * lifted entry points in front of the linear lookup.  An entry only ever
+ * holds the address of a lifted function, so a stale or racing entry can
+ * only cause a miss, never a wrong call. */
+static uint32_t lift_fn_cache[256];
 static uint64_t L_dispatch(uint32_t fn, uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, uint32_t r_a3, uint32_t sp_base)
 {
 	uint32_t r_v0 = 0, r_v1 = 0;
+	uint32_t h_ = (fn >> 2) & 255;
 	(void)r_v1;
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_adr_process) return L_tisp_adr_process(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tiziano_adr_interrupt_static) return L_tiziano_adr_interrupt_static(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_adr_ev_update) return L_tisp_adr_ev_update(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tiziano_adr_get_data) return L_tiziano_adr_get_data(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_s_adr_str_internal) return L_tisp_s_adr_str_internal(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_defog_process) return L_tisp_defog_process(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tiziano_defog_interrupt_static) return L_tiziano_defog_interrupt_static(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_defog_ev_update) return L_tisp_defog_ev_update(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tiziano_defog_get_data) return L_tiziano_defog_get_data(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_ae_process) return L_tisp_ae_process(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tiziano_ae_init) return L_tiziano_ae_init(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tiziano_ae_dn_params_refresh) return L_tiziano_ae_dn_params_refresh(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tiziano_ae_params_refresh) return L_tiziano_ae_params_refresh(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_ae_s_min) return L_tisp_ae_s_min(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_ae_g_min) return L_tisp_ae_g_min(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tiziano_ae_compensation_set) return L_tiziano_ae_compensation_set(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tiziano_ae_s_ev_start) return L_tiziano_ae_s_ev_start(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tiziano_ae_s_max_again) return L_tiziano_ae_s_max_again(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tiziano_ae_s_max_isp_dgain) return L_tiziano_ae_s_max_isp_dgain(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_ae_manual_set) return L_tisp_ae_manual_set(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tiziano_deflicker_expt_tune) return L_tiziano_deflicker_expt_tune(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_apical_isp_core_ops_s_ctrl) return L_apical_isp_core_ops_s_ctrl(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_apical_isp_core_ops_g_ctrl) return L_apical_isp_core_ops_g_ctrl(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_JZ_Isp_Awb) return L_JZ_Isp_Awb(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_awb_interrupt_static) return L_awb_interrupt_static(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_JZ_Isp_Get_Awb_Statistics) return L_JZ_Isp_Get_Awb_Statistics(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_awb_ev_update) return L_tisp_awb_ev_update(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_ct_update) return L_tisp_ct_update(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_ccm_ct_update) return L_tisp_ccm_ct_update(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_ccm_ev_update) return L_tisp_ccm_ev_update(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_lsc_ct_update) return L_tisp_lsc_ct_update(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_lsc_gain_update) return L_tisp_lsc_gain_update(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tiziano_adr_algorithm) return L_tiziano_adr_algorithm(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tiziano_adr_params_init) return L_tiziano_adr_params_init(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tiziano_defog_algorithm) return L_tiziano_defog_algorithm(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_ae_ctrls_update) return L_tisp_ae_ctrls_update(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_ae_process_impl) return L_tisp_ae_process_impl(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tiziano_ae_set_hardware_param) return L_tiziano_ae_set_hardware_param(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_set_sensor_integration_time) return L_tisp_set_sensor_integration_time(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_set_sensor_analog_gain) return L_tisp_set_sensor_analog_gain(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_system_reg_write_ae) return L_system_reg_write_ae(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_fix_point_mult3_32) return L_fix_point_mult3_32(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_math_exp2) return L_tisp_math_exp2(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tiziano_deflicker_expt) return L_tiziano_deflicker_expt(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_s_max_again) return L_tisp_s_max_again(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_s_Hilightdepress) return L_tisp_s_Hilightdepress(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_s_drc_strength) return L_tisp_s_drc_strength(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_s_antiflick) return L_tisp_s_antiflick(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_set_brightness) return L_tisp_set_brightness(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_set_fps) return L_tisp_set_fps(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_s_ae_attr) return L_tisp_s_ae_attr(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_apical_isp_ae_s_roi_isra_45) return L_apical_isp_ae_s_roi_isra_45(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_s_max_isp_dgain) return L_tisp_s_max_isp_dgain(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_apical_isp_ae_zone_weight_s_attr_isra_50) return L_apical_isp_ae_zone_weight_s_attr_isra_50(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_s_ae_min) return L_tisp_s_ae_min(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_s_ae_hist) return L_tisp_s_ae_hist(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_apical_isp_af_weight_s_attr_isra_54) return L_apical_isp_af_weight_s_attr_isra_54(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_s_ev_start) return L_tisp_s_ev_start(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_g_Hilightdepress) return L_tisp_g_Hilightdepress(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_g_ae_min) return L_tisp_g_ae_min(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_g_drc_strength) return L_tisp_g_drc_strength(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_apical_isp_ae_g_roi_isra_64) return L_apical_isp_ae_g_roi_isra_64(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_apical_isp_ae_zone_g_ctrl_isra_69) return L_apical_isp_ae_zone_g_ctrl_isra_69(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_apical_isp_ae_zone_weight_g_attr_isra_70) return L_apical_isp_ae_zone_weight_g_attr_isra_70(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_g_ae_hist) return L_tisp_g_ae_hist(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_apical_isp_af_weight_g_attr_isra_74) return L_apical_isp_af_weight_g_attr_isra_74(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_Tiziano_awb_fpga) return L_Tiziano_awb_fpga(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_jz_isp_ccm) return L_jz_isp_ccm(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_jz_isp_lsc_ct) return L_jz_isp_lsc_ct(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_Tiziano_adr_fpga) return L_Tiziano_adr_fpga(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_Tiziano_defog_fpga) return L_Tiziano_defog_fpga(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_Tiziano_ae_fpga) return L_Tiziano_ae_fpga(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_set_ag_func) return L_tisp_set_ag_func(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_fix_point_mult2_32) return L_fix_point_mult2_32(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_JZ_Isp_Ae_Dg2reg) return L_JZ_Isp_Ae_Dg2reg(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_log2_fixed_to_fixed) return L_tisp_log2_fixed_to_fixed(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_fix_point_div_32) return L_fix_point_div_32(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_ae_param_array_set) return L_tisp_ae_param_array_set(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_s_aeroi_weight) return L_tisp_s_aeroi_weight(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_s_aezone_weight) return L_tisp_s_aezone_weight(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_ae_set_hist_custome) return L_tisp_ae_set_hist_custome(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_s_af_weight) return L_tisp_s_af_weight(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_ae_param_array_get) return L_tisp_ae_param_array_get(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_g_adr_str_internal) return L_tisp_g_adr_str_internal(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_g_aeroi_weight) return L_tisp_g_aeroi_weight(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_g_ae_zone) return L_tisp_g_ae_zone(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_g_aezone_weight) return L_tisp_g_aezone_weight(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_ae_get_hist_custome) return L_tisp_ae_get_hist_custome(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_g_af_weight) return L_tisp_g_af_weight(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_fix_point_div) return L_fix_point_div(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_Tiziano_Awb_Ct_Detect) return L_Tiziano_Awb_Ct_Detect(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_JZ_Isp_Awb_Awbg2reg) return L_JZ_Isp_Awb_Awbg2reg(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_jz_isp_ccm_parameter_convert) return L_jz_isp_ccm_parameter_convert(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tiziano_ct_ccm_interpolation) return L_tiziano_ct_ccm_interpolation(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_cm_control) return L_cm_control(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_jz_isp_ccm_para2reg) return L_jz_isp_ccm_para2reg(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tiziano_ccm_lut_parameter) return L_tiziano_ccm_lut_parameter(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_simple_intp) return L_tisp_simple_intp(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_jz_isp_lsc_interpolate) return L_jz_isp_lsc_interpolate(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_jz_isp_lsc_inter_str) return L_jz_isp_lsc_inter_str(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_subsection) return L_subsection(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_fix_point_add_32) return L_fix_point_add_32(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_ae_weight_mean2) return L_ae_weight_mean2(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_ae_tune2) return L_ae_tune2(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_set_sensor_digital_gain) return L_tisp_set_sensor_digital_gain(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_log2_int_to_fixed) return L_tisp_log2_int_to_fixed(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_af_param_array_set) return L_tisp_af_param_array_set(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_ae_get_y_zone) return L_tisp_ae_get_y_zone(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_af_param_array_get) return L_tisp_af_param_array_get(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_ISPAWBInterpolation1) return L_ISPAWBInterpolation1(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_ISPAWBInterpolation2) return L_ISPAWBInterpolation2(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_func_zone_ct_weight) return L_func_zone_ct_weight(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_jz_isp_ccm_reg2par) return L_jz_isp_ccm_reg2par(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_subsection_map) return L_subsection_map(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_AePweightCalculate) return L_AePweightCalculate(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_ae_target) return L_tisp_ae_target(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tisp_ae_tune) return L_tisp_ae_tune(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_fix_point_mult2_64) return L_fix_point_mult2_64(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_fix_point_mult3_64) return L_fix_point_mult3_64(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_fix_point_div_64) return L_fix_point_div_64(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&L_tiziano_af_set_regs) return L_tiziano_af_set_regs(r_a0, r_a1, r_a2, r_a3, sp_base);
+	if (ACCESS_ONCE(lift_fn_cache[h_]) == fn)
+		return ((lift_fn_t)(uintptr_t)fn)(r_a0, r_a1, r_a2, r_a3, sp_base);
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_adr_process) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_adr_process(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tiziano_adr_interrupt_static) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tiziano_adr_interrupt_static(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_adr_ev_update) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_adr_ev_update(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tiziano_adr_get_data) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tiziano_adr_get_data(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_s_adr_str_internal) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_s_adr_str_internal(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_defog_process) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_defog_process(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tiziano_defog_interrupt_static) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tiziano_defog_interrupt_static(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_defog_ev_update) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_defog_ev_update(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tiziano_defog_get_data) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tiziano_defog_get_data(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_ae_process) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_ae_process(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tiziano_ae_init) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tiziano_ae_init(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tiziano_ae_dn_params_refresh) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tiziano_ae_dn_params_refresh(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tiziano_ae_params_refresh) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tiziano_ae_params_refresh(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_ae_s_min) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_ae_s_min(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_ae_g_min) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_ae_g_min(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tiziano_ae_compensation_set) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tiziano_ae_compensation_set(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tiziano_ae_s_ev_start) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tiziano_ae_s_ev_start(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tiziano_ae_s_max_again) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tiziano_ae_s_max_again(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tiziano_ae_s_max_isp_dgain) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tiziano_ae_s_max_isp_dgain(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_ae_manual_set) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_ae_manual_set(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tiziano_deflicker_expt_tune) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tiziano_deflicker_expt_tune(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_apical_isp_core_ops_s_ctrl) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_apical_isp_core_ops_s_ctrl(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_apical_isp_core_ops_g_ctrl) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_apical_isp_core_ops_g_ctrl(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_JZ_Isp_Awb) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_JZ_Isp_Awb(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_awb_interrupt_static) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_awb_interrupt_static(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_JZ_Isp_Get_Awb_Statistics) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_JZ_Isp_Get_Awb_Statistics(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_awb_ev_update) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_awb_ev_update(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_ct_update) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_ct_update(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_ccm_ct_update) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_ccm_ct_update(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_ccm_ev_update) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_ccm_ev_update(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_lsc_ct_update) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_lsc_ct_update(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_lsc_gain_update) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_lsc_gain_update(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tiziano_adr_algorithm) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tiziano_adr_algorithm(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tiziano_adr_params_init) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tiziano_adr_params_init(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tiziano_defog_algorithm) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tiziano_defog_algorithm(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_ae_ctrls_update) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_ae_ctrls_update(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_ae_process_impl) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_ae_process_impl(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tiziano_ae_set_hardware_param) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tiziano_ae_set_hardware_param(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_set_sensor_integration_time) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_set_sensor_integration_time(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_set_sensor_analog_gain) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_set_sensor_analog_gain(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_system_reg_write_ae) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_system_reg_write_ae(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_fix_point_mult3_32) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_fix_point_mult3_32(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_math_exp2) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_math_exp2(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tiziano_deflicker_expt) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tiziano_deflicker_expt(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_s_max_again) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_s_max_again(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_s_Hilightdepress) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_s_Hilightdepress(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_s_drc_strength) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_s_drc_strength(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_s_antiflick) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_s_antiflick(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_set_brightness) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_set_brightness(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_set_fps) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_set_fps(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_s_ae_attr) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_s_ae_attr(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_apical_isp_ae_s_roi_isra_45) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_apical_isp_ae_s_roi_isra_45(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_s_max_isp_dgain) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_s_max_isp_dgain(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_apical_isp_ae_zone_weight_s_attr_isra_50) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_apical_isp_ae_zone_weight_s_attr_isra_50(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_s_ae_min) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_s_ae_min(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_s_ae_hist) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_s_ae_hist(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_apical_isp_af_weight_s_attr_isra_54) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_apical_isp_af_weight_s_attr_isra_54(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_s_ev_start) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_s_ev_start(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_g_Hilightdepress) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_g_Hilightdepress(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_g_ae_min) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_g_ae_min(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_g_drc_strength) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_g_drc_strength(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_apical_isp_ae_g_roi_isra_64) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_apical_isp_ae_g_roi_isra_64(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_apical_isp_ae_zone_g_ctrl_isra_69) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_apical_isp_ae_zone_g_ctrl_isra_69(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_apical_isp_ae_zone_weight_g_attr_isra_70) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_apical_isp_ae_zone_weight_g_attr_isra_70(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_g_ae_hist) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_g_ae_hist(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_apical_isp_af_weight_g_attr_isra_74) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_apical_isp_af_weight_g_attr_isra_74(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_Tiziano_awb_fpga) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_Tiziano_awb_fpga(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_jz_isp_ccm) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_jz_isp_ccm(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_jz_isp_lsc_ct) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_jz_isp_lsc_ct(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_Tiziano_adr_fpga) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_Tiziano_adr_fpga(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_Tiziano_defog_fpga) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_Tiziano_defog_fpga(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_Tiziano_ae_fpga) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_Tiziano_ae_fpga(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_set_ag_func) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_set_ag_func(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_fix_point_mult2_32) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_fix_point_mult2_32(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_JZ_Isp_Ae_Dg2reg) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_JZ_Isp_Ae_Dg2reg(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_log2_fixed_to_fixed) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_log2_fixed_to_fixed(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_fix_point_div_32) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_fix_point_div_32(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_ae_param_array_set) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_ae_param_array_set(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_s_aeroi_weight) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_s_aeroi_weight(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_s_aezone_weight) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_s_aezone_weight(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_ae_set_hist_custome) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_ae_set_hist_custome(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_s_af_weight) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_s_af_weight(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_ae_param_array_get) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_ae_param_array_get(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_g_adr_str_internal) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_g_adr_str_internal(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_g_aeroi_weight) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_g_aeroi_weight(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_g_ae_zone) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_g_ae_zone(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_g_aezone_weight) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_g_aezone_weight(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_ae_get_hist_custome) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_ae_get_hist_custome(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_g_af_weight) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_g_af_weight(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_fix_point_div) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_fix_point_div(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_Tiziano_Awb_Ct_Detect) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_Tiziano_Awb_Ct_Detect(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_JZ_Isp_Awb_Awbg2reg) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_JZ_Isp_Awb_Awbg2reg(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_jz_isp_ccm_parameter_convert) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_jz_isp_ccm_parameter_convert(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tiziano_ct_ccm_interpolation) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tiziano_ct_ccm_interpolation(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_cm_control) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_cm_control(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_jz_isp_ccm_para2reg) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_jz_isp_ccm_para2reg(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tiziano_ccm_lut_parameter) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tiziano_ccm_lut_parameter(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_simple_intp) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_simple_intp(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_jz_isp_lsc_interpolate) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_jz_isp_lsc_interpolate(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_jz_isp_lsc_inter_str) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_jz_isp_lsc_inter_str(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_subsection) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_subsection(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_fix_point_add_32) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_fix_point_add_32(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_ae_weight_mean2) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_ae_weight_mean2(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_ae_tune2) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_ae_tune2(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_set_sensor_digital_gain) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_set_sensor_digital_gain(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_log2_int_to_fixed) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_log2_int_to_fixed(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_af_param_array_set) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_af_param_array_set(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_ae_get_y_zone) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_ae_get_y_zone(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_af_param_array_get) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_af_param_array_get(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_ISPAWBInterpolation1) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_ISPAWBInterpolation1(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_ISPAWBInterpolation2) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_ISPAWBInterpolation2(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_func_zone_ct_weight) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_func_zone_ct_weight(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_jz_isp_ccm_reg2par) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_jz_isp_ccm_reg2par(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_subsection_map) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_subsection_map(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_AePweightCalculate) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_AePweightCalculate(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_ae_target) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_ae_target(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tisp_ae_tune) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_ae_tune(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_fix_point_mult2_64) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_fix_point_mult2_64(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_fix_point_mult3_64) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_fix_point_mult3_64(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_fix_point_div_64) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_fix_point_div_64(r_a0, r_a1, r_a2, r_a3, sp_base); }
+	if (fn == (uint32_t)(uintptr_t)&L_tiziano_af_set_regs) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tiziano_af_set_regs(r_a0, r_a1, r_a2, r_a3, sp_base); }
 	switch (fn) {
 	default: return ((uint64_t (*)(uint32_t, uint32_t, uint32_t, uint32_t))(uintptr_t)fn)(r_a0, r_a1, r_a2, r_a3);
 	}

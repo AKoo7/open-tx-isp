@@ -255,9 +255,30 @@ class Lifter:
                     return '(csp + %d)' % (imm - frame)
                 return '(sp_base + %d)' % imm
             return '(%s + (uint32_t)%d)' % (reg(rs), imm)
+        def const_base(i, rs):
+            # rs still holds exactly the value of its paired lui: same basic
+            # block, no write to rs, no call or jump in between, lui not in
+            # the (annulled on fall-through) delay slot of a branch-likely
+            f = lo_lui.get(i)
+            if f is None or f >= i or (ins[f] >> 26) != 15 or (ins[f] >> 16) & 31 != rs:
+                return False
+            if f > 0:
+                wp = ins[f - 1]; opp = wp >> 26; rtp = (wp >> 16) & 31
+                if opp in (20, 21, 22, 23) or (opp == 1 and rtp in (2, 3, 18, 19)):
+                    return False
+            for k in range(f + 1, i + 1):
+                if k in targets:
+                    return False
+            for k in range(f + 1, i):
+                wk = ins[k]; opk = wk >> 26
+                if writes_reg(wk) == rs or opk in (2, 3) or (opk == 0 and (wk & 63) in (8, 9)):
+                    return False
+            return True
         def lo_full(i, rs):
             r = rel[i]
             va = self.resolve(r[1], lo_add[i]) & 0xffffffff
+            if os.environ.get('LIFT_CONST_XLATE', '1') == '1' and const_base(i, rs):
+                return 'LIFT_XLATE_K(0x%08xu)' % va
             return 'LIFT_XLATE(%s + (uint32_t)%d)' % (reg(rs), s16(va & 0xffff))
         def immexpr(i, default):
             r = rel[i]
