@@ -10685,6 +10685,17 @@ uint32_t cmos_fsm_process_interrupt(int32_t *arg1, char arg2)
 			((uint16_t)exposure_table[2] & 0xfff));
 		APICAL_WRITE_32(0x30c, (APICAL_READ_32(0x30c) & 0xfffff000) |
 			((uint16_t)exposure_table[3] & 0xfff));
+		if (t20_trace_events) {
+			static unsigned int wb_calls, wb_prints;
+
+			if (wb_calls++ % 64 == 0 && wb_prints++ < 40)
+				printk(KERN_INFO "T20AWB cmos wb=%03x/%03x/%03x/%03x mode=%u\n",
+				       APICAL_READ_32(0x300) & 0xfff,
+				       APICAL_READ_32(0x304) & 0xfff,
+				       APICAL_READ_32(0x308) & 0xfff,
+				       APICAL_READ_32(0x30c) & 0xfff,
+				       *(uint8_t *)((char *)sensor + 0x1524));
+		}
 
 		if (sensor_mode == 1 || sensor_mode == 3) {
 			int32_t field_5c = *(int32_t *)((char *)arg1 + 0x5c);
@@ -20346,6 +20357,29 @@ int32_t awb_calc_avg_weighted_gr_gb_mesh(uintptr_t a0)
 
 		*(int32_t *)(fsm + 1912) = mesh ? 1000000 / mesh : 0;
 	}
+	if (t20_trace_events) {
+		static unsigned int calls, prints;
+
+		if (calls++ % 16 == 0 && prints++ < 40) {
+			uint32_t valid_zones = 0;
+
+			for (i = 0; (uint16_t)i < zones; i++)
+				valid_zones += valid[i];
+			printk(KERN_INFO "T20AWB mesh zones=%u valid=%u counted=%u near0=%u share=%u/%u ctlim=%u mode=%d wsum=%u avg=%u/%u pt=%u/%u gain=%u/%u ct=%d ctrange=%d..%d manual=%u stab=%u/%u\n",
+			       zones, valid_zones, counted, near0, avg_a, avg_b,
+			       ct, mode, sum, rg_sum, bg_sum, point.x, point.y,
+			       *(uint16_t *)(fsm + 24), *(uint16_t *)(fsm + 26),
+			       *(int32_t *)(fsm + 1912),
+			       *(int32_t *)(fsm + 1928), *(int32_t *)(fsm + 1924),
+			       stab[12], stab[49], stab[50]);
+			printk(KERN_INFO "T20AWB zone0 rg=%u bg=%u pop=%u zone112 rg=%u bg=%u pop=%u\n",
+			       *(uint16_t *)(fsm + 88), *(uint16_t *)(fsm + 90),
+			       *(uint32_t *)(fsm + 92),
+			       *(uint16_t *)(fsm + 88 + 112 * 8),
+			       *(uint16_t *)(fsm + 90 + 112 * 8),
+			       *(uint32_t *)(fsm + 92 + 112 * 8));
+		}
+	}
 	return 0;
 }
 
@@ -20540,6 +20574,17 @@ int32_t *awb_normalise(int32_t *arg1)
 				     0, 0x10);
 	for (i = 0; i < 4; i++)
 		*(int32_t *)(fsm + 0x760 + 4 * i) = gain[i] + offset;
+	if (t20_trace_events) {
+		static unsigned int calls, prints;
+
+		if (calls++ % 16 == 0 && prints++ < 40)
+			printk(KERN_INFO "T20AWB normalise static=%u/%u/%u/%u awb=%u/%u out=%d/%d/%d/%d\n",
+			       *(uint16_t *)(fsm + 0x770), *(uint16_t *)(fsm + 0x772),
+			       *(uint16_t *)(fsm + 0x774), *(uint16_t *)(fsm + 0x776),
+			       *(uint16_t *)(fsm + 0x18), *(uint16_t *)(fsm + 0x1a),
+			       *(int32_t *)(fsm + 0x760), *(int32_t *)(fsm + 0x764),
+			       *(int32_t *)(fsm + 0x768), *(int32_t *)(fsm + 0x76c));
+	}
 	return (int32_t *)(fsm + 0x760);
 }
 
