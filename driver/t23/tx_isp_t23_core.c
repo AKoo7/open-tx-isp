@@ -15930,10 +15930,9 @@ static void regtrace_framechan_stream_off_owned(struct file *file,
     mutex_unlock(&regtrace_framechan_stream_lock);
 }
 
-/* tx-isp STREAMON/STREAMOFF, serialised with the frame channels. */
-static void regtrace_t23_txisp_stream(int enable, const char *reason)
+/* tx-isp STREAMON/STREAMOFF; caller holds regtrace_framechan_stream_lock. */
+static void regtrace_t23_txisp_stream_locked(int enable, const char *reason)
 {
-    mutex_lock(&regtrace_framechan_stream_lock);
     if (enable) {
         regtrace_t23_enable_stream_clks();
         regtrace_t23_source_input_stream(1, reason);
@@ -15947,6 +15946,13 @@ static void regtrace_t23_txisp_stream(int enable, const char *reason)
         regtrace_t23_stream_irq_gate(0, reason, -1);
     }
     regtrace_t23_txisp_streaming = enable != 0;
+}
+
+/* tx-isp STREAMON/STREAMOFF, serialised with the frame channels. */
+static void regtrace_t23_txisp_stream(int enable, const char *reason)
+{
+    mutex_lock(&regtrace_framechan_stream_lock);
+    regtrace_t23_txisp_stream_locked(enable, reason);
     mutex_unlock(&regtrace_framechan_stream_lock);
 }
 
@@ -15954,16 +15960,16 @@ static void regtrace_t23_txisp_stream(int enable, const char *reason)
  * Last close of /dev/tx-isp. Frame channels still streaming belong to open
  * framechan files, whose own close stops them (and the input with the last
  * one). Without any, an input left on by a tx-isp STREAMON is stopped here.
+ * Check and stop run in one critical section, so a framechan STREAMON from a
+ * still-open framechan fd cannot set its stream_mask bit in between and then
+ * find the input, TISP and IRQ gate switched off under it.
  */
 static void regtrace_t23_txisp_last_close(void)
 {
-    bool stop;
-
     mutex_lock(&regtrace_framechan_stream_lock);
-    stop = regtrace_t23_txisp_streaming && !regtrace_framechan_stream_mask;
+    if (regtrace_t23_txisp_streaming && !regtrace_framechan_stream_mask)
+        regtrace_t23_txisp_stream_locked(0, "tx-isp-last-close");
     mutex_unlock(&regtrace_framechan_stream_lock);
-    if (stop)
-        regtrace_t23_txisp_stream(0, "tx-isp-last-close");
 }
 
 static void regtrace_framechan_stream_off_locked(int channel,
