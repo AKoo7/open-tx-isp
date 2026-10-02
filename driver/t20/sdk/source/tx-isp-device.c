@@ -17,6 +17,18 @@
 #include "tx-isp-csi.h"
 #include "tx-isp-video-in.h"
 #include "apical-isp/tx-isp-core.h"
+
+/* Bring-up tracing of the pipeline, subdev notify and video-in paths (the
+ * notify trace runs for every frame-channel event, ~5 lines a second while
+ * streaming). The vendor module prints none of it: off unless t20_trace=1. */
+int t20_trace;
+module_param(t20_trace, int, 0644);
+MODULE_PARM_DESC(t20_trace, "1: log the T20TRACE bring-up trace lines");
+#define T20_TRACE(fmt, ...) do {                                        \
+		if (unlikely(t20_trace))                                \
+			printk(KERN_INFO "T20TRACE " fmt, ##__VA_ARGS__); \
+	} while (0)
+
 static int tx_isp_media_pipeline_set_clk(struct tx_isp_media_pipeline *p, int state)
 {
 	struct isp_private_ioctl ioctl;
@@ -26,13 +38,13 @@ static int tx_isp_media_pipeline_set_clk(struct tx_isp_media_pipeline *p, int st
 	ioctl.dir = TX_ISP_PRIVATE_IOCTL_SET;
 	ioctl.cmd = TX_ISP_PRIVATE_IOCTL_MODULE_CLK;
 	ioctl.value = state;
-	printk(KERN_INFO "T20TRACE pipeline_clk enter p=%p state=%d\n", p, state);
+	T20_TRACE("pipeline_clk enter p=%p state=%d\n", p, state);
 	while(index < TX_ISP_MAX_GRP_IDX && p->subdevs[index]){
 		sd = p->subdevs[index];
-		printk(KERN_INFO "T20TRACE pipeline_clk call idx=%d sd=%p name=%s ops=%p core=%p\n",
+		T20_TRACE("pipeline_clk call idx=%d sd=%p name=%s ops=%p core=%p\n",
 		       index, sd, sd->name, sd->ops, sd->ops ? sd->ops->core : NULL);
 		ret = v4l2_subdev_call(sd, core, ioctl, VIDIOC_ISP_PRIVATE_IOCTL, &ioctl);
-		printk(KERN_INFO "T20TRACE pipeline_clk done idx=%d ret=%d\n", index, ret);
+		T20_TRACE("pipeline_clk done idx=%d ret=%d\n", index, ret);
 		if(ret < 0 && ret != -ENOIOCTLCMD)
 			break;
 		index++;
@@ -51,13 +63,13 @@ static int tx_isp_media_pipeline_set_power(struct tx_isp_media_pipeline *p, int 
 	struct v4l2_subdev *sd = NULL;
 	int ret = 0,index = 0;
 
-	printk(KERN_INFO "T20TRACE pipeline_power enter p=%p state=%d\n", p, state);
+	T20_TRACE("pipeline_power enter p=%p state=%d\n", p, state);
 	while(index < TX_ISP_MAX_GRP_IDX && p->subdevs[index]){
 		sd = p->subdevs[index];
-		printk(KERN_INFO "T20TRACE pipeline_power call idx=%d sd=%p name=%s ops=%p core=%p\n",
+		T20_TRACE("pipeline_power call idx=%d sd=%p name=%s ops=%p core=%p\n",
 		       index, sd, sd->name, sd->ops, sd->ops ? sd->ops->core : NULL);
 		ret = v4l2_subdev_call(sd, core, s_power, state);
-		printk(KERN_INFO "T20TRACE pipeline_power done idx=%d ret=%d\n", index, ret);
+		T20_TRACE("pipeline_power done idx=%d ret=%d\n", index, ret);
 		if(ret < 0 && ret != -ENOIOCTLCMD)
 			break;
 		index++;
@@ -73,7 +85,7 @@ static int tx_isp_media_pipeline_set_power(struct tx_isp_media_pipeline *p, int 
 static int tx_isp_media_pipeline_prepare(struct tx_isp_media_pipeline *p) // struct tx_isp_video_in *vin)
 {
 	int ret = ISP_SUCCESS;
-	printk(KERN_INFO "T20TRACE pipeline_prepare enter p=%p ops=%p\n",
+	T20_TRACE("pipeline_prepare enter p=%p ops=%p\n",
 	       p, p ? p->ops : NULL);
 	if(!p)
 		return -ISP_ERROR;
@@ -85,7 +97,7 @@ static int tx_isp_media_pipeline_prepare(struct tx_isp_media_pipeline *p) // str
 		tx_isp_media_pipeline_set_clk(p, false);
 	}
 
-	printk(KERN_INFO "T20TRACE pipeline_prepare exit ret=%d\n", ret);
+	T20_TRACE("pipeline_prepare exit ret=%d\n", ret);
 	return ret;
 }
 
@@ -132,14 +144,14 @@ static int tx_isp_media_pipeline_init(struct tx_isp_media_pipeline *p, int state
 		return -ISP_ERROR;
 	}
 
-	printk(KERN_INFO "T20TRACE pipeline_init enter p=%p state=%d\n", p, state);
+	T20_TRACE("pipeline_init enter p=%p state=%d\n", p, state);
 	while(index < TX_ISP_MAX_GRP_IDX && p->subdevs[index]){
 		sd = p->subdevs[index];
-		printk(KERN_INFO "T20TRACE pipeline_init call idx=%d sd=%p name=%s ops=%p core=%p init=%p\n",
+		T20_TRACE("pipeline_init call idx=%d sd=%p name=%s ops=%p core=%p init=%p\n",
 		       index, sd, sd->name, sd->ops, sd->ops ? sd->ops->core : NULL,
 		       (sd->ops && sd->ops->core) ? sd->ops->core->init : NULL);
 		ret = v4l2_subdev_call(sd, core, init, state);
-		printk(KERN_INFO "T20TRACE pipeline_init done idx=%d ret=%d\n", index, ret);
+		T20_TRACE("pipeline_init done idx=%d ret=%d\n", index, ret);
 		if(ret < 0 && ret != -ENOIOCTLCMD){
 			printk("^^^ %s[%d] name = %s ^^^\n", __func__,__LINE__, sd->name);
 			break;
@@ -153,7 +165,7 @@ static int tx_isp_media_pipeline_init(struct tx_isp_media_pipeline *p, int state
 			index--;
 		}
 	}
-	printk(KERN_INFO "T20TRACE pipeline_init exit ret=%d\n", ret);
+	T20_TRACE("pipeline_init exit ret=%d\n", ret);
 	return ret;
 }
 
@@ -267,7 +279,7 @@ static void tx_isp_v4l2_dev_notify(struct v4l2_subdev *sd, unsigned int notifica
 	tx_isp_device_t* ispdev = sd_to_tx_ispdev(sd);
 	struct tx_isp_notify_argument *notify = (struct tx_isp_notify_argument *)arg;
 //	printk("%s[%d] sd->name = %s\n",__func__, __LINE__, sd->name);
-	printk(KERN_INFO "T20TRACE notify enter sd=%p name=%s event=0x%x arg=%p\n",
+	T20_TRACE("notify enter sd=%p name=%s event=0x%x arg=%p\n",
 	       sd, sd->name, notification, arg);
 	switch(notification){
 		case TX_ISP_NOTIFY_GET_PIPELINE:
@@ -299,7 +311,7 @@ static void tx_isp_v4l2_dev_notify(struct v4l2_subdev *sd, unsigned int notifica
 		default:
 			break;
 	}
-	printk(KERN_INFO "T20TRACE notify exit event=0x%x ret=%d value=%p\n",
+	T20_TRACE("notify exit event=0x%x ret=%d value=%p\n",
 	       notification, notify->ret, (void *)notify->value);
 }
 static int tx_isp_subdev_match(struct device *dev, void *data)
