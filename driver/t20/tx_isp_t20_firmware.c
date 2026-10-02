@@ -6142,11 +6142,12 @@ int32_t system_awb_blue_gain(int32_t arg1, char arg2, char arg3, int32_t *arg4)
 {
     uint32_t mode = (uint32_t)arg3 & 0xff;
 
+    /* firmware 0x1120: 0 sets, 1 gets, anything else is refused (the
+     * recovered branches were swapped: a set stored nothing) */
     if (mode != 1) {
-        if (mode != 0) {
-            stab[50] = (uint8_t)arg2;
+        if (mode != 0)
             return 2;
-        }
+        stab[50] = (uint8_t)arg2;
         return 0;
     }
 
@@ -7648,7 +7649,7 @@ int32_t awb_red_gain(void *arg1, int32_t arg2, char arg3, int32_t *arg4)
         if (mode == 1) {
             int32_t val;
             if ((int8_t)stab[12] == 0)
-                val = (int32_t)((uintptr_t *)(uintptr_t)(arg1))[0x760 / 2] >> 1;
+                val = (int32_t)(*(uint16_t *)((char *)arg1 + 0x760) >> 1);
             else
                 val = (int32_t)(uint8_t)stab[49];
             *arg4 = val;
@@ -7678,7 +7679,7 @@ int32_t awb_blue_gain(void *arg1, int32_t arg2, char arg3, int32_t *arg4)
 		if (a2 == 1) {
 			uint32_t v0_1;
 			if ((uint8_t)stab[12] == 0)
-				v0_1 = (uint16_t)((uintptr_t *)(uintptr_t)(arg1))[0x762 / 2] >> 1;
+				v0_1 = (uint32_t)(*(uint16_t *)((char *)arg1 + 0x762) >> 1);
 			else
 				v0_1 = (uint8_t)stab[50];
 			*arg4 = v0_1;
@@ -15693,45 +15694,27 @@ int32_t AWB_fsm_switch_state(int32_t *arg1, int32_t arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000028350 origin=model_output original=AWB_fsm_process_state */
+/*
+ * libt20-firmware 3.12.0 awb_mesh_NBP_fsm.c.o 0x2c0: a jump table on the
+ * state, followed until a state without a successor. Per frame the stats
+ * event switches to 4 and this runs 4 zones -> 3 grey-world average -> 5
+ * temperature/shift -> 9/10 light source -> 6 update -> 7 normalise (the
+ * output gains) -> 8 (stop until the next event); from 0 (init) it moves
+ * to 1. The recovered version did one step with a wrong successor table
+ * (4 -> 10), so awb_normalise never ran from the per-frame chain.
+ */
 int32_t AWB_fsm_process_state(int32_t *arg1)
 {
+	static const int8_t next_state[11] = {
+		1, -1, -1, 5, 3, 9, 7, 8, -1, 10, 6,
+	};
 	int32_t state = arg1[1];
-	int32_t next_state;
 
-	if (state >= 11)
-		return 0;
-
-	switch (state) {
-	case 0:
-		next_state = 3;
-		break;
-	case 1:
-		next_state = 9;
-		break;
-	case 2:
-		next_state = 7;
-		break;
-	case 3:
-		next_state = 8;
-		break;
-	case 4:
-		next_state = 10;
-		break;
-	case 5:
-		next_state = 6;
-		break;
-	case 6:
-		next_state = 1;
-		break;
-	case 7:
-		next_state = 5;
-		break;
-	default:
-		return 0;
+	while ((uint32_t)state < 11u && next_state[state] >= 0) {
+		state = next_state[state];
+		AWB_fsm_switch_state(arg1, state);
 	}
-
-	AWB_fsm_switch_state(arg1, next_state);
-	return 0x23;
+	return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002840c origin=model_output original=AWB_fsm_process_event */
