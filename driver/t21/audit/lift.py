@@ -175,7 +175,13 @@ class Lifter:
             if r and r[0] == 5:
                 # the paired LO16 usually follows; gcc may also schedule it
                 # before the HI16 across a branch (func_zone_ct_weight)
-                for j in list(range(i + 1, n)) + list(range(i - 1, -1, -1)):
+                # prefer a LO16 based on the lui's own register: with
+                # section-relative relocs several HI16s of one section can
+                # be interleaved (jz_isp_lsc_ct)
+                rt_ = (ins[i] >> 16) & 31
+                order_ = list(range(i + 1, n)) + list(range(i - 1, -1, -1))
+                order_ = [j for j in order_ if (ins[j] >> 21) & 31 == rt_] + order_
+                for j in order_:
                     rj = rel[j]
                     if rj and rj[0] == 6 and rj[1] is r[1]:
                         hi_add[i] = ((ins[i] & 0xffff) << 16) + s16(ins[j] & 0xffff)
@@ -191,7 +197,7 @@ class Lifter:
                 return (w >> 11) & 31
             if op == 28:
                 return (w >> 11) & 31 if (w & 63) in (2, 32) else None
-            if op in (8, 9, 10, 11, 12, 13, 14, 15, 32, 33, 34, 35, 36, 37, 38):
+            if op in (8, 9, 10, 11, 12, 13, 14, 15, 32, 33, 34, 35, 36, 37, 38):  # 15 = lui
                 return (w >> 16) & 31
             if op == 3: return 31
             return None
@@ -269,7 +275,7 @@ class Lifter:
                 return (w >> 11) & 31 if (w & 63) in (2, 32) else None
             if op == 31:
                 return (w >> 16) & 31 if (w & 63) in (0, 4) else (w >> 11) & 31
-            if op in (8, 9, 10, 11, 12, 13, 14, 15, 32, 33, 34, 35, 36, 37, 38):
+            if op in (8, 9, 10, 11, 12, 13, 14, 15, 32, 33, 34, 35, 36, 37, 38):  # 15 = lui
                 return (w >> 16) & 31
             if op == 3: return 31
             return None
