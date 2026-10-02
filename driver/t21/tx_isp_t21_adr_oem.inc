@@ -611,6 +611,7 @@ static const struct lift_va { uint32_t va, size; uintptr_t ours; } lift_vamap[] 
  * at or below va and va must lie within it), so a stale or racing slot can
  * only cause a miss. */
 static uint16_t lift_xlate_cache[64];
+static uint8_t lift_xlate_scratch[4096] __aligned(8);
 static uint32_t lift_xlate(uint32_t va)
 {
 	int lo = 0, hi = ARRAY_SIZE(lift_vamap) - 1, best = -1;
@@ -642,8 +643,11 @@ static uint32_t lift_xlate(uint32_t va)
 	    lift_vamap[best + 1].va - va <= 64)
 		return (uint32_t)(lift_vamap[best + 1].ours -
 				  (lift_vamap[best + 1].va - va));
+	/* Not a stock object we know: never hand the raw stock address back
+	 * (it is unmapped in this kernel and the access would oops, possibly
+	 * with IRQs off).  Point it at a zeroed scratch area instead. */
 	WARN_ONCE(1, "lift: unmapped stock address %#x\n", va);
-	return va;
+	return (uint32_t)(uintptr_t)lift_xlate_scratch;
 }
 #define LIFT_XLATE(va) lift_xlate((uint32_t)(va))
 static uint64_t L_tisp_adr_process(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, uint32_t r_a3, uint32_t csp)
@@ -20278,6 +20282,15 @@ static uint64_t L_dispatch(uint32_t fn, uint32_t r_a0, uint32_t r_a1, uint32_t r
 	uint32_t r_v0 = 0, r_v1 = 0;
 	uint32_t h_ = (fn >> 2) & 255;
 	(void)r_v1;
+	/* Every real target (lifted entry or kernel/module C helper) lies in
+	 * KSEG0/KSEG2, like this module itself.  NULL or another low value
+	 * would hit an empty cache slot or the C fallback and jump to it;
+	 * refuse it instead.  The bound comes from our own address so a
+	 * host emulator that maps the module low still runs this code. */
+	if (unlikely(!fn || fn < ((uint32_t)(uintptr_t)&lift_fn_cache & 0x80000000u))) {
+		WARN_ONCE(1, "lift: bad indirect call target %#x\n", fn);
+		return 0;
+	}
 	if (ACCESS_ONCE(lift_fn_cache[h_]) == fn)
 		return ((lift_fn_t)(uintptr_t)fn)(r_a0, r_a1, r_a2, r_a3, sp_base);
 	if (fn == (uint32_t)(uintptr_t)&L_tisp_adr_process) { ACCESS_ONCE(lift_fn_cache[h_]) = fn; return L_tisp_adr_process(r_a0, r_a1, r_a2, r_a3, sp_base); }
