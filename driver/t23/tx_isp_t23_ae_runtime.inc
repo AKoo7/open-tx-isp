@@ -479,7 +479,7 @@ static void regtrace_t23_source_ae_hlil_trigger(void)
     unsigned long flags;
 
     if (!regtrace_t23_source_ae_hlil || !regtrace_t23_sensor_streaming ||
-        !regtrace_t23_core_started)
+        !regtrace_t23_core_started || regtrace_t23_source_ae_oem)
         return;
 
     spin_lock_irqsave(&regtrace_t23_ae_hlil_lock, flags);
