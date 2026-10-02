@@ -34,8 +34,7 @@ static struct t31_wdr_fpga wdr_fpga = {
 	.secondary = param_d_thr_2_software_in_array,
 	.low = param_multiValueLow_software_in_array,
 	.high = param_multiValueHigh_software_in_array,
-	.hist = {{wdr_stats.rgb[0][0], wdr_stats.rgb[0][1], wdr_stats.rgb[0][2]},
-		 {wdr_stats.rgb[1][0], wdr_stats.rgb[1][1], wdr_stats.rgb[1][2]}},
+	/* .hist points into wdr_buf->stats, set by t31_wdr_buffers_get() */
 	.map = {wdr_mapR_software_out, wdr_mapG_software_out, wdr_mapB_software_out},
 	.labels = param_wdr_thrLable_array,
 	.label_bits = wdr_thrLableN_software_out,
@@ -44,6 +43,31 @@ static struct t31_wdr_fpga wdr_fpga = {
 	.detail_in = param_wdr_detial_para_software_in_array,
 	.detail = wdr_detial_para_software_out
 };
+
+/* Caller holds wdr_control_lock (process context). */
+static int t31_wdr_buffers_get(void)
+{
+	int e, c;
+
+	if (wdr_buf)
+		return 0;
+	wdr_buf = vzalloc(sizeof(*wdr_buf));
+	if (!wdr_buf)
+		return -ENOMEM;
+	for (e = 0; e < 2; ++e)
+		for (c = 0; c < 3; ++c)
+			wdr_fpga.hist[e][c] = wdr_buf->stats.rgb[e][c];
+	return 0;
+}
+
+/* Caller holds wdr_control_lock, wdr_ready is clear, the WDR interrupt is
+ * synchronised and the worker cancelled (tisp_deinit_free). */
+static void t31_wdr_buffers_free(void)
+{
+	memset(wdr_fpga.hist, 0, sizeof(wdr_fpga.hist));
+	vfree(wdr_buf);
+	wdr_buf = NULL;
+}
 
 static void wdr_write(void *context, u32 reg, u32 value)
 {
@@ -120,7 +144,7 @@ static int tiziano_wdr_5x5_param(void)
 {
 	return t31_wdr_spatial(param_wdr_weight_lut_def,
 		param_centre5x5_w_distance_array_def, width_wdr_def,
-		height_wdr_def, param_wdr_tool_control_array[2], &wdr_scratch.spatial);
+		height_wdr_def, param_wdr_tool_control_array[2], &wdr_buf->scratch.spatial);
 }
 
 static int tiziano_wdr_params_init(void)
@@ -260,7 +284,9 @@ int Tiziano_wdr_fpga(u32 *a1, u32 *a2, u32 *a3, u32 *a4, u32 *a5,
 	int ret;
 	/* External callers share the instance scratch with the frame worker. */
 	mutex_lock(&wdr_control_lock);
-	ret = t31_wdr_fpga_calculate(&p, &wdr_scratch);
+	ret = t31_wdr_buffers_get();
+	if (!ret)
+		ret = t31_wdr_fpga_calculate(&p, &wdr_buf->scratch);
 	mutex_unlock(&wdr_control_lock);
 	return ret;
 }
@@ -288,7 +314,7 @@ static int tiziano_wdr_algorithm(void)
 			param_multiValueLow_software_in_array[min(i, 25U)],
 			param_multiValueHigh_software_in_array[min(i, 25U)]);
 	param_xy_pix_low_software_in_array[14] = param_wdr_degost_para_array[12];
-	ret = t31_wdr_fpga_calculate(&wdr_fpga, &wdr_scratch);
+	ret = t31_wdr_fpga_calculate(&wdr_fpga, &wdr_buf->scratch);
 	if (ret)
 		return ret;
 	if (param_wdr_tool_control_array[0] == 1)
@@ -320,7 +346,7 @@ static int tiziano_wdr_algorithm(void)
 
 static int tiziano_wdr_get_data(void *buf)
 {
-	return t31_wdr_unpack_stats(&wdr_stats, buf, T31_WDR_STATS_BYTES);
+	return t31_wdr_unpack_stats(&wdr_buf->stats, buf, T31_WDR_STATS_BYTES);
 }
 
 static void t31_wdr_work(struct work_struct *work)
@@ -336,7 +362,7 @@ static void t31_wdr_work(struct work_struct *work)
 		spin_unlock_irqrestore(&wdr_stats_lock, flags);
 		goto done;
 	}
-	memcpy(wdr_packed, wdr_pending, sizeof(wdr_packed));
+	memcpy(wdr_buf->packed, wdr_buf->pending, sizeof(wdr_buf->packed));
 	memcpy(wdr_blocks_snapshot, wdr_block_mean1, sizeof(wdr_blocks_snapshot));
 	wdr_stats_pending = false;
 	if (wdr_ev_pending) {
@@ -344,7 +370,7 @@ static void t31_wdr_work(struct work_struct *work)
 		wdr_ev_pending = false;
 	}
 	spin_unlock_irqrestore(&wdr_stats_lock, flags);
-	ret = tiziano_wdr_get_data(wdr_packed);
+	ret = tiziano_wdr_get_data(wdr_buf->packed);
 	if (!ret)
 		ret = tiziano_wdr_algorithm();
 	if (!ret) {
@@ -376,7 +402,7 @@ static irqreturn_t wdr_interrupt_wrapper(int irq, void *context)
 int tisp_wdr_init(void)
 {
 	memset(&wdr_ev, 0, sizeof(wdr_ev));
-	memset(&wdr_stats, 0, sizeof(wdr_stats));
+	memset(&wdr_buf->stats, 0, sizeof(wdr_buf->stats));
 	wdr_block_mean1_end = wdr_block_mean1_end_old = 0;
 	wdr_frame = 0;
 	wdr_stats_pending = wdr_ev_pending = false;
@@ -402,6 +428,9 @@ int tiziano_wdr_init(u32 width, u32 height)
 	ACCESS_ONCE(wdr_ready) = false;
 	cancel_work_sync(&wdr_work);
 	mutex_lock(&wdr_control_lock);
+	ret = t31_wdr_buffers_get();
+	if (ret)
+		goto done;
 	width_wdr_def = width;
 	height_wdr_def = height;
 	ret = tisp_wdr_init();

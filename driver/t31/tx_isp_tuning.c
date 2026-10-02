@@ -1715,12 +1715,23 @@ uint32_t data_9a450 = 0x2700;   /* Current CT value - global cache */
 
 #include "tx_isp_t31_wdr_control.h"
 static struct t31_wdr_ev wdr_ev;
-static struct t31_wdr_stats wdr_stats;
-static struct t31_wdr_scratch wdr_scratch;
 static DEFINE_SPINLOCK(wdr_stats_lock);
 static DEFINE_MUTEX(wdr_control_lock);
-static u32 wdr_pending[T31_WDR_STATS_BYTES / 4];
-static u32 wdr_packed[T31_WDR_STATS_BYTES / 4];
+/*
+ * WDR working memory (~27 KB), only needed in WDR mode: allocated by
+ * tiziano_wdr_init() (or Tiziano_wdr_fpga()) and freed by
+ * tisp_deinit_free().  The WDR interrupt writes pending[] only while
+ * wdr_ready is set, which is raised after the allocation and dropped
+ * (with synchronize_irq and the worker cancelled) before the free.
+ * Changed only under wdr_control_lock.
+ */
+struct t31_wdr_buffers {
+	struct t31_wdr_stats stats;
+	struct t31_wdr_scratch scratch;
+	u32 pending[T31_WDR_STATS_BYTES / 4];	/* IRQ -> worker */
+	u32 packed[T31_WDR_STATS_BYTES / 4];	/* worker copy */
+};
+static struct t31_wdr_buffers *wdr_buf;
 static u32 wdr_blocks_snapshot[225];
 static u32 wdr_hist_Y1[256];
 static void *wdr_dma_buffer;
@@ -20157,7 +20168,7 @@ int tiziano_wdr_interrupt_static(void)
     struct tisp_event_record event = {0};
     unsigned long flags;
     u32 address, offset;
-    if (!ACCESS_ONCE(wdr_ready) || !wdr_dma_buffer)
+    if (!ACCESS_ONCE(wdr_ready) || !wdr_dma_buffer || !wdr_buf)
         return 0;
     address = system_reg_read(0x2680);
     if (address < wdr_dma_phys || address >= wdr_dma_phys + 0x8000)
@@ -20168,7 +20179,7 @@ int tiziano_wdr_interrupt_static(void)
     private_dma_cache_sync(NULL, (u8 *)wdr_dma_buffer + offset,
                            T31_WDR_DMA_SLOT_BYTES, DMA_FROM_DEVICE);
     spin_lock_irqsave(&wdr_stats_lock, flags);
-    t31_wdr_compact_stats((u8 *)wdr_pending, sizeof(wdr_pending),
+    t31_wdr_compact_stats((u8 *)wdr_buf->pending, sizeof(wdr_buf->pending),
                          (u8 *)wdr_dma_buffer + offset, T31_WDR_DMA_SLOT_BYTES);
     wdr_stats_pending = true;
     spin_unlock_irqrestore(&wdr_stats_lock, flags);
@@ -29685,6 +29696,7 @@ void tisp_deinit_free(void)
     wdr_dma_buffer = NULL;
     wdr_dma_phys = 0;
     wdr_stats_pending = false;
+    t31_wdr_buffers_free();
     mutex_unlock(&wdr_control_lock);
 }
 
