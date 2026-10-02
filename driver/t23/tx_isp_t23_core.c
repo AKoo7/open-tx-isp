@@ -11950,6 +11950,33 @@ static void regtrace_t23_direct_vic_mdma_stream(int channel,
            readl(base + 0x304), readl(base + 0x308), reason ? reason : "?");
 }
 
+/*
+ * Stop the core and its statistics DMA rings (the ring controls written by
+ * regtrace_t23_program_core_dma()) before the buffers go away.  Without this
+ * the registers kept the physical addresses of freed slab pages across a
+ * failed start and across module reloads, and statistics written there
+ * corrupted the page cache (the IQ file then failed its CRC with -EBADMSG,
+ * -77 on MIPS) and inode memory (prune_icache_sb oops on the next insmod).
+ */
+static void regtrace_t23_core_dma_disable(const char *reason)
+{
+    /* Only this instance's rings, and never with the core clock off. */
+    if (!regtrace_t23_core_dma_bufs[0].virt || !regtrace_t23_core_clks_enabled)
+        return;
+    system_reg_write(0x800U, 0);
+    system_reg_write(0xb000U, 0);
+    system_reg_write(0xa04cU, 0);
+    system_reg_write(0xa84cU, 0);
+    system_reg_write(0xb04cU, 0);
+    system_reg_write(0x44a4U, 0);
+    system_reg_write(0x5b80U, 0);
+    system_reg_write(0xb8b8U, 0);
+    wmb();
+    printk(KERN_WARNING
+           "tx_isp_t23_recovered: core statistics DMA disabled reason=%s\n",
+           reason ? reason : "?");
+}
+
 static void regtrace_t23_core_dma_free(void)
 {
     unsigned int i;
@@ -14961,7 +14988,7 @@ copy_out:
  * so a second opener (a tuning tool) does not wipe the streamer's state.
  */
 static atomic_t regtrace_tx_isp_open_count = ATOMIC_INIT(0);
-static void regtrace_t23_txisp_stream(int enable, const char *reason);
+static int regtrace_t23_txisp_stream(int enable, const char *reason);
 static void regtrace_t23_txisp_last_close(void);
 
 static int regtrace_tx_isp_open(struct inode *inode, struct file *file)
@@ -15046,9 +15073,11 @@ static long regtrace_tx_isp_ioctl_body(struct file *file, unsigned int cmd,
         return ret;
     }
 
-    if (cmd == REGTRACE_T23_VIDIOC_STREAMON)
-        regtrace_t23_txisp_stream(1, "tx-isp-streamon");
-    else if (cmd == REGTRACE_T23_VIDIOC_STREAMOFF)
+    if (cmd == REGTRACE_T23_VIDIOC_STREAMON) {
+        ret = regtrace_t23_txisp_stream(1, "tx-isp-streamon");
+        if (ret)
+            return ret;
+    } else if (cmd == REGTRACE_T23_VIDIOC_STREAMOFF)
         regtrace_t23_txisp_stream(0, "tx-isp-streamoff");
 
     if (cmd == REGTRACE_T23_REGISTER_SENSOR ||
@@ -15886,9 +15915,43 @@ static long regtrace_framechan_wait_frame(int channel, unsigned long arg)
     return 0;
 }
 
-static void regtrace_framechan_stream_on(struct file *file, int channel)
+/*
+ * Start the TISP core (IQ banks, statistics DMA rings, run) before any input
+ * is switched on.  Called with regtrace_framechan_stream_lock held and the
+ * stream clocks enabled.  A refused start must fail STREAMON: the sensor,
+ * VIC, MSCA and VIC MDMA were otherwise started without a configured core
+ * ("unmatched MSCA completion"), and the core statistics DMA registers kept
+ * the previous module instance's freed buffer addresses while frames flowed.
+ */
+static int regtrace_t23_tisp_prestart(const char *reason)
 {
+    int ret;
+
+    if (!regtrace_t23_direct_tisp_stream_regs)
+        return 0;
+    ret = regtrace_t23_source_core_set_stream(1, reason);
+    if (ret) {
+        printk(KERN_ERR
+               "tx_isp_t23_recovered: refusing TISP stream start ret=%d reason=%s\n",
+               ret, reason ? reason : "?");
+        /* A start that failed after programming the rings. */
+        if (!regtrace_t23_core_started)
+            regtrace_t23_core_dma_disable(reason);
+    }
+    return ret;
+}
+
+static int regtrace_framechan_stream_on(struct file *file, int channel)
+{
+    int ret;
+
     mutex_lock(&regtrace_framechan_stream_lock);
+    regtrace_t23_enable_stream_clks();
+    ret = regtrace_t23_tisp_prestart("framechan-streamon");
+    if (ret) {
+        mutex_unlock(&regtrace_framechan_stream_lock);
+        return ret;
+    }
     if (channel >= 0 && channel < REGTRACE_FRAMECHAN_COUNT) {
         regtrace_framechan_stream_mask |= 1U << channel;
         regtrace_framechan_stream_owner[channel] = file;
@@ -15903,6 +15966,7 @@ static void regtrace_framechan_stream_on(struct file *file, int channel)
     regtrace_t23_direct_vic_mdma_stream(channel, 1, "framechan-streamon");
     regtrace_t23_stream_irq_gate(1, "framechan-streamon", channel);
     mutex_unlock(&regtrace_framechan_stream_lock);
+    return 0;
 }
 
 /*
@@ -15939,10 +16003,15 @@ static void regtrace_framechan_stream_off_owned(struct file *file,
 }
 
 /* tx-isp STREAMON/STREAMOFF; caller holds regtrace_framechan_stream_lock. */
-static void regtrace_t23_txisp_stream_locked(int enable, const char *reason)
+static int regtrace_t23_txisp_stream_locked(int enable, const char *reason)
 {
     if (enable) {
+        int ret;
+
         regtrace_t23_enable_stream_clks();
+        ret = regtrace_t23_tisp_prestart(reason);
+        if (ret)
+            return ret;
         regtrace_t23_source_input_stream(1, reason);
         regtrace_t23_direct_vic_input_stream(1, reason);
         regtrace_t23_tisp_stream_regs(1, -1, reason);
@@ -15954,14 +16023,18 @@ static void regtrace_t23_txisp_stream_locked(int enable, const char *reason)
         regtrace_t23_stream_irq_gate(0, reason, -1);
     }
     regtrace_t23_txisp_streaming = enable != 0;
+    return 0;
 }
 
 /* tx-isp STREAMON/STREAMOFF, serialised with the frame channels. */
-static void regtrace_t23_txisp_stream(int enable, const char *reason)
+static int regtrace_t23_txisp_stream(int enable, const char *reason)
 {
+    int ret;
+
     mutex_lock(&regtrace_framechan_stream_lock);
-    regtrace_t23_txisp_stream_locked(enable, reason);
+    ret = regtrace_t23_txisp_stream_locked(enable, reason);
     mutex_unlock(&regtrace_framechan_stream_lock);
+    return ret;
 }
 
 /*
@@ -16179,10 +16252,10 @@ static long regtrace_framechan_ioctl_body(struct file *file, unsigned int cmd,
             channel, arg, file && (file->f_flags & O_NONBLOCK));
         break;
     case REGTRACE_T23_VIDIOC_STREAMON:
-        regtrace_framechan_stream_on(file, channel);
+        ret = regtrace_framechan_stream_on(file, channel);
         if (regtrace_t23_log_framechan_payloads)
-            printk(KERN_WARNING "tx_isp_t23_recovered: framechan%d streamon arg=0x%lx ret=0 core=%p vic=%p csi=%p fs=%p\n",
-                   channel, arg, regtrace_t23_core_sd, regtrace_t23_vic_sd,
+            printk(KERN_WARNING "tx_isp_t23_recovered: framechan%d streamon arg=0x%lx ret=%ld core=%p vic=%p csi=%p fs=%p\n",
+                   channel, arg, (long)ret, regtrace_t23_core_sd, regtrace_t23_vic_sd,
                    regtrace_t23_csi_sd, regtrace_t23_fs_sd);
         break;
     case REGTRACE_T23_VIDIOC_STREAMOFF:
@@ -101514,6 +101587,8 @@ void cleanup_module(void)
      */
     regtrace_t23_stream_irq_gate(0, "module-exit", -1);
     regtrace_t23_source_core_set_stream(0, "module-exit");
+    /* Registers are still mapped here (the platforms go below). */
+    regtrace_t23_core_dma_disable("module-exit");
     cancel_work_sync(&regtrace_t23_source_ae_hlil_work_item);
     cancel_work_sync(&regtrace_t23_source_awb_hlil_work_item);
     /* Needs the VIC DMA device, which goes with the platforms. */
