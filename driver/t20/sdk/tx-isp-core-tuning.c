@@ -12,7 +12,7 @@
  * userspace.
  */
 #define isp_core_ops_g_ctrl isp_core_ops_g_ctrl_vendor
-#include "../../../external/ingenic-sdk/3.10.14/isp/t20/apical-isp/tx-isp-core-tuning.c"
+#include "source/apical-isp/tx-isp-core-tuning.c"
 #undef isp_core_ops_g_ctrl
 
 static unsigned short t20_core_fallback_one_line_expr_in_us(struct tx_isp_core_device *core)

@@ -1001,19 +1001,18 @@ int tx_isp_frame_channel_device_register(frame_chan_vdev_t *vdev)
 	v4l2_disable_ioctl_locking(vfd, VIDIOC_QBUF);
 	v4l2_disable_ioctl_locking(vfd, VIDIOC_DEFAULT_CMD_LISTEN_BUF);
 
+	/* open() can run as soon as the node is registered. */
+	vdev->interrupt_service_routine = frame_channel_video_irq_notify;
+	video_set_drvdata(vfd, vdev);
+	atomic_set(&vdev->state, TX_ISP_STATE_STOP);
+
 	ret = video_register_device(vfd, VFL_TYPE_GRABBER, -1);
 	if (ret < 0) {
 		ISP_PRINT(ISP_ERROR,"Failed to register video device\n");
 		goto free_video_device;
 	}
 
-	vdev->interrupt_service_routine = frame_channel_video_irq_notify;
-
-	video_set_drvdata(vfd, vdev);
-
 	set_bitmap(vdev->index);
-
-	atomic_set(&vdev->state, TX_ISP_STATE_STOP);
 #if 0
 	/* init v4l2_priority */
 	v4l2_prio_init(&camdev->prio);
