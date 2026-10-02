@@ -483,11 +483,30 @@ extern int apical_isp_day_or_night_s_ctrl_internal(struct tx_isp_core_device *co
 
 extern void isp_frame_done_wakeup(void);
 
+extern int t20_fw_context_ready(void);
+extern uint32_t t20_fw_context_word(unsigned int offset);
+
 static void t20_daynight_work(struct work_struct *work)
 {
 	struct tx_isp_core_device *core =
 		container_of(work, struct tx_isp_core_device, daynight_work);
 	int ret;
+
+	/* The switch is applied from process context, after the frame-done
+	 * IRQ that requested it.  By then the core may have been stopped or
+	 * be re-initialising the firmware context (apical_init() memsets it),
+	 * and the IQ parameters may be gone: re-arm the request instead of
+	 * running the calibration update against a half-built context. */
+	if (atomic_read(&core->state) < TX_ISP_STATE_START || !core->param ||
+	    !core->tun || !t20_fw_context_ready()) {
+		printk_ratelimited(KERN_WARNING "%s: ISP not ready, day/night "
+			"deferred (state=%d param=%p idx=0x%x fsm=0x%x)\n",
+			__func__, atomic_read(&core->state), core->param,
+			t20_fw_context_word(0), t20_fw_context_word(0x1500));
+		if (atomic_read(&core->state) >= TX_ISP_STATE_START)
+			core->isp_daynight_switch = 1;
+		return;
+	}
 
 	ret = apical_isp_day_or_night_s_ctrl_internal(core);
 	if (ret)
@@ -853,6 +872,9 @@ static int isp_core_ops_init(struct v4l2_subdev *sd, u32 on)
 			goto exit;
 		}
 		if (atomic_read(&core->state) == TX_ISP_STATE_START) {
+			/* no day/night update may outlive the running core */
+			core->isp_daynight_switch = 0;
+			cancel_work_sync(&core->daynight_work);
 			ret = kthread_stop(core->process_thread);
 			isp_clear_irq_source();
 			atomic_set(&core->state, TX_ISP_STATE_STOP);
