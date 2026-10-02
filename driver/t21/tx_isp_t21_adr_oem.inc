@@ -2694,7 +2694,7 @@ L_4748:
 
 static uint64_t L_apical_isp_core_ops_g_ctrl(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, uint32_t r_a3, uint32_t csp)
 {
-	uint32_t frame[24] __aligned(8);
+	uint32_t frame[24] __aligned(8) = { 0 };
 	uint32_t sp_base = (uint32_t)(uintptr_t)frame;
 	uint32_t r_at = 0, r_v0 = 0, r_v1 = 0, r_t0 = 0, r_t1 = 0, r_t2 = 0, r_t3 = 0, r_t4 = 0, r_t5 = 0, r_t6 = 0, r_t7 = 0, r_s0 = 0, r_s1 = 0, r_s2 = 0, r_s3 = 0, r_s4 = 0, r_s5 = 0, r_s6 = 0, r_s7 = 0, r_t8 = 0, r_t9 = 0, r_k0 = 0, r_k1 = 0, r_gp = 0, r_s8 = 0, r_ra = 0, r_hi = 0, r_lo = 0;
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;

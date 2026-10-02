@@ -18,6 +18,7 @@ HEAP = ['apical_isp_core_ops_s_ctrl', 'apical_isp_ae_s_roi_isra_45',
         'apical_isp_af_weight_s_attr_isra_54', 'apical_isp_ae_g_roi_isra_64',
         'apical_isp_ae_zone_g_ctrl_isra_69', 'apical_isp_ae_zone_weight_g_attr_isra_70',
         'apical_isp_af_weight_g_attr_isra_74', 'tisp_s_aeroi_weight']
+ZERO_STACK = ['apical_isp_core_ops_g_ctrl']
 SIG = '(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, uint32_t r_a3, uint32_t csp'
 
 def wrapper(prefix, name, words):
@@ -41,6 +42,13 @@ def main(path):
                 continue
             sys.exit('pattern not found: ' + name)
         s = s[:m.start()] + wrapper(m.group(1), name, int(m.group(2))) + s[m.end():]
+    # Lifted functions with an on-stack frame that copy_to_user() from it:
+    # zero the frame so a getter can never hand stale kernel stack to user.
+    for name in ZERO_STACK:
+        pat = re.compile(r'(static uint64_t L_%s%s\)\n\{\n\tuint32_t frame\[\d+\] __aligned\(8\))(;)' % (re.escape(name), re.escape(SIG)))
+        s, n = pat.subn(r'\1 = { 0 }\2', s)
+        if not n and not re.search(r'L_%s%s\)\n\{\n\tuint32_t frame\[\d+\] __aligned\(8\) = \{ 0 \};' % (re.escape(name), re.escape(SIG)), s):
+            sys.exit('zero-stack pattern not found: ' + name)
     if 'lift_frame_alloc(uint32_t words)' not in s:
         helper = ('static uint32_t *lift_frame_alloc(uint32_t words)\n{\n'
                   '\tuint32_t *f_ = private_kmalloc(words * 4, GFP_KERNEL);\n\n'

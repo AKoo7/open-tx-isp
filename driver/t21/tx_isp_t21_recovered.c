@@ -9307,7 +9307,10 @@ void *private_kmalloc(size_t size, gfp_t flags)
     void *p;
 
     t21_free_watch_check("kmalloc");
-    p = kmalloc(size, flags);
+    /* Always zeroed: the stock tuning getters kmalloc a bounce buffer, fill
+     * it field by field and copy it to user space whole; any field a getter
+     * skips would otherwise leak stale kernel heap. */
+    p = kmalloc(size, flags | __GFP_ZERO);
     t21_free_watch_note_alloc(p, __builtin_return_address(0));
     return p;
 }
@@ -12106,6 +12109,14 @@ int32_t video_input_cmd_open(uint32_t a0, uint32_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000002ef4 origin=model_output original=video_input_cmd_set */
+/* struct tx_isp_dbg_register of the T21 SDK (o32 layout: reg at +8). */
+struct t21_dbg_register {
+	char *name;
+	unsigned int size;
+	unsigned long long reg;
+	unsigned long long val;
+};
+
 int video_input_cmd_set(void *arg1, int arg2, int arg3)
 {
     int i = 0;
@@ -12131,7 +12142,12 @@ int video_input_cmd_set(void *arg1, int arg2, int arg3)
     if (s2_1 == 0 || (unsigned long)s2_1 >= 0xfffff001UL)
         return -ENOTTY;
 
-    if ((unsigned int)arg3 >= 0x81) {
+    /* Bound the write (stock trusted it) and always NUL-terminate: a
+     * 128-byte write used to fill the static buffer without a terminator
+     * and the parsers below ran off its end. */
+    if (arg3 <= 0 || arg3 > 4096)
+        return -EINVAL;
+    if ((unsigned int)arg3 >= 0x80) {
         s0_1 = kmalloc(arg3 + 1, GFP_KERNEL);
         if (s0_1 == NULL)
             return -ENOMEM;
@@ -12141,33 +12157,39 @@ int video_input_cmd_set(void *arg1, int arg2, int arg3)
     }
 
     if (copy_from_user(s0_1, (void *)arg2, arg3) != 0) {
-        if ((unsigned int)arg3 >= 0x81)
+        if ((unsigned int)arg3 >= 0x80)
             kfree(s0_1);
-        return -EINVAL;
+        return -EFAULT;
     }
+    s0_1[arg3] = 0;
 
     if (video_input_strncmp(s0_1, "r sen_reg", 9) == 0) {
         unsigned long reg;
-        void *var_a8;
-        int var_9c;
+        struct t21_dbg_register dbg;
         void *ops;
         int (*read_fn)(void *, void *);
         int val;
 
         reg = simple_strtoull(s0_1 + 0xa, NULL, 0);
-        var_a8 = (char *)s2_1 + 0x8c;
-        var_9c = 0;
+        /* Stock (0x2750..0x27a4): {name = sd->chip.name, reg, val} on the
+         * stack and sd->ops->core->g_register.  The recovered body called
+         * ops+0xc (the sensor-ops table pointer) and never set reg. */
+        memset(&dbg, 0, sizeof(dbg));
+        dbg.name = (char *)s2_1 + 0x8c;
+        dbg.reg = reg;
         ops = *(void **)((char *)s2_1 + 0xc4);
+        if (ops != NULL)
+            ops = *(void **)ops;
         if (ops != NULL) {
             read_fn = *(void (**)(void *, void *))((char *)ops + 0xc);
             if (read_fn == NULL) {
                 ((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t))printk)((uintptr_t)(KERN_ERR "##### err %s.%d\n"), (uintptr_t)("video_input_cmd_set"), (uintptr_t)(__LINE__));
                 val = 0;
-            } else if (read_fn(s2_1, &var_a8) != 0) {
+            } else if (read_fn(s2_1, &dbg) != 0) {
                 ((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t))printk)((uintptr_t)(KERN_ERR "##### err %s.%d\n"), (uintptr_t)("video_input_cmd_set"), (uintptr_t)(__LINE__));
                 val = 0;
             } else {
-                val = *(int *)((char *)&var_a8 + 0);
+                val = (int)dbg.val;
             }
         } else {
             ((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t))printk)((uintptr_t)(KERN_ERR "##### err %s.%d\n"), (uintptr_t)("video_input_cmd_set"), (uintptr_t)(__LINE__));
@@ -12175,7 +12197,7 @@ int video_input_cmd_set(void *arg1, int arg2, int arg3)
         }
         ((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))seq_printf)((uintptr_t)(seq), (uintptr_t)("isp: sensor reg read 0x%x(0x%x)\n"), (uintptr_t)((unsigned int)reg), (uintptr_t)((unsigned int)val));
         sprintf(video_input_cmd_buf, "0x%x\n", (unsigned int)val);
-        s3_1 = ((unsigned int)arg3 < 0x81) ? 1 : 0;
+        s3_1 = ((unsigned int)arg3 < 0x80) ? 1 : 0;
         goto out;
     }
 
@@ -12183,126 +12205,58 @@ int video_input_cmd_set(void *arg1, int arg2, int arg3)
         char *end;
         unsigned long reg;
         unsigned long val;
-        void *var_a8;
+        struct t21_dbg_register dbg;
         void *ops;
         int (*write_fn)(void *, void *);
         const char *status;
 
         end = NULL;
         reg = simple_strtoull(s0_1 + 0xa, &end, 0);
-        val = simple_strtoull(end + 1, NULL, 0);
+        val = (end && *end) ? simple_strtoull(end + 1, NULL, 0) : 0;
         ((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))seq_printf)((uintptr_t)(seq), (uintptr_t)("isp: sensor reg write 0x%x(0x%x)\n"), (uintptr_t)((unsigned int)reg), (uintptr_t)((unsigned int)val));
-        var_a8 = (char *)s2_1 + 0x8c;
+        /* Stock (0x2890..0x28cc): {name, reg, val} and core->s_register. */
+        memset(&dbg, 0, sizeof(dbg));
+        dbg.name = (char *)s2_1 + 0x8c;
+        dbg.reg = reg;
+        dbg.val = val;
         ops = *(void **)((char *)s2_1 + 0xc4);
+        if (ops != NULL)
+            ops = *(void **)ops;
         if (ops == NULL) {
             status = "failed";
         } else {
             write_fn = *(void (**)(void *, void *))((char *)ops + 0x10);
             if (write_fn == NULL) {
                 status = "failed";
-            } else if (write_fn(s2_1, &var_a8) != 0) {
+            } else if (write_fn(s2_1, &dbg) != 0) {
                 status = "failed";
             } else {
                 status = "ok";
             }
         }
-        s3_1 = ((unsigned int)arg3 < 0x81) ? 1 : 0;
+        s3_1 = ((unsigned int)arg3 < 0x80) ? 1 : 0;
         sprintf(video_input_cmd_buf, "%s\n", status);
         goto out;
     }
 
     if (video_input_strncmp(s0_1, "mscaler", 7) == 0) {
-        char *buf;
-        char *end;
-        char *p;
-        char *tok[8];
-        unsigned long vals[8];
-        int i;
-        unsigned long ch;
-        void *chan;
-        void *chan_obj;
-        int (*set_crop)(void *, void *);
-        int *var_68;
-        int *var_54;
-        int *var_50;
-        int var_48;
-        int var_44;
-        int var_40;
-        int var_3c;
-
-        buf = kmalloc(arg3 + 1, GFP_KERNEL);
-        if (buf == NULL)
-            return -ENOMEM;
-        memset(buf, 0, arg3 + 1);
-        if (copy_from_user(buf, (char *)arg2 + 8, arg3) != 0) {
-            kfree(buf);
-            return -EINVAL;
-        }
-
-        p = buf;
-        for (i = 0; i < 8; i++) {
-            end = strstr(p, ",");
-            if (end == NULL)
-                break;
-            *end = 0;
-            ((void **)tok)[i] = p;
-            p = end + 1;
-        }
-        end = strstr(buf, ",");
-        ch = simple_strtoul(buf, &end, 0);
-        for (i = 0; i < 8; i++) {
-            ((void **)vals)[i] = simple_strtoul(tok[i], &end, 0);
-        }
-
-        if (ch != 0)
-            chan = (void *)0x1;
-        else
-            chan = (void *)0x0;
-
-        if (chan == NULL) {
-            set_crop = NULL;
-        } else if ((unsigned long)chan < 0xfffff001UL) {
-            chan_obj = *(void **)chan;
-            if (chan_obj == NULL) {
-                set_crop = NULL;
-            } else if ((unsigned long)chan_obj < 0xfffff001UL) {
-                set_crop = *(int (**)(void *, void *))((char *)chan_obj + 0xd4);
-            } else {
-                set_crop = NULL;
-            }
-        } else {
-            set_crop = NULL;
-        }
-
-        tisp_channel_stop_save();
-        var_68 = *(int *)((char *)((char *)&sinfo_slots + 0x120));
-        var_54 = *(int *)((char *)((char *)&sinfo_slots + 0x124));
-        var_50 = *(int *)((char *)((char *)&sinfo_slots + 0x128));
-        if (var_68 == 0) {
-            var_48 = 0;
-            var_44 = 0;
-            var_40 = var_54;
-            var_3c = var_50;
-        } else {
-            var_48 = *(int *)((char *)((char *)&sinfo_slots + 0x12c));
-            var_44 = *(int *)((char *)((char *)&sinfo_slots + 0x130));
-            var_40 = *(int *)((char *)((char *)&sinfo_slots + 0x134));
-            var_3c = *(int *)((char *)((char *)&sinfo_slots + 0x138));
-        }
-        tisp_channel_attr_set_crop_scaler((unsigned char)ch, &var_54);
-        s3_1 = ((unsigned int)arg3 < 0x81) ? 1 : 0;
-        tisp_channel_start_restore();
-        kfree(buf);
-        goto out;
+        /* The recovered "mscaler" body dereferenced the constant (void *)1,
+         * parsed uninitialised token pointers and programmed the scaler from
+         * unrelated BSS (with a possible divide by zero).  Refuse it rather
+         * than oops; the frame-source crop/scaler ioctls remain available. */
+        sprintf(video_input_cmd_buf, "failed\n");
+        if ((unsigned int)arg3 >= 0x80)
+            kfree(s0_1);
+        return -EINVAL;
     }
 
     sprintf(video_input_cmd_buf, "null", 0);
-    s3_1 = ((unsigned int)arg3 < 0x81) ? 1 : 0;
+    s3_1 = ((unsigned int)arg3 < 0x80) ? 1 : 0;
 
 out:
     if (s3_1 != 0)
         return arg3;
-    if ((unsigned int)arg3 >= 0x81)
+    if ((unsigned int)arg3 >= 0x80)
         kfree(s0_1);
     return arg3;
 }
@@ -13831,7 +13785,8 @@ int32_t apical_isp_gamma_g_attr_isra_63(uintptr_t a0)
 	}
 	for (i = 0; i < 129; i++)
 		out[i] = (uint16_t)gamma[i];
-	private_copy_to_user(*(void **)((char *)a0 + 4), out, sizeof(out));
+	if (private_copy_to_user(*(void **)((char *)a0 + 4), out, sizeof(out)))
+		return -EFAULT;
 	return 0;	/* OEM returns the tisp_g_Gamma result */
 }
 
@@ -13995,8 +13950,12 @@ int32_t apical_isp_af_hist_g_attr_isra_73(void *arg1)
 		uint8_t  f11;
 	} buf;
 
+	/* 22 bytes of fields in a 24-byte record: clear the tail padding so
+	 * no kernel stack reaches user space. */
+	memset(&buf, 0, sizeof(buf));
 	tisp_g_af_attr(&buf);
-	private_copy_to_user(*(uint32_t *)((char *)arg1 + 4), &buf, 24);
+	if (private_copy_to_user(*(uint32_t *)((char *)arg1 + 4), &buf, 24))
+		return -EFAULT;
 	return 0;
 }
 
@@ -14059,9 +14018,11 @@ static long isp_core_tunning_unlocked_ioctl(struct file *file, unsigned int cmd,
 	int32_t buf[3];
 	void *ops;
 
-	ops = *(void **)((char *)file + 0x70);
-	ops = *(void **)((char *)ops + 0xc8);
-	ops = *(void **)((char *)ops + 0x19c);
+	/* Same file->private_data->core->tuning walk as open/release, but
+	 * checked: the raw chain oopsed on a node whose core has no tuning. */
+	ops = t21_tuning_state_from_file(file);
+	if (!ops)
+		return -ENODEV;
 	pr_debug("tx-isp-t21: tuning ioctl enter cmd=%#x arg=%#lx state=%d pid=%d\n",
 		cmd, arg, *(int32_t *)((char *)ops + 0x40c4), current->pid);
 
