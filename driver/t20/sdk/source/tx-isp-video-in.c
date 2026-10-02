@@ -10,6 +10,13 @@
 
 #include "tx-isp-video-in.h"
 
+extern int t20_trace;   /* tx-isp-device.c */
+#define T20_TRACE(fmt, ...) do {                                        \
+		if (unlikely(t20_trace))                                \
+			printk(KERN_INFO "T20TRACE " fmt, ##__VA_ARGS__); \
+	} while (0)
+
+
 /* Thingino sensor-info registry (open-tx-isp's tx_isp_sinfo). */
 int tx_isp_sinfo_sensor_bind(void *subdev, struct module *owner);
 void tx_isp_sinfo_sensor_unbind(void *subdev, struct module *owner);
@@ -26,7 +33,7 @@ static long subdev_core_ops_register_sensor(struct tx_isp_video_in_device *vi, v
 
 	if (!vi || !info)
 		return -ISP_ERROR;
-	printk(KERN_INFO "T20TRACE register_sensor enter vi=%p info=%p name=%s cbus=%u\n",
+	T20_TRACE("register_sensor enter vi=%p info=%p name=%s cbus=%u\n",
 	       vi, info, info->name, info->cbus_type);
 	v4l2_dev = vi->sd.v4l2_dev;
 	if(atomic_read(&vi->state) == TX_ISP_STATE_STOP){
@@ -79,7 +86,7 @@ static long subdev_core_ops_register_sensor(struct tx_isp_video_in_device *vi, v
 	sensor->info = *info;
 
 	ret = v4l2_subdev_call(sd, core, g_chip_ident, NULL);
-	printk(KERN_INFO "T20TRACE register_sensor chip_ident sd=%p name=%s ret=%d\n",
+	T20_TRACE("register_sensor chip_ident sd=%p name=%s ret=%d\n",
 	       sd, sd->name, ret);
 	if (ret == ISP_SUCCESS && info->cbus_type == TX_SENSOR_CONTROL_INTERFACE_I2C) {
 		struct i2c_client *client = v4l2_get_subdevdata(sd);
@@ -131,7 +138,7 @@ static long subdev_core_ops_register_sensor(struct tx_isp_video_in_device *vi, v
 		tx_isp_sinfo_sensor_bind(sensor, sinfo_owner);
 	}
 	v4l2_info(v4l2_dev, "Registered sensor subdevice %s\n", sd->name);
-	printk(KERN_INFO "T20TRACE register_sensor exit sensor=%p sd=%p\n", sensor, sd);
+	T20_TRACE("register_sensor exit sensor=%p sd=%p\n", sensor, sd);
 	return ISP_SUCCESS;
 }
 /*
@@ -304,7 +311,7 @@ static long subdev_core_ops_set_input(struct tx_isp_video_in_device *vi, int *in
 	int ret = ISP_SUCCESS;
 	if (!vi || !index)
 		return -ISP_ERROR;
-	printk(KERN_INFO "T20TRACE set_input enter vi=%p index=%d active=%p p=%p\n",
+	T20_TRACE("set_input enter vi=%p index=%d active=%p p=%p\n",
 	       vi, *index, vi->active, vi->p);
 
 	/*firstly, Determine whether the point to the same sensor */
@@ -362,29 +369,29 @@ static long subdev_core_ops_set_input(struct tx_isp_video_in_device *vi, int *in
 	/*lastly, prepare, init and streamon active sensor */
 	vi->active = sensor;
 	vi->p->subdevs[vi->sd.grp_id] = &sensor->sd;
-	printk(KERN_INFO "T20TRACE set_input selected sensor=%p sd=%p name=%s grp=%u p_ops=%p\n",
+	T20_TRACE("set_input selected sensor=%p sd=%p name=%s grp=%u p_ops=%p\n",
 	       sensor, &sensor->sd, sensor->sd.name, vi->sd.grp_id,
 	       vi->p ? vi->p->ops : NULL);
 
 	sd = &sensor->sd;
 	arg.value = (int)&sensor->video;
-	printk(KERN_INFO "T20TRACE set_input sync begin notify=%p video=%p\n",
+	T20_TRACE("set_input sync begin notify=%p video=%p\n",
 	       sd->v4l2_dev ? sd->v4l2_dev->notify : NULL, &sensor->video);
 	sd->v4l2_dev->notify(sd, TX_ISP_NOTIFY_SYNC_VIDEO_IN, &arg);
-	printk(KERN_INFO "T20TRACE set_input sync end ret=%d\n", arg.ret);
+	T20_TRACE("set_input sync end ret=%d\n", arg.ret);
 	if(arg.ret != ISP_SUCCESS)
 		goto err_exit;
 
-	printk(KERN_INFO "T20TRACE set_input prepare begin\n");
+	T20_TRACE("set_input prepare begin\n");
 	ret = tx_isp_pipeline_call(vi->p, prepare); //&sensor->video);
-	printk(KERN_INFO "T20TRACE set_input prepare end ret=%d\n", ret);
+	T20_TRACE("set_input prepare end ret=%d\n", ret);
 	if(ret != ISP_SUCCESS){
 		v4l2_warn(v4l2_dev, "Failed to prepare the pipeline of %s.\n", sensor->attr.name);
 		goto err_prepare;
 	}
-	printk(KERN_INFO "T20TRACE set_input init begin\n");
+	T20_TRACE("set_input init begin\n");
 	ret = tx_isp_pipeline_call(vi->p, init, 1);
-	printk(KERN_INFO "T20TRACE set_input init end ret=%d\n", ret);
+	T20_TRACE("set_input init end ret=%d\n", ret);
 	if(ret != ISP_SUCCESS){
 		v4l2_warn(v4l2_dev, "Failed to deinit the pipeline of %s.\n", sensor->attr.name);
 		goto err_init;
@@ -460,7 +467,7 @@ static long video_in_core_ops_ioctl(struct v4l2_subdev *sd, unsigned int cmd, vo
 {
 	struct tx_isp_video_in_device *vi = sd_to_tx_video_in_device(sd);
 	long ret = 0;
-	printk(KERN_INFO "T20TRACE vin_ioctl enter sd=%p cmd=0x%x arg=%p\n",
+	T20_TRACE("vin_ioctl enter sd=%p cmd=0x%x arg=%p\n",
 	       sd, cmd, arg);
 	switch(cmd){
 		case VIDIOC_ENUMINPUT:
@@ -487,7 +494,7 @@ static long video_in_core_ops_ioctl(struct v4l2_subdev *sd, unsigned int cmd, vo
 		default:
 			break;
 	}
-	printk(KERN_INFO "T20TRACE vin_ioctl exit cmd=0x%x ret=%ld\n", cmd, ret);
+	T20_TRACE("vin_ioctl exit cmd=0x%x ret=%ld\n", cmd, ret);
 	return ret;
 }
 
@@ -495,7 +502,7 @@ int tx_isp_video_in_subdev_open(struct v4l2_subdev *sd, struct v4l2_subdev_fh *f
 {
 	struct tx_isp_video_in_device *vi = sd_to_tx_video_in_device(sd);
 	struct tx_isp_notify_argument arg;
-	printk(KERN_INFO "T20TRACE vin_open enter sd=%p state=%d notify=%p\n",
+	T20_TRACE("vin_open enter sd=%p state=%d notify=%p\n",
 	       sd, atomic_read(&vi->state),
 	       sd->v4l2_dev ? sd->v4l2_dev->notify : NULL);
 	/*
@@ -507,7 +514,7 @@ int tx_isp_video_in_subdev_open(struct v4l2_subdev *sd, struct v4l2_subdev_fh *f
 	if(atomic_read(&vi->state) == TX_ISP_STATE_STOP){
 		atomic_set(&vi->state, TX_ISP_STATE_START);
 		sd->v4l2_dev->notify(sd, TX_ISP_NOTIFY_GET_PIPELINE, &arg);
-		printk(KERN_INFO "T20TRACE vin_open pipeline value=%p ret=%d\n",
+		T20_TRACE("vin_open pipeline value=%p ret=%d\n",
 		       (void *)arg.value, arg.ret);
 		if(arg.ret != ISP_SUCCESS) {
 			atomic_set(&vi->state, TX_ISP_STATE_STOP);
@@ -517,7 +524,7 @@ int tx_isp_video_in_subdev_open(struct v4l2_subdev *sd, struct v4l2_subdev_fh *f
 		vi->p = (struct tx_isp_media_pipeline *)arg.value;
 	}
 	vi->refcnt++;
-	printk(KERN_INFO "T20TRACE vin_open exit refcnt=%d p=%p\n", vi->refcnt, vi->p);
+	T20_TRACE("vin_open exit refcnt=%d p=%p\n", vi->refcnt, vi->p);
 	return 0;
 }
 int tx_isp_video_in_subdev_close(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
