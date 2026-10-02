@@ -8,6 +8,7 @@
 #ifdef REGTRACE_KERNEL_TREE_BUILD
 #include <linux/module.h>
 #include <linux/moduleparam.h>
+#include <linux/ktime.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/types.h>
@@ -18960,6 +18961,19 @@ int32_t tisp_event_exit(void)
 	return 0;
 }
 
+/* Debug only (default off, no behaviour change): measure the longest
+ * IRQs-off window of tisp_event_process() (pending-list pop + callback +
+ * node return).  Enable with irqoff_stat=1 at insmod or via
+ * /sys/module/tx_isp_t21/parameters/irqoff_stat; the worst case so far is in
+ * irqoff_max_us (write 0 to reset) and each new maximum is logged
+ * rate-limited with its event id. */
+static bool irqoff_stat;
+module_param(irqoff_stat, bool, 0644);
+MODULE_PARM_DESC(irqoff_stat, "T21 debug: measure the max IRQs-off time of the ISP event thread (default 0)");
+static uint irqoff_max_us;
+module_param(irqoff_max_us, uint, 0644);
+MODULE_PARM_DESC(irqoff_max_us, "T21 debug: max IRQs-off time of the ISP event thread in us (irqoff_stat=1; write 0 to reset)");
+
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000f8ac origin=model_output original=tisp_event_process */
 int32_t tisp_event_process(void)
 {
@@ -18969,6 +18983,9 @@ int32_t tisp_event_process(void)
 	t21_event_cb_t cb = NULL;
 	uint32_t args[8];
 	uint32_t event;
+	bool stat = ACCESS_ONCE(irqoff_stat);
+	ktime_t t0 = ktime_set(0, 0);
+	s64 dt = 0;
 
 	result = private_wait_for_completion_timeout(&tevent_info.ready, 20);
 	if (result == 0xfffffe00UL) {
@@ -18980,6 +18997,8 @@ int32_t tisp_event_process(void)
 		return 0;
 
 	flags = arch_local_irq_save();
+	if (unlikely(stat))
+		t0 = ktime_get();
 	if (list_empty(&tevent_info.pending)) {
 		isp_printf(2, "%s,%d: error\n", "tisp_event_process", 93);
 		arch_local_irq_restore(flags);
@@ -19004,8 +19023,15 @@ int32_t tisp_event_process(void)
 		cb(args[0], args[1], args[2], args[3],
 		   args[4], args[5], args[6], args[7]);
 	list_add_tail(&node->link, &tevent_info.free);
+	if (unlikely(stat))
+		dt = ktime_us_delta(ktime_get(), t0);
 	arch_local_irq_restore(flags);
 
+	if (unlikely(stat) && dt > (s64)ACCESS_ONCE(irqoff_max_us)) {
+		irqoff_max_us = (uint)dt;
+		printk_ratelimited(KERN_INFO "tx-isp-t21: event thread IRQs off %u us (event %u)\n",
+				   (uint)dt, event);
+	}
 	if (cb)
 		t21_text_check_module("isp-event", event);
 	return 0;
