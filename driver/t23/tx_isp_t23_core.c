@@ -11967,7 +11967,16 @@ static void regtrace_t23_direct_vic_mdma_stream(int channel,
  */
 static void regtrace_t23_core_dma_disable(const char *reason)
 {
-    /* Only this instance's rings, and never with the core clock off. */
+    /*
+     * Only this instance's rings, and never with the core clock off.
+     * Skipping it then is benign: with the clock gated the core cannot run
+     * or issue statistics DMA, so the stale ring addresses are never used,
+     * and every start goes through regtrace_t23_source_core_set_stream(1),
+     * which rewrites all ring bases and controls
+     * (regtrace_t23_program_core_dma()) before it sets 0x800 = 1.  Nothing
+     * enables the core on the old addresses, in this instance or after a
+     * module reload.
+     */
     if (!regtrace_t23_core_dma_bufs[0].virt || !regtrace_t23_core_clks_enabled)
         return;
     system_reg_write(0x800U, 0);
