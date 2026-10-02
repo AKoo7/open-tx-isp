@@ -411,6 +411,7 @@ static void regtrace_t23_source_ae_hlil_work_body(struct work_struct *work)
             regtrace_t23_source_ae_hlil_state = next_state;
             regtrace_t23_source_ae_hlil_ev = rung->ev_q10;
             regtrace_t23_source_ae_hlil_updates++;
+            regtrace_t23_ae_hlil_resume = true;
             if (regtrace_t23_source_ccm_events &&
                 regtrace_t23_source_ccm_tuning_init &&
                 regtrace_t23_ccm_saturation(rung->ev_q10) !=
@@ -497,6 +498,68 @@ static void regtrace_t23_source_ae_hlil_trigger(void)
     schedule_work(&regtrace_t23_source_ae_hlil_work_item);
 }
 
+/*
+ * Exposure the sensor gets at stream start.  The OEM AE state lives from
+ * tisp_init (sensor enable) on, and the OEM sc2336 s_stream only writes
+ * 0x0100, so a framesource disable/enable keeps the last exposure; the
+ * AE continues from there.  The ladder bootstrap rung (longest unity-gain
+ * integration time) is only used before the AE has moved at all.
+ */
+/*
+ * The resume point is the exposure value, not the rung index: if the ladder
+ * was rebuilt since the AE last moved (frame rate / AE_IT_MAX / MAX_AGAIN
+ * change, another sensor), the old index names a different exposure.
+ * Re-resolve the rung nearest to the last EV, as the retime path does, and
+ * keep state and EV consistent.  Returns REGTRACE_T23_AE_HLIL_STATE_COUNT
+ * when there is nothing to resume.
+ */
+static uint32_t regtrace_t23_ae_hlil_resume_state(void)
+{
+    uint32_t state = regtrace_t23_source_ae_hlil_state;
+    uint32_t ev = regtrace_t23_source_ae_hlil_ev;
+
+    if (!regtrace_t23_ae_hlil_resume || !REGTRACE_T23_AE_HLIL_STATE_COUNT)
+        return REGTRACE_T23_AE_HLIL_STATE_COUNT;
+    if (state < REGTRACE_T23_AE_HLIL_STATE_COUNT &&
+        regtrace_t23_ae_hlil_rungs[state].ev_q10 == ev)
+        return state;
+    state = regtrace_t23_ae_hlil_nearest_state(ev >> 10);
+    printk(KERN_INFO
+           "tx_isp_t23_recovered: AE resume re-resolved ev=%u -> state=%u ev=%u\n",
+           ev, state, regtrace_t23_ae_hlil_rungs[state].ev_q10);
+    regtrace_t23_source_ae_hlil_state = state;
+    regtrace_t23_source_ae_hlil_ev = regtrace_t23_ae_hlil_rungs[state].ev_q10;
+    return state;
+}
+
+static uint32_t regtrace_t23_ae_hlil_stream_packed(void)
+{
+    uint32_t state;
+
+    if (regtrace_t23_source_ae_force_packed)
+        return regtrace_t23_source_ae_force_packed;
+    state = regtrace_t23_ae_hlil_resume_state();
+    if (state < REGTRACE_T23_AE_HLIL_STATE_COUNT)
+        return regtrace_t23_ae_hlil_rungs[state].packed;
+    return regtrace_t23_source_ae_initial_packed;
+}
+
+/* Total gain of the resumed rung, 0 when the AE starts from bootstrap. */
+static uint32_t regtrace_t23_ae_hlil_resume_gain(uint32_t *sensor_again)
+{
+    const struct regtrace_t23_ae_hlil_rung *rung;
+    uint32_t state;
+
+    if (regtrace_t23_source_ae_force_packed)
+        return 0;
+    state = regtrace_t23_ae_hlil_resume_state();
+    if (state >= REGTRACE_T23_AE_HLIL_STATE_COUNT)
+        return 0;
+    rung = &regtrace_t23_ae_hlil_rungs[state];
+    *sensor_again = rung->packed >> 16;
+    return regtrace_t23_ae_rung_total_gain(rung);
+}
+
 static void regtrace_t23_source_ae_hlil_reset(void)
 {
     const struct regtrace_t23_ae_hlil_rung *rungs =
@@ -514,20 +577,28 @@ static void regtrace_t23_source_ae_hlil_reset(void)
     regtrace_t23_ae_hlil_pending_snapshot = 0;
     spin_unlock_irqrestore(&regtrace_t23_ae_hlil_lock, flags);
 
-    regtrace_t23_source_ae_hlil_state = 0U;
     if (!REGTRACE_T23_AE_HLIL_STATE_COUNT) {
+        regtrace_t23_source_ae_hlil_state = 0U;
         regtrace_t23_source_ae_hlil_status = ENODEV;
         return;
     }
-    for (state = 0; state < REGTRACE_T23_AE_HLIL_STATE_COUNT; ++state) {
-        if (rungs[state].packed == initial_packed) {
-            regtrace_t23_source_ae_hlil_state = state;
-            break;
+    if (!regtrace_t23_source_ae_force_packed &&
+        regtrace_t23_ae_hlil_resume_state() <
+        REGTRACE_T23_AE_HLIL_STATE_COUNT) {
+        /* keep the rung the stream start just programmed */
+    } else {
+        regtrace_t23_ae_hlil_resume = false;
+        regtrace_t23_source_ae_hlil_state = 0U;
+        for (state = 0; state < REGTRACE_T23_AE_HLIL_STATE_COUNT; ++state) {
+            if (rungs[state].packed == initial_packed) {
+                regtrace_t23_source_ae_hlil_state = state;
+                break;
+            }
         }
+        if (state == REGTRACE_T23_AE_HLIL_STATE_COUNT)
+            regtrace_t23_source_ae_hlil_state =
+                regtrace_t23_ae_hlil_nearest_state(initial_packed & 0xffffU);
     }
-    if (state == REGTRACE_T23_AE_HLIL_STATE_COUNT)
-        regtrace_t23_source_ae_hlil_state =
-            regtrace_t23_ae_hlil_nearest_state(initial_packed & 0xffffU);
     regtrace_t23_source_ae_hlil_ev =
         rungs[regtrace_t23_source_ae_hlil_state].ev_q10;
     /* the sensor exposure is programmed by the stream start */
@@ -544,12 +615,13 @@ static void regtrace_t23_source_ae_hlil_reset(void)
     regtrace_t23_source_bcsh_ev_events = 0;
 
     printk(KERN_WARNING
-           "tx_isp_t23_recovered: source AE HLIL reset target=%u+-%u interval=%u state=%u ev=%u enabled=%u\n",
+           "tx_isp_t23_recovered: source AE HLIL reset target=%u+-%u interval=%u state=%u ev=%u resume=%u enabled=%u\n",
            regtrace_t23_source_ae_hlil_target,
            regtrace_t23_source_ae_hlil_deadband,
            regtrace_t23_source_ae_hlil_interval,
            regtrace_t23_source_ae_hlil_state,
            regtrace_t23_source_ae_hlil_ev,
+           regtrace_t23_ae_hlil_resume ? 1U : 0U,
            regtrace_t23_source_ae_hlil ? 1U : 0U);
 }
 

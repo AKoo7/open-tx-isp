@@ -9804,6 +9804,11 @@ static uint regtrace_t23_source_sensor_max_it;
 static uint regtrace_t23_source_sensor_max_again;
 static uint regtrace_t23_source_ae_initial_packed;
 static bool regtrace_t23_source_sensor_configured;
+/* The AE has moved off the bootstrap rung; stream restarts resume there
+ * (at the EV it reached, re-resolved on the current ladder). */
+static bool regtrace_t23_ae_hlil_resume;
+/* sensor the resume point was reached with */
+static char regtrace_t23_ae_hlil_resume_sensor[32];
 static bool regtrace_t23_source_ae_hlil = true;
 static uint regtrace_t23_source_ae_hlil_interval = 32;
 static uint regtrace_t23_source_ae_hlil_target = 60;
@@ -11270,6 +11275,7 @@ static int regtrace_t23_sensor_write_u8(uint16_t reg, uint8_t value)
 }
 
 static int regtrace_t23_source_resolve_sensor_config(void);
+static uint32_t regtrace_t23_ae_hlil_stream_packed(void);
 
 static int regtrace_t23_call_sensor_stream(int enable, const char *reason)
 {
@@ -11306,13 +11312,13 @@ static int regtrace_t23_call_sensor_stream(int enable, const char *reason)
             ret = regtrace_t23_sensor_fps_stream_on(reason);
         if (enable && !ret)
             ret = regtrace_t23_source_resolve_sensor_config();
-        packed = regtrace_t23_source_ae_force_packed ?
-            regtrace_t23_source_ae_force_packed :
-            regtrace_t23_source_ae_initial_packed;
+        packed = regtrace_t23_ae_hlil_stream_packed();
         if (enable && !ret && packed)
             ret = regtrace_t23_call_sensor_exposure(packed,
                 regtrace_t23_source_ae_force_packed ?
                 "source-ae-force-after-stream" :
+                regtrace_t23_ae_hlil_resume ?
+                "source-ae-resume-after-stream" :
                 "source-ae-bootstrap-after-stream");
     }
     printk(KERN_WARNING "tx_isp_t23_recovered: sensor stream %s ret=%d reason=%s\n",
@@ -11978,7 +11984,16 @@ static void regtrace_t23_direct_vic_mdma_stream(int channel,
  */
 static void regtrace_t23_core_dma_disable(const char *reason)
 {
-    /* Only this instance's rings, and never with the core clock off. */
+    /*
+     * Only this instance's rings, and never with the core clock off.
+     * Skipping it then is benign: with the clock gated the core cannot run
+     * or issue statistics DMA, so the stale ring addresses are never used,
+     * and every start goes through regtrace_t23_source_core_set_stream(1),
+     * which rewrites all ring bases and controls
+     * (regtrace_t23_program_core_dma()) before it sets 0x800 = 1.  Nothing
+     * enables the core on the old addresses, in this instance or after a
+     * module reload.
+     */
     if (!regtrace_t23_core_dma_bufs[0].virt || !regtrace_t23_core_clks_enabled)
         return;
     system_reg_write(0x800U, 0);
@@ -13933,11 +13948,16 @@ static int regtrace_t23_source_apply_total_gain_value(uint32_t gain_q16,
     return ret;
 }
 
+static uint32_t regtrace_t23_ae_hlil_resume_gain(uint32_t *sensor_again);
+
 static int regtrace_t23_source_apply_total_gain(void)
 {
     uint32_t sensor_again = regtrace_t23_source_ae_force_packed >> 16;
     uint32_t gain_q16 = regtrace_t23_source_total_gain_q16;
 
+    /* a resumed AE rung keeps its gain-driven block strengths */
+    if (!gain_q16)
+        gain_q16 = regtrace_t23_ae_hlil_resume_gain(&sensor_again);
     if (!gain_q16)
         gain_q16 = 0x10000U;
 
@@ -14359,6 +14379,17 @@ static int regtrace_t23_source_resolve_sensor_config(void)
     ret = regtrace_t23_ae_hlil_build_ladder();
     if (ret)
         return ret;
+    /* an AE resume point belongs to the sensor it was reached with */
+    if (strncmp(regtrace_t23_ae_hlil_resume_sensor, sensor_name,
+                sizeof(regtrace_t23_ae_hlil_resume_sensor))) {
+        if (regtrace_t23_ae_hlil_resume)
+            printk(KERN_INFO
+                   "tx_isp_t23_recovered: AE resume dropped, sensor %s -> %s\n",
+                   regtrace_t23_ae_hlil_resume_sensor, sensor_name);
+        regtrace_t23_ae_hlil_resume = false;
+        strlcpy(regtrace_t23_ae_hlil_resume_sensor, sensor_name,
+                sizeof(regtrace_t23_ae_hlil_resume_sensor));
+    }
     regtrace_t23_source_sensor_configured = true;
 
     printk(KERN_WARNING
@@ -16734,7 +16765,6 @@ int32_t tisp_lsc_lut_valid_judge(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t
 int tisp_lsc_wdr_en(int arg1);
 int32_t tisp_lsc_ct_update(uint32_t a0);
 int32_t tisp_lsc_gain_update(uint32_t a0);
-void tiziano_lsc_params_refresh(void);
 int32_t tiziano_lsc_dn_params_refresh(void);
 int tisp_lsc_param_array_get(int param_id, void *out_buf, int *size_buf);
 int32_t tisp_lsc_judge_ct_update_flag(void);
@@ -52218,6 +52248,14 @@ int32_t tisp_lsc_gain_update(uint32_t a0)
     return 0;
 }
 
+/*
+ * tiziano_lsc_params_refresh (OEM fn 0x21420) is not built: nothing in this
+ * driver calls or references it, and the recovered body only memcpy()s the
+ * LSC tables into ~24 KB of locals that are then dropped (a 24712-byte stack
+ * frame, three times the 8 KB MIPS kernel stack, if it were ever called).
+ * Kept for provenance only.
+ */
+#if 0
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000021420 origin=fragment_seed original=tiziano_lsc_params_refresh */
 void tiziano_lsc_params_refresh(void)
 {
@@ -52245,6 +52283,7 @@ void tiziano_lsc_params_refresh(void)
 	memcpy(&data_c2cdc, (void *)((char *)&param_adr_weigth_02_lut_array_tmp_1728_972 + 0x38), 0x24);
 	memcpy(&sdns_sp_mv_wei_uu_value, (void *)((char *)&param_adr_weigth_02_lut_array_tmp_1728_972 + 0x5c), 4);
 }
+#endif
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000021550 origin=fragment_seed original=tiziano_lsc_dn_params_refresh */
 int32_t tiziano_lsc_dn_params_refresh(void)
