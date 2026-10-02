@@ -22242,9 +22242,12 @@ int32_t tisp_event_push(void *arg1)
 
 	flags = arch_local_irq_save();
 	if (list_empty(&tevent_info.free)) {
-		isp_printf(2, "%s,%d: event free empty error\n",
-			   "tisp_event_push", 44);
 		arch_local_irq_restore(flags);
+		/* Stock prints this via isp_printf(2), which adds a dump_stack()
+		 * per overflow; that console flood (~100 ms each) only prolongs
+		 * the overflow.  Same text, rate-limited, no stack. */
+		printk_ratelimited(KERN_WARNING "%s,%d: event free empty error\n",
+				   "tisp_event_push", 44);
 		return -1;
 	}
 
@@ -22321,16 +22324,21 @@ int32_t tisp_event_process(void)
 	if (event < ARRAY_SIZE(tisp_event_cb_table))
 		cb = tisp_event_cb_table[event];
 	memcpy(args, node->args, sizeof(args));
+
+	/* Stock order (oem-t21.ko 0xf100..0xf130): run the callback with local
+	 * IRQs still disabled, then return the node and restore IRQs.  The
+	 * callbacks do not sleep (sensor gain/IT updates only set flags that the
+	 * ISR consumes), and running them atomically keeps the event thread from
+	 * being preempted mid-callback, which let the 20-node pool overflow at
+	 * stream start. */
+	if (cb)
+		cb(args[0], args[1], args[2], args[3],
+		   args[4], args[5], args[6], args[7]);
 	list_add_tail(&node->link, &tevent_info.free);
 	arch_local_irq_restore(flags);
 
-	/* Sensor callbacks perform I2C transfers.  Dispatching them with local
-	 * IRQs disabled was both unnecessary and unsafe. */
-	if (cb) {
-		cb(args[0], args[1], args[2], args[3],
-		   args[4], args[5], args[6], args[7]);
+	if (cb)
 		t21_text_check_module("isp-event", event);
-	}
 	return 0;
 }
 
