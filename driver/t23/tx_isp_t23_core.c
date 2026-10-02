@@ -9810,6 +9810,7 @@ static bool regtrace_t23_ae_hlil_resume;
 /* sensor the resume point was reached with */
 static char regtrace_t23_ae_hlil_resume_sensor[32];
 static bool regtrace_t23_source_ae_hlil = true;
+static bool regtrace_t23_source_ae_oem;   /* tx_isp_t23_ae_oem_glue.inc */
 static uint regtrace_t23_source_ae_hlil_interval = 32;
 static uint regtrace_t23_source_ae_hlil_target = 60;
 static uint regtrace_t23_source_ae_hlil_deadband = 5;
@@ -12018,9 +12019,13 @@ static void regtrace_t23_core_dma_disable(const char *reason)
            reason ? reason : "?");
 }
 
+static void t23_aelift_halt(void);
+
 static void regtrace_t23_core_dma_free(void)
 {
     unsigned int i;
+
+    t23_aelift_halt();
 
     for (i = 0; i < REGTRACE_T23_CORE_DMA_BUFS; i++) {
         kfree(regtrace_t23_core_dma_bufs[i].virt);
@@ -12906,6 +12911,9 @@ static __always_inline int regtrace_t23_source_clm_load_tuning(void)
 
 static void regtrace_t23_source_ae_hlil_capture(uint32_t luma,
                                                uint32_t snapshot);
+/* tx_isp_t23_ae_oem_glue.inc: stock AE0 lifted from the OEM module */
+static bool t23_aelift_irq(uint32_t status);
+static void t23_aelift_start(void);
 static void regtrace_t23_source_ae_hlil_reset(void);
 static void regtrace_t23_source_awb_hlil_reset(void);
 int tiziano_dpc_init(void);
@@ -13069,6 +13077,7 @@ static void regtrace_t23_source_ae_write_stats_startup(void)
     regtrace_t23_source_ae_stats_irqs = 0;
     regtrace_t23_source_ae_stats_snapshots = 0;
     regtrace_t23_source_ae_hlil_reset();
+    t23_aelift_start();
     printk(KERN_WARNING
            "tx_isp_t23_recovered: source AE0 statistics grid committed for %ux%u\n",
            regtrace_t23_source_sensor_width,
@@ -13244,6 +13253,8 @@ static void regtrace_t23_source_ae_stats_irq(uint32_t status,
     bool ae_irq = !!(status & BIT(26));
 
     if (!regtrace_t23_source_ae_stats_init)
+        return;
+    if (t23_aelift_irq(status))
         return;
     if (ae_irq)
         regtrace_t23_source_ae_stats_irqs++;
@@ -13974,6 +13985,7 @@ static int regtrace_t23_source_apply_total_gain(void)
 }
 
 #include "tx_isp_t23_ae_runtime.inc"
+#include "tx_isp_t23_ae_oem_glue.inc"
 
 static int regtrace_t23_source_bcsh_write_tuning_startup(void)
 {
@@ -14425,6 +14437,7 @@ static int regtrace_t23_source_core_set_stream(int enable,
             return 0;
         system_reg_write(0x800U, 0);
         regtrace_t23_core_started = false;
+        t23_aelift_halt();
         regtrace_t23_source_mdns_initialized = false;
         regtrace_t23_source_sdns_initialized = false;
         regtrace_t23_source_adr_initialized = false;
