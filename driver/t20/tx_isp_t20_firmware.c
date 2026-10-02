@@ -2640,6 +2640,23 @@ int32_t apical_program_interrupt_event_part_0(int32_t arg1, int32_t arg2)
 	return 0;
 }
 
+/* Non-OEM helper: the firmware context is usable once apical_fw_init() ran
+ * apical_isp_init(), which points general_fsm.p_fsm_mgr (context + 0x1500)
+ * at the FSM manager.  apical_fw_init() memsets the context first, so this
+ * also reads 0 during a re-initialisation. */
+int t20_fw_context_ready(void)
+{
+	return *(volatile uint32_t *)&__fw[0] == 0 &&
+	       *(volatile uint32_t *)&__fw[0x1500] != 0;
+}
+
+uint32_t t20_fw_context_word(unsigned int offset)
+{
+	if (offset > sizeof(__fw) - 4u)
+		return 0xffffffffu;
+	return *(volatile uint32_t *)&__fw[offset & ~3u];
+}
+
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000161f8 origin=model_output original=apical_get_current_isp_index */
 int32_t apical_get_current_isp_index(void)
 {
@@ -7093,40 +7110,50 @@ int32_t sd_capture_run(void)
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001b280 origin=model_output original=wdr_mode */
 int32_t wdr_mode(void *arg1, int32_t arg2, char arg3, int32_t *arg4)
 {
-    uint32_t mode = (uint32_t)(uint8_t)arg3;
-    uint32_t *reg_base;
-    uint8_t *cur;
+    /*
+     * OEM T10 module 0x1a1a0 (same Apical 3.12 firmware as T20): arg1 is the API context
+     * (fw_ctx + 0x18) and arg1 + 0x14e8 is general_fsm.p_fsm_mgr, which is
+     * *loaded* to reach the FSM manager:
+     *
+     *     SET 14/15: mgr[0x1527] = 0/1, ctx[0x1528] = 0, return 0
+     *     GET:       mgr[0x1524] 0 -> 14, 1 -> 15, else return 5
+     *
+     * The earlier reconstruction stored 0 to arg1 + 0x14e8 instead.  That
+     * NULLed general_fsm.p_fsm_mgr on the first WDR_MODE_ID set (tuning
+     * open applies the WDR control whenever ispmem leaves room for the WDR
+     * buffer, e.g. T10 ispmem=8M), and the next calibration update
+     * (day/night) read NULL + 0x1524 in apical_api_calibration().
+     */
+    uint32_t dir = (uint32_t)(uint8_t)arg3;
+    uint8_t *mgr = *(uint8_t **)((uintptr_t)arg1 + 0x14e8);
+    uint8_t cur;
 
-    if (mode == 0) {
-        *arg4 = 0;
-        if (arg2 == 14) {
-            reg_base = (uint32_t *)((uintptr_t)arg1 + 0x14e8);
-            *reg_base = 0;
-            *(uint8_t *)((uintptr_t)reg_base + 0x1527) = 0;
-            *(uint8_t *)((uintptr_t)arg1 + 0x1528) = 0;
-            return 0;
+    *arg4 = 0;
+    if (dir == 0) {
+        if (arg2 != 14 && arg2 != 15) {
+            *arg4 = 1;
+            return 5;
         }
-        if (arg2 == 15) {
-            reg_base = (uint32_t *)((uintptr_t)arg1 + 0x14e8);
-            *reg_base = 0;
-            *(uint8_t *)((uintptr_t)reg_base + 0x1527) = 1;
-            *(uint8_t *)((uintptr_t)arg1 + 0x1528) = 0;
-            return 0;
-        }
+        if (!mgr)
+            return 5;
+        mgr[0x1527] = arg2 == 15;
+        *(uint8_t *)((uintptr_t)arg1 + 0x1528) = 0;
+        return 0;
+    }
+    if (dir != 1) {
         *arg4 = 1;
-    } else if (mode != 1) {
-        *arg4 = 1;
-    } else {
-        reg_base = (uint32_t *)((uintptr_t)arg1 + 0x14e8);
-        cur = *(uint8_t *)((uintptr_t)reg_base + 0x1524);
-        if (cur == 0) {
-            *arg4 = 14;
-            return 0;
-        }
-        if (cur == mode) {
-            *arg4 = 15;
-            return 0;
-        }
+        return 5;
+    }
+    if (!mgr)
+        return 5;
+    cur = mgr[0x1524];
+    if (cur == 0) {
+        *arg4 = 14;
+        return 0;
+    }
+    if (cur == 1) {
+        *arg4 = 15;
+        return 0;
     }
     return 5;
 }
@@ -8518,12 +8545,15 @@ int32_t register_address(void *arg1, int32_t arg2, char arg3, int32_t *arg4)
 {
     uint32_t reg = (uint32_t)arg3 & 0xff;
 
+    /* OEM T10 module 0x1bfb0: SET (0) stores the address, GET (1) returns it, any
+     * other direction returns 2.  The reconstruction had SET and "other"
+     * swapped. */
     if (reg == 0) {
         *arg4 = 0;
+        *(int32_t *)((uintptr_t)arg1 + 0x1500) = arg2;
     } else if (reg == 1) {
         *arg4 = *(int32_t *)((uintptr_t)arg1 + 0x1500);
     } else {
-        *(int32_t *)((uintptr_t)arg1 + 0x1500) = arg2;
         return 2;
     }
 
@@ -9590,6 +9620,15 @@ int32_t apical_api_calibration(uint32_t a0, uint32_t a1, void *a2, uint32_t a3, 
 	 * but made the first calibration IRQ walk far beyond the firmware context.
 	 */
 	fw_ctx = fw_base + fw_val * 0x2fb8;
+
+	/* general_fsm.p_fsm_mgr (fw_ctx + 0x18 + 0x14e8) is only set by
+	 * apical_isp_init().  The stock code dereferences it unconditionally;
+	 * a calibration that arrives while the context is not initialised (or
+	 * is being re-initialised) must fail instead of oopsing at 0x1524. */
+	if (fw_val != 0 || *(uint32_t *)(fw_ctx + 0x1500) == 0) {
+		*a4 = 1;
+		return 5;
+	}
 
 	if (sensor_idx < 0x1e) {
 		if (sensor_idx < 0x1a) {
