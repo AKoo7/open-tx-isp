@@ -16709,7 +16709,6 @@ int32_t tisp_lsc_lut_valid_judge(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t
 int tisp_lsc_wdr_en(int arg1);
 int32_t tisp_lsc_ct_update(uint32_t a0);
 int32_t tisp_lsc_gain_update(uint32_t a0);
-void tiziano_lsc_params_refresh(void);
 int32_t tiziano_lsc_dn_params_refresh(void);
 int tisp_lsc_param_array_get(int param_id, void *out_buf, int *size_buf);
 int32_t tisp_lsc_judge_ct_update_flag(void);
@@ -52191,6 +52190,14 @@ int32_t tisp_lsc_gain_update(uint32_t a0)
     return 0;
 }
 
+/*
+ * tiziano_lsc_params_refresh (OEM fn 0x21420) is not built: nothing in this
+ * driver calls or references it, and the recovered body only memcpy()s the
+ * LSC tables into ~24 KB of locals that are then dropped (a 24712-byte stack
+ * frame, three times the 8 KB MIPS kernel stack, if it were ever called).
+ * Kept for provenance only.
+ */
+#if 0
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000021420 origin=fragment_seed original=tiziano_lsc_params_refresh */
 void tiziano_lsc_params_refresh(void)
 {
@@ -52218,6 +52225,7 @@ void tiziano_lsc_params_refresh(void)
 	memcpy(&data_c2cdc, (void *)((char *)&param_adr_weigth_02_lut_array_tmp_1728_972 + 0x38), 0x24);
 	memcpy(&sdns_sp_mv_wei_uu_value, (void *)((char *)&param_adr_weigth_02_lut_array_tmp_1728_972 + 0x5c), 4);
 }
+#endif
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000021550 origin=fragment_seed original=tiziano_lsc_dn_params_refresh */
 int32_t tiziano_lsc_dn_params_refresh(void)
