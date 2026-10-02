@@ -6526,7 +6526,7 @@ static uint64_t L_fix_point_mult3_32(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2
 	r_t9 = (uint32_t)(r_s0 + 0u);
 	r_s0 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 16));
 	r_a1 = (uint32_t)(r_v0 + 0u);
-	{ uint64_t q_ = L_dispatch(r_t9, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
+	{ uint64_t q_ = L_dispatch(r_t9, r_a0, r_a1, r_a2, r_a3, csp); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	return ((uint64_t)r_v1 << 32) | r_v0;
 	return ((uint64_t)r_v1 << 32) | r_v0;
 }
@@ -6722,7 +6722,7 @@ static uint64_t L_tisp_s_max_again(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, 
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_t9 = (uint32_t)(0x2030000u);
 	r_t9 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tiziano_ae_s_max_again + 0))) + 0u)));
-	{ uint64_t q_ = L_tiziano_ae_s_max_again(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
+	{ uint64_t q_ = L_tiziano_ae_s_max_again(r_a0, r_a1, r_a2, r_a3, csp); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	return ((uint64_t)r_v1 << 32) | r_v0;
 	return ((uint64_t)r_v1 << 32) | r_v0;
 }
@@ -7172,7 +7172,7 @@ static uint64_t L_tisp_s_max_isp_dgain(uint32_t r_a0, uint32_t r_a1, uint32_t r_
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_t9 = (uint32_t)(0x2030000u);
 	r_t9 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tiziano_ae_s_max_isp_dgain + 0))) + 0u)));
-	{ uint64_t q_ = L_tiziano_ae_s_max_isp_dgain(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
+	{ uint64_t q_ = L_tiziano_ae_s_max_isp_dgain(r_a0, r_a1, r_a2, r_a3, csp); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	return ((uint64_t)r_v1 << 32) | r_v0;
 	return ((uint64_t)r_v1 << 32) | r_v0;
 }
@@ -7495,7 +7495,7 @@ static uint64_t L_tisp_s_ev_start(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, u
 	(void)csp; (void)r_at; (void)r_k0; (void)r_k1; (void)r_gp; (void)r_ra;
 	r_t9 = (uint32_t)(0x2030000u);
 	r_t9 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_tiziano_ae_s_ev_start + 0))) + 0u)));
-	{ uint64_t q_ = L_tiziano_ae_s_ev_start(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
+	{ uint64_t q_ = L_tiziano_ae_s_ev_start(r_a0, r_a1, r_a2, r_a3, csp); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	return ((uint64_t)r_v1 << 32) | r_v0;
 	return ((uint64_t)r_v1 << 32) | r_v0;
 }
@@ -15731,7 +15731,7 @@ static uint64_t L_jz_isp_ccm_parameter_convert(uint32_t r_a0, uint32_t r_a1, uin
 	r_s0 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 16));
 	r_a0 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&_ccm_d_parameter + 0))) + 0u)));
 	r_a1 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&tiziano_ccm_d_linear + 0))) + 0u)));
-	{ uint64_t q_ = L_dispatch(r_t9, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
+	{ uint64_t q_ = L_dispatch(r_t9, r_a0, r_a1, r_a2, r_a3, csp); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	return ((uint64_t)r_v1 << 32) | r_v0;
 	return ((uint64_t)r_v1 << 32) | r_v0;
 }
@@ -19094,7 +19094,7 @@ L_1140c:
 	r_t9 = (uint32_t)(0x2010000u);
 	r_a1 = (uint32_t)(r_v0 + 0u);
 	r_t9 = (uint32_t)(((uint32_t)((uintptr_t)((uintptr_t)(((uint32_t)(uintptr_t)&L_fix_point_div_32 + 0))) + 0u)));
-	{ uint64_t q_ = L_fix_point_div_32(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
+	{ uint64_t q_ = L_fix_point_div_32(r_a0, r_a1, r_a2, r_a3, csp); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	return ((uint64_t)r_v1 << 32) | r_v0;
 L_11448:
 	r_v0 = (uint32_t)(0u + (uint32_t)256);
@@ -19354,7 +19354,7 @@ static uint64_t L_AePweightCalculate(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2
 	r_s0 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 20));
 	r_s2 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 28));
 	r_a1 = (uint32_t)(r_v0 + 0u);
-	{ uint64_t q_ = L_dispatch(r_t9, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
+	{ uint64_t q_ = L_dispatch(r_t9, r_a0, r_a1, r_a2, r_a3, csp); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	return ((uint64_t)r_v1 << 32) | r_v0;
 L_2a15c:
 	r_v0 = (uint32_t)(0u + 0u);
@@ -19675,7 +19675,7 @@ static uint64_t L_fix_point_mult3_64(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2
 	r_s2 = (uint32_t)(*(uint32_t *)(uintptr_t)(sp_base + 36));
 	r_a2 = (uint32_t)(r_v0 + 0u);
 	r_a3 = (uint32_t)(r_v1 + 0u);
-	{ uint64_t q_ = L_dispatch(r_t9, r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
+	{ uint64_t q_ = L_dispatch(r_t9, r_a0, r_a1, r_a2, r_a3, csp); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }
 	return ((uint64_t)r_v1 << 32) | r_v0;
 	return ((uint64_t)r_v1 << 32) | r_v0;
 }
