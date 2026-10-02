@@ -5561,7 +5561,6 @@ int32_t init_stab(void);
 int32_t apical_process(void);
 int32_t apical_init(void);
 int32_t apical_frame_buffer_configure_temper(uint32_t arg1);
-int32_t apical_frame_buffer_configure_all(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t arg4);
 int32_t apical_change_resolution(uint32_t arg1);
 int32_t apical_interrupt_frame_start(int32_t *arg1);
 int32_t apical_interrupt_ae_stats(int32_t *arg1);
@@ -6190,93 +6189,6 @@ int32_t apical_frame_buffer_configure_temper(uint32_t arg1)
     return APICAL_WRITE_32(0xa00, (APICAL_READ_32(0xa00) & 0xfffeffff) | 0x10000);
 }
 
-/* WHOLE_DRIVER_CANDIDATE fn_0000000000015968 origin=fragment_seed original=apical_frame_buffer_configure_all */
-int32_t apical_frame_buffer_configure_all(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t arg4)
-{
-    uint32_t *local_10 = 0;
-    uint32_t local_14 = 0;
-    uint32_t local_18 = 0;
-    uint32_t local_1c = 0;
-    uint32_t local_20 = 0;
-    uint32_t local_24 = 0;
-    uint32_t local_28 = 0;
-    uint32_t local_2c = 0;
-    uint32_t local_44 = 0;
-    uint32_t local_50 = 0;
-    uint32_t ra = 0;
-    uint32_t *s0 = 0;
-    uint32_t *s1 = 0;
-    uint32_t *s2 = 0;
-    uint32_t *s3 = 0;
-    uint32_t s4 = 0;
-    uint32_t s5 = 0;
-    uint32_t s6 = 0;
-    uint32_t t9 = 0;
-    uintptr_t v0 = 0;
-
-    /* fragment 0: Prologue */
-    /* function prologue: stack frame and callee-saved register setup */
-
-    /* fragment 1: CallSetup */
-    s0 = a0;
-    s6 = a2;
-    s5 = local_44;
-    s4 = local_50;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)APICAL_READ_32)(16); /* jalr target resolved by relocation */
-
-    /* fragment 2: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)line_offset)(v0 & 65535, 4); /* jalr target resolved by relocation */
-
-    /* fragment 3: CallSetup */
-    s2 = v0;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)APICAL_READ_32)(20); /* jalr target resolved by relocation */
-
-    /* fragment 4: CallSetup */
-    s3 = (v0 & 65535) * (uintptr_t)s2;
-    s3 = (uintptr_t)s3 + (uintptr_t)s0;
-    s0 = (uint32_t *)&APICAL_WRITE_32;
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)apical_frame_buffer_configure_temper)(s0); /* jalr target resolved by relocation */
-
-    /* fragment 5: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)APICAL_WRITE_32)(2648, s3); /* jalr target resolved by relocation */
-
-    /* fragment 6: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)APICAL_WRITE_32)(2652, s3); /* jalr target resolved by relocation */
-
-    /* fragment 7: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)APICAL_WRITE_32)(2660, s2); /* jalr target resolved by relocation */
-
-    /* fragment 8: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)APICAL_READ_32)(2664); /* jalr target resolved by relocation */
-
-    /* fragment 9: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)APICAL_WRITE_32)(2664, v0 | 1); /* jalr target resolved by relocation */
-
-    /* fragment 10: ConstantLoad */
-    v0 = ((char *)&__fw);
-
-    /* fragment 11: MemoryAccess */
-    *(uint16_t *)((char *)v0 + 4068) = s6;
-    *(uint16_t *)((char *)v0 + 4070) = s5;
-    *(uint16_t *)((char *)v0 + 4072) = s4;
-    ra = local_2c;
-    s6 = local_28;
-    s5 = local_24;
-    s4 = local_20;
-    s3 = local_1c;
-    s2 = local_18;
-    s1 = local_14;
-    s0 = local_10;
-    a0 = (uintptr_t)&dump_vsd;
-    t9 = (uintptr_t)&matrix_yuv_coefft_write_to_hardware;
-    a0 = a0 + 27644;
-    t9 = t9;
-
-    /* fragment 12: IndirectTailCall */
-    return ((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))matrix_yuv_coefft_write_to_hardware)((uintptr_t)(a0), (uintptr_t)(a1), (uintptr_t)(a2), (uintptr_t)(a3));
-
-    return 0;
-}
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000015a74 origin=model_output original=apical_change_resolution */
 int32_t apical_change_resolution(uint32_t arg1)
@@ -9112,19 +9024,14 @@ int32_t awb_roi_part_2(void *arg1, int32_t arg2, int32_t *arg3)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000019630 origin=fragment_seed original=get_apical_api_buffer */
 int32_t get_apical_api_buffer(void)
 {
-    uint32_t ra = 0;
-    uintptr_t v0 = 0;
-
-    /* fragment 0: Arithmetic */
-    v0 = (uintptr_t)&dump_vsd;
-
-    /* fragment 1: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    /* fragment 2: Arithmetic */
-    v0 = v0 + 32340;
-
-    return 0;
+	/*
+	 * OEM 0x19630 returns the .bss API buffer that apical_api_read_buffer()
+	 * copies out (vendor build: both use .bss+0x7bc4).  The recovered body
+	 * computed that address from an unrelated anchor and then returned 0,
+	 * so ae_read_full_histogram_data() copied 1 KiB to address 0 whenever
+	 * a full-histogram read was requested.
+	 */
+	return (int32_t)(uintptr_t)apical_api_buffer;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001963c origin=model_output original=selftest_sensor_id */
@@ -13453,7 +13360,9 @@ int32_t apical_api_calibration(uint32_t a0, uint32_t a1, void *a2, uint32_t a3, 
 	}
 
 	sensor_idx = (int16_t)(*(uint16_t *)(api_base + (idx << 1)));
-	if (sensor_idx == 0xffff) {
+	/* The table marks unmapped ids with 0xffff; sensor_idx is the
+	 * sign-extended halfword, so compare the halfword. */
+	if ((uint16_t)sensor_idx == 0xffff) {
 		return 5;
 	}
 
@@ -14559,9 +14468,10 @@ uint32_t cmos_fsm_process_interrupt(int32_t *arg1, char arg2)
 			APICAL_WRITE_32(0x24c,
 				(APICAL_READ_32(0x24c) & 0xfffff000) |
 				(field_5c & 0xfff));
-			reg = APICAL_READ_32((char *)&apical_downscaler_lut + 0x29c);
-			APICAL_WRITE_32((char *)&apical_downscaler_lut + 0x29c,
-				reg | ((uint32_t)(uint16_t)field_5c << 16));
+			/* OEM: 0x400ac, high half replaced (vendor 0x1ed14). */
+			reg = APICAL_READ_32(0x400ac);
+			APICAL_WRITE_32(0x400ac, (reg & 0xffff) |
+				((uint32_t)(uint16_t)field_5c << 16));
 		}
 
 		value = *(int32_t *)((char *)cmos_get_frame_exposure_set(arg1, 0) +
@@ -21674,16 +21584,24 @@ uint32_t sensor_sync_get_output_resolution(void *arg1, int16_t *arg2)
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002ab0c origin=model_output original=apply_dvi_sync_param */
 int32_t apply_dvi_sync_param(int16_t *arg1)
 {
-    APICAL_WRITE_32((uintptr_t)&_calibration_ct40pos, (APICAL_READ_32((uintptr_t)&_calibration_ct40pos) & 0xffff0000) | (uint32_t)(uint16_t)arg1[2]);
-    APICAL_WRITE_32((uintptr_t)&_calibration_ct40pos, (uint32_t)APICAL_READ_32((uintptr_t)&_calibration_ct40pos) | ((uint32_t)(uint16_t)arg1[3] << 0x10));
-    APICAL_WRITE_32((uintptr_t)&_calibration_ct65pos, (APICAL_READ_32((uintptr_t)&_calibration_ct65pos) & 0xffff0000) | (uint32_t)(uint16_t)arg1[0]);
-    APICAL_WRITE_32((uintptr_t)&_calibration_ct65pos, (uint32_t)APICAL_READ_32((uintptr_t)&_calibration_ct65pos) | ((uint32_t)(uint16_t)arg1[1] << 0x10));
-    APICAL_WRITE_32((uintptr_t)&_calibration_color_temp, (APICAL_READ_32((uintptr_t)&_calibration_color_temp) & 0xfffff000) | ((uint32_t)(uint16_t)arg1[6] & 0xfff));
-    APICAL_WRITE_32((uintptr_t)&_calibration_color_temp, (APICAL_READ_32((uintptr_t)&_calibration_color_temp) & 0xf000ffff) | (((uint32_t)(uint16_t)arg1[7] & 0xfff) << 0x10));
-    APICAL_WRITE_32(((char *)&_calibration_color_temp + 0x4), (APICAL_READ_32(((char *)&_calibration_color_temp + 0x4)) & 0xfffff000) | ((uint32_t)(uint16_t)arg1[8] & 0xfff));
-    APICAL_WRITE_32(((char *)&_calibration_color_temp + 0x4), (APICAL_READ_32(((char *)&_calibration_color_temp + 0x4)) & 0xf000ffff) | (((uint32_t)(uint16_t)arg1[9] & 0xfff) << 0x10));
-    APICAL_WRITE_32(((char *)&_calibration_color_temp + 0x4), (APICAL_READ_32(((char *)&_calibration_color_temp + 0x4)) & 0xfffff000) | ((uint32_t)(uint16_t)arg1[4] & 0xfff));
-    return APICAL_WRITE_32(((char *)&_calibration_color_temp + 0x4), (APICAL_READ_32(((char *)&_calibration_color_temp + 0x4)) & 0xf000ffff) | (((uint32_t)(uint16_t)arg1[5] & 0xfff) << 0x10));
+	/*
+	 * OEM 0x2ab0c (vendor build 0x2a1b8) programs five 0x4000x words.  The
+	 * decompiler resolved those constants to the unrelated data symbols
+	 * _calibration_ct40pos/_ct65pos/_color_temp, so the open build passed
+	 * kernel addresses as register offsets and wrote arg1[4..5] to the
+	 * 0x40010 word instead of 0x40000.  Both accessors ignore offsets
+	 * outside the ISP window and the 0x40100 ext bank, as OEM does.
+	 */
+	APICAL_WRITE_32(0x40004, (APICAL_READ_32(0x40004) & 0xffff0000) | (uint32_t)(uint16_t)arg1[2]);
+	APICAL_WRITE_32(0x40004, (APICAL_READ_32(0x40004) & 0xffff) | ((uint32_t)(uint16_t)arg1[3] << 0x10));
+	APICAL_WRITE_32(0x40008, (APICAL_READ_32(0x40008) & 0xffff0000) | (uint32_t)(uint16_t)arg1[0]);
+	APICAL_WRITE_32(0x40008, (APICAL_READ_32(0x40008) & 0xffff) | ((uint32_t)(uint16_t)arg1[1] << 0x10));
+	APICAL_WRITE_32(0x4000c, (APICAL_READ_32(0x4000c) & 0xfffff000) | ((uint32_t)(uint16_t)arg1[6] & 0xfff));
+	APICAL_WRITE_32(0x4000c, (APICAL_READ_32(0x4000c) & 0xf000ffff) | (((uint32_t)(uint16_t)arg1[7] & 0xfff) << 0x10));
+	APICAL_WRITE_32(0x40010, (APICAL_READ_32(0x40010) & 0xfffff000) | ((uint32_t)(uint16_t)arg1[8] & 0xfff));
+	APICAL_WRITE_32(0x40010, (APICAL_READ_32(0x40010) & 0xf000ffff) | (((uint32_t)(uint16_t)arg1[9] & 0xfff) << 0x10));
+	APICAL_WRITE_32(0x40000, (APICAL_READ_32(0x40000) & 0xfffff000) | ((uint32_t)(uint16_t)arg1[4] & 0xfff));
+	return APICAL_WRITE_32(0x40000, (APICAL_READ_32(0x40000) & 0xf000ffff) | (((uint32_t)(uint16_t)arg1[5] & 0xfff) << 0x10));
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002acc4 origin=model_output original=apply_dvi_fpga_sync_param */
@@ -22844,7 +22762,7 @@ int32_t ae_calculate_exposure(int32_t *arg1)
 		int32_t fp_1 = *(int32_t *)((char *)s1 + 0x64);
 		int32_t s7_1 = *(int32_t *)((char *)s1 + 0x68);
 		int32_t s1_3 = *(int32_t *)((char *)s1 + 0x2e4);
-		int32_t apical_val = APICAL_READ_32(((char *)&_calibration_rghigh_lut + 0xc0));
+		int32_t apical_val = APICAL_READ_32(0x40114); /* OEM: ext max_integration_time word (vendor 0x2b348) */
 		int32_t log2_val = log2_fixed_to_fixed((uint32_t)apical_val >> 0x10, 0, 0x10);
 		int32_t a0_3 = arg1[8];
 		int32_t v1_1 = arg1[9];
@@ -23350,8 +23268,9 @@ uint32_t awb_init(void *arg1)
 	*p764 = 0;
 	*p768 = 0;
 	*p76c = 0;
-	cal_val = APICAL_READ_32(((char *)&_calibration_ct65pos));
-	cal_val2 = APICAL_READ_32(((char *)&_calibration_ct65pos));
+	/* OEM reads 0x40008 here (vendor 0x2c104), not a data symbol. */
+	cal_val = APICAL_READ_32(0x40008);
+	cal_val2 = APICAL_READ_32(0x40008);
 
 	if (*p10 == 0) {
 		*p40 = 0;
