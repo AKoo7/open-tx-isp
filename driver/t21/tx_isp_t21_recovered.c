@@ -21484,6 +21484,9 @@ tisp_ev_update0x84:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000e194 origin=model_output original=tisp_deinit */
+/* true once the ISP was reset after the last tisp_init(): no stats DMA. */
+static bool t21_tisp_stats_quiesced = true;
+
 int32_t tisp_deinit(void)
 {
 	int32_t ret;
@@ -21502,7 +21505,17 @@ int32_t tisp_deinit(void)
 	}
 
 
-	/* The statistics buffers stay allocated (see t21_tisp_stats). */
+	/* The statistics buffers stay allocated (see t21_tisp_stats): the ISP
+	 * keeps their DMA addresses (0x72c.., 0x83c.., 0xe28.., 0x1464..,
+	 * 0x9a8..) and writes AE/AWB/AF/ADR statistics there whenever it sees
+	 * frames, until the next tisp_init() reprograms them.  Put the block
+	 * through the same soft reset ispcore_core_ops_init() does before
+	 * tisp_init(), so no stale DMA can reach the buffers once
+	 * t21_tisp_stats_free() returns them at module exit (after an rmmod the
+	 * slab hands that memory to the next instance, e.g. its 0x40d0-byte
+	 * tuning state, whose event pointer then got overwritten by AE
+	 * histogram data). */
+	t21_tisp_stats_quiesced = private_reset_tx_isp_module(0) == 0;
 	info->ae_buffer = NULL;
 	info->awb_buffer = NULL;
 	info->af_buffer = NULL;
@@ -21831,6 +21844,12 @@ static void t21_tisp_stats_free(void)
 {
 	unsigned int i;
 
+	if (!t21_tisp_stats_quiesced) {
+		/* The hardware may still DMA into them: leaking ~88 KB is
+		 * better than letting statistics land in reused memory. */
+		pr_warn("tx-isp-t21: ISP not quiesced, keeping statistics buffers\n");
+		return;
+	}
 	for (i = 0; i < ARRAY_SIZE(t21_tisp_stats); i++) {
 		private_kfree(t21_tisp_stats[i]);
 		t21_tisp_stats[i] = NULL;
@@ -22010,6 +22029,7 @@ int32_t tisp_init(int32_t *arg1)
 	system_reg_write(0xc, t21_top_bypass_fix(loop_acc));
 	system_reg_write(0x1c, 0x200000);
 
+	t21_tisp_stats_quiesced = false;
 	buf1 = t21_tisp_stats_buffer(0);
 	pr_debug("tx-isp-t21: tisp buf1=%p irq_disabled=%d pid=%d\n",
 		buf1, irqs_disabled(), current->pid);
@@ -50746,6 +50766,13 @@ int32_t ispcore_slake_module(void *arg1)
 	tuning = *(void **)(core + 0x19c);
 	T21_STOP_TRACE("core slake: tuning %p event fn=%p", tuning,
 		       *(void **)((u8 *)tuning + 0x40cc));
+	/* The slot is only ever isp_core_tuning_event (isp_core_tuning_init);
+	 * a corrupted slot must not become an indirect jump. */
+	if (*(void **)((u8 *)tuning + 0x40cc) != (void *)isp_core_tuning_event) {
+		pr_err("tx-isp-t21: tuning event slot corrupted (%p), restoring\n",
+		       *(void **)((u8 *)tuning + 0x40cc));
+		*(void **)((u8 *)tuning + 0x40cc) = (void *)isp_core_tuning_event;
+	}
 	((void (*)(void *, u32, u32))
 	 *(void **)((u8 *)tuning + 0x40cc))(tuning, 0x4000001, 0);
 	T21_STOP_TRACE("core slake: tuning event done");
