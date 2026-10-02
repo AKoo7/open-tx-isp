@@ -482,21 +482,6 @@ static u32 tisp_cfa_base_from_mbus(u32 mbus_code)
     }
 }
 
-static u32 tisp_cfa_apply_flip(u32 idx, unsigned int shvflip)
-{
-    /* T31 order: RGGB, BGGR, GRBG, GBRG. */
-    static const u8 hmap[4] = {2, 3, 0, 1};
-    static const u8 vmap[4] = {3, 2, 1, 0};
-
-    idx &= 0x3;
-    if (shvflip & 0x1)
-        idx = hmap[idx];
-    if (shvflip & 0x2)
-        idx = vmap[idx];
-
-    return idx;
-}
-
 static int tisp_bayer_from_sensor(struct tx_isp_dev *isp_dev, u32 *bayer)
 {
     u32 code;
@@ -508,8 +493,12 @@ static int tisp_bayer_from_sensor(struct tx_isp_dev *isp_dev, u32 *bayer)
     if (code < 0x3001 || code > 0x3014)
         return -EINVAL;
 
-    *bayer = tisp_cfa_apply_flip(tisp_cfa_base_from_mbus(code),
-                                 isp_dev->sensor->video.shvflip);
+    /* OEM ispcore_core_ops_init (0x68ba8) takes the pattern from the mbus
+     * code alone.  video.shvflip only says that flips go to the sensor
+     * (default 0); a sensor whose order changes on a flip reports the new
+     * mbus code itself.  Remapping by shvflip turned BGGR into GBRG for
+     * shvflip=1 although nothing was flipped. */
+    *bayer = tisp_cfa_base_from_mbus(code);
     return 0;
 }
 
@@ -550,7 +539,7 @@ static int tisp_fill_sensor_info_blob(struct tx_isp_dev *isp_dev,
     tisp_si_set_word(info, TISP_SI_WORD_WIDTH, active_width);
     tisp_si_set_word(info, TISP_SI_WORD_HEIGHT, active_height);
     tisp_si_set_word(info, TISP_SI_WORD_FPS, raw_fps);
-    /* Keep sensor-info Bayer as the flipped base CFA index (0..3).
+    /* Keep sensor-info Bayer as the base CFA index (0..3).
      * The extended programming values live only inside tisp_init(). */
     tisp_si_set_word(info, TISP_SI_WORD_BAYER, bayer);
 
@@ -1657,6 +1646,17 @@ irqreturn_t ispcore_interrupt_service_routine(int irq, void *dev_id)
      */
     /* One-shot bayer write and top_sel — must fire on first interrupt,
      * not gated by bit 0x1 which may not fire reliably yet. */
+	    /* OEM 0x69b30-0x69b54: with video.shvflip == 1 a sensor whose
+	     * Bayer order changes on a flip sets video.mbus_change together
+	     * with the new mbus code and notifies SYNC_SENSOR_ATTR; the next
+	     * interrupt writes the new pattern (mbus_to_bayer_write) and
+	     * clears the flag. */
+	    if (isp_dev && isp_dev->sensor &&
+	        isp_dev->sensor->video.shvflip == 1 &&
+	        isp_dev->sensor->video.mbus_change == 1) {
+	        isp_dev->sensor->video.mbus_change = 0;
+	        bayer_write_pending = 1;
+	    }
 	    if (bayer_write_pending) {
 	        u32 mbus_code = 0;
 	        if (isp_dev && isp_dev->sensor)

@@ -2398,6 +2398,34 @@ int sensor_fps_control(int fps) {
 }
 EXPORT_SYMBOL(sensor_fps_control);
 
+/*
+ * Sensor half of a flip with video.shvflip == 1.  OEM apical_isp_hvflip_update
+ * parks the H/V mask in pending slot 5 (core+0x1a8/+0x1ac) and
+ * ispcore_irq_thread_handle (0x66ae0) sends it as TX_ISP_EVENT_SENSOR_VFLIP
+ * (0x2000010) with a pointer to the mask; the sensor driver takes the bits it
+ * implements.  The tuning path runs in process context, so the event is sent
+ * from there, under the same sensor pointer snapshot as sensor_fps_control.
+ */
+int tx_isp_sensor_hvflip_control(int mask)
+{
+    struct tx_isp_subdev_ops *ops;
+    struct tx_isp_subdev *sensor_sd;
+    int ret;
+
+    mutex_lock(&sensor_ops_call_mutex);
+    ops = stored_sensor_ops.original_ops;
+    sensor_sd = stored_sensor_ops.sensor_sd;
+    if (!ourISPdev || !ourISPdev->sensor || !ops || !ops->sensor ||
+        !ops->sensor->ioctl || !sensor_sd) {
+        mutex_unlock(&sensor_ops_call_mutex);
+        return -ENODEV;
+    }
+
+    ret = ops->sensor->ioctl(sensor_sd, TX_ISP_EVENT_SENSOR_VFLIP, &mask);
+    mutex_unlock(&sensor_ops_call_mutex);
+    return ret;
+}
+
 static int sensor_fps_control_state(int fps,
                                     struct tisp_sensor_ctrl_state *ctrl)
 {

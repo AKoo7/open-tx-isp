@@ -343,6 +343,7 @@ int tisp_s_defog_enable(int enable);
 int tisp_s_ccm_attr(const void *in);
 static int tisp_get_csc_attr(uint32_t *buf);
 static void tisp_apply_hvflip(struct isp_tuning_data *tuning);
+int apical_isp_hvflip_update(void *arg1, int arg2);
 
 /* External hardware register write functions from tx_isp_module.c */
 extern void system_reg_write(u32 reg, u32 value);
@@ -3559,11 +3560,9 @@ int tisp_ev_update(uint32_t ev, uint32_t aux_ev);
 int tisp_ct_update(uint32_t ct);
 int tisp_ae_ir_update(uint32_t ir_val);
 int tisp_lsc_write_lut_datas(void);
-static int tisp_lsc_hvflip(u32 width, u32 height, int hflip, int vflip);
 static int tisp_lsc_ct_update(uint32_t ct);
 static int tisp_lsc_gain_update(uint32_t gain);
-static int tisp_lsc_mirror_flip(u32 width, u32 height, int hflip, int vflip);
-static int tisp_lsc_upside_down_lut(uint32_t *lut, int rows, int cols_padded);
+static void tisp_lsc_upside_down_lut(uint32_t *lut, int rows, int cols_padded);
 static int tisp_lsc_lut_mirror_exchange(uint32_t *lut, int idx_a, int idx_b,
 					int lane_a, int lane_b);
 static uint32_t tisp_simple_intp(int gain_hi, int gain_lo, const uint32_t *array);
@@ -9992,6 +9991,26 @@ static uint32_t lsc_last_mode;
 static uint32_t lsc_last_str;
 static uint32_t lsc_force_update;
 
+/*
+ * LSC mesh orientation for a flip done in the sensor (video.shvflip == 1),
+ * see tisp_lsc_set_sensor_flip().  Bit 0: columns mirrored (H), bit 1: rows
+ * turned over (V).  lsc_flip_lock covers every rewrite of the A/T/D tables
+ * together with this bookkeeping.  It is taken with interrupts off: the
+ * tables are turned in place, and ip_done_interrupt_static reads them for
+ * every frame, so it must not see a half-turned table.
+ */
+#define LSC_FLIP_MIRROR 0x1
+#define LSC_FLIP_UPSIDE 0x2
+#define LSC_LUT_WORDS   2047
+static DEFINE_SPINLOCK(lsc_flip_lock);
+static u8 lsc_flip_want;          /* orientation the sensor delivers */
+static u8 lsc_flip_have[3];       /* orientation of lsc_a/t/d_lut */
+static int lsc_flip_rows;         /* mesh the tables were turned on */
+static int lsc_flip_cols;
+static u32 lsc_flip_width;        /* sensor size of the last request */
+static u32 lsc_flip_height;
+static bool tisp_lsc_flip_sync_locked(void);
+
 /* Additional helper function declarations for remaining parameter arrays */
 int tisp_rdns_param_array_get(int param_id, void *out_buf, int *size_buf);
 int tisp_adr_param_array_get(int param_id, void *out_buf, int *size_buf);
@@ -15218,7 +15237,24 @@ int tisp_lsc_param_array_set(int param_id, void *in_buf, int *size_buf)
             return -1;
     }
 
-    memcpy(dest_ptr, in_buf, data_size);
+    if (param_id == 0x57 || (param_id >= 0x59 && param_id <= 0x5b)) {
+        unsigned long flags;
+        u8 want;
+
+        /* A new table arrives as calibrated, a new mesh changes how the
+         * others are turned: turn all back, store, turn to the sensor
+         * flip again. */
+        spin_lock_irqsave(&lsc_flip_lock, flags);
+        want = lsc_flip_want;
+        lsc_flip_want = 0;
+        tisp_lsc_flip_sync_locked();
+        memcpy(dest_ptr, in_buf, data_size);
+        lsc_flip_want = want;
+        tisp_lsc_flip_sync_locked();
+        spin_unlock_irqrestore(&lsc_flip_lock, flags);
+    } else {
+        memcpy(dest_ptr, in_buf, data_size);
+    }
     system_reg_write(0x3800, (lsc_mesh_size[1] << 16) | lsc_mesh_size[0]);
     system_reg_write(0x3804, (data_9a414 << 16) | (lsc_mean_en << 15) | lsc_mesh_scale);
     lsc_last_mode = 5;
@@ -20772,6 +20808,11 @@ void tiziano_lsc_params_refresh(void)
     const u8 *p = (const u8 *)(tparams_active ? tparams_active : tparams_day);
 
     if (p && tuning_bin_loaded) {
+        unsigned long flags;
+
+        /* The bank holds the tables as calibrated; a sensor flip has to be
+         * applied to them again (the OEM loses its turned copy here). */
+        spin_lock_irqsave(&lsc_flip_lock, flags);
         memcpy(&data_9a418, p + 0x30E0, 4);
         memcpy(&lsc_mesh_scale, p + 0x30E4, 4);
         memcpy(&data_9a414, p + 0x30E8, 4);
@@ -20784,6 +20825,9 @@ void tiziano_lsc_params_refresh(void)
         memcpy(lsc_a_lut, p + 0x3104, 0x1FFC);
         memcpy(lsc_t_lut, p + 0x5100, 0x1FFC);
         memcpy(lsc_d_lut, p + 0x70FC, 0x1FFC);
+        memset(lsc_flip_have, 0, sizeof(lsc_flip_have));
+        tisp_lsc_flip_sync_locked();
+        spin_unlock_irqrestore(&lsc_flip_lock, flags);
         memcpy(lsc_mesh_str, p + 0x90F8, 0x24);
         memcpy(lsc_mesh_str_wdr, p + 0x911C, 0x24);
         memcpy(&lsc_mean_en, p + 0x9140, 4);
@@ -29673,108 +29717,165 @@ static int tisp_lsc_lut_mirror_exchange(uint32_t *lut, int idx_a, int idx_b,
 	return (int)*word_b;
 }
 
-static int tisp_lsc_upside_down_lut(uint32_t *lut, int rows, int cols_padded)
+/* OEM tisp_lsc_upside_down_lut (0x23b28): swap mesh row r with row
+ * rows-1-r; a row is cols_padded entries of 12 bits, 1.5 words each.  The OEM
+ * goes through a vmalloc'd row buffer; swapping word by word needs none and
+ * can run with interrupts off. */
+static void tisp_lsc_upside_down_lut(uint32_t *lut, int rows, int cols_padded)
 {
-	int row_bytes = cols_padded * 6;
-	int row_stride = ((cols_padded * 3) / 2) << 2;
-	uint8_t *tmp;
-	uint8_t *top;
-	uint8_t *bottom;
-	int i;
-
-	tmp = vmalloc(row_bytes);
-	if (!tmp)
-		return -ENOMEM;
-
-	memset(tmp, 0, row_bytes);
-	top = (uint8_t *)lut;
-	bottom = top + (rows - 1) * row_stride;
+	int row_words = (cols_padded * 3) / 2;
+	uint32_t *top = lut;
+	uint32_t *bottom = lut + (rows - 1) * row_words;
+	int i, k;
 
 	for (i = 0; i != (rows >> 1); i++) {
-		memcpy(tmp, top, row_bytes);
-		memmove(top, bottom, row_bytes);
-		memcpy(bottom, tmp, row_bytes);
-		top += row_stride;
-		bottom -= row_stride;
+		for (k = 0; k < row_words; k++)
+			swap(top[k], bottom[k]);
+		top += row_words;
+		bottom -= row_words;
 	}
-
-	vfree(tmp);
-	return 0;
 }
 
-static int tisp_lsc_mirror_flip(u32 width, u32 height, int hflip, int vflip)
+/* OEM tisp_lsc_mirror_flip (0x23cf4), column part: mirror every mesh row of
+ * one table. */
+static void tisp_lsc_mirror_lut(uint32_t *lut, int rows, int cols, int cols_padded)
 {
-	int mesh_w = (int)lsc_mesh_size[0];
-	int mesh_h = (int)lsc_mesh_size[1];
-	int rows;
-	int cols;
-	int cols_padded;
 	int row_base = 0;
 	int row;
 
-	if (!mesh_w || !mesh_h)
+	for (row = 0; row < rows; row++) {
+		int left = 0;
+		int right = cols - 1;
+
+		while (left < (cols >> 1)) {
+			int idx_left = ((left + row_base) / 2) * 3;
+			int idx_right = ((right + row_base) / 2) * 3;
+			int lane_left = left & 1;
+			int lane_right = right & 1;
+
+			tisp_lsc_lut_mirror_exchange(lut, idx_left, idx_right,
+						     lane_left, lane_right);
+			tisp_lsc_lut_mirror_exchange(lut, idx_left + 2, idx_right + 2,
+						     lane_left, lane_right);
+			tisp_lsc_lut_mirror_exchange(lut, idx_left + 1, idx_right + 1,
+						     lane_left, lane_right);
+			left++;
+			right--;
+		}
+
+		row_base += cols_padded;
+	}
+}
+
+static void tisp_lsc_turn_lut(uint32_t *lut, int rows, int cols, u8 turn)
+{
+	int cols_padded = cols + (cols & 1);
+
+	if (turn & LSC_FLIP_UPSIDE)
+		tisp_lsc_upside_down_lut(lut, rows, cols_padded);
+	if (turn & LSC_FLIP_MIRROR)
+		tisp_lsc_mirror_lut(lut, rows, cols, cols_padded);
+}
+
+/* Mesh of the OEM tisp_lsc_mirror_flip: one node per lsc_mesh_size pixels
+ * plus the closing one, columns padded to even.  Fails if the mesh does not
+ * fit the 2047-word tables (or no size is known yet). */
+static int tisp_lsc_flip_geometry(u32 width, u32 height, int *rows, int *cols)
+{
+	u32 mesh_w = lsc_mesh_size[0];
+	u32 mesh_h = lsc_mesh_size[1];
+	u32 r, c, cp;
+
+	if (!mesh_w || !mesh_h || !width || !height)
 		return -EINVAL;
 
-	rows = (int)(height / (u32)mesh_h) + 1 + ((height % (u32)mesh_h) > 0 ? 1 : 0);
-	cols = (int)(width / (u32)mesh_w) + 1 + ((width % (u32)mesh_w) > 0 ? 1 : 0);
-	cols_padded = cols + (cols & 1);
+	r = height / mesh_h + 1 + ((height % mesh_h) ? 1 : 0);
+	c = width / mesh_w + 1 + ((width % mesh_w) ? 1 : 0);
+	cp = c + (c & 1);
+	if (r > LSC_LUT_WORDS || cp > LSC_LUT_WORDS ||
+	    (r * cp * 3) / 2 > LSC_LUT_WORDS)
+		return -ERANGE;
 
-	if (hflip == 1) {
-		tisp_lsc_upside_down_lut(lsc_a_lut, rows, cols_padded);
-		tisp_lsc_upside_down_lut(lsc_t_lut, rows, cols_padded);
-		tisp_lsc_upside_down_lut(lsc_d_lut, rows, cols_padded);
-	}
-
-	if (vflip == 1) {
-		for (row = 0; row < rows; row++) {
-			int left = 0;
-			int right = cols - 1;
-
-			while (left < (cols >> 1)) {
-				int idx_left = ((left + row_base) / 2) * 3;
-				int idx_right = ((right + row_base) / 2) * 3;
-				int lane_left = left & 1;
-				int lane_right = right & 1;
-
-				tisp_lsc_lut_mirror_exchange(lsc_a_lut, idx_left, idx_right,
-							     lane_left, lane_right);
-				tisp_lsc_lut_mirror_exchange(lsc_a_lut, idx_left + 2, idx_right + 2,
-							     lane_left, lane_right);
-				tisp_lsc_lut_mirror_exchange(lsc_a_lut, idx_left + 1, idx_right + 1,
-							     lane_left, lane_right);
-
-				tisp_lsc_lut_mirror_exchange(lsc_t_lut, idx_left, idx_right,
-							     lane_left, lane_right);
-				tisp_lsc_lut_mirror_exchange(lsc_t_lut, idx_left + 2, idx_right + 2,
-							     lane_left, lane_right);
-				tisp_lsc_lut_mirror_exchange(lsc_t_lut, idx_left + 1, idx_right + 1,
-							     lane_left, lane_right);
-
-				tisp_lsc_lut_mirror_exchange(lsc_d_lut, idx_left, idx_right,
-							     lane_left, lane_right);
-				tisp_lsc_lut_mirror_exchange(lsc_d_lut, idx_left + 2, idx_right + 2,
-							     lane_left, lane_right);
-				tisp_lsc_lut_mirror_exchange(lsc_d_lut, idx_left + 1, idx_right + 1,
-							     lane_left, lane_right);
-
-				left++;
-				right--;
-			}
-
-			row_base += cols_padded;
-		}
-	}
-
-	lsc_api_flag = 1;
-	lsc_force_update = 1;
-	tisp_lsc_write_lut_datas();
-	lsc_api_flag = 0;
+	*rows = r;
+	*cols = c;
 	return 0;
 }
 
-static int tisp_lsc_hvflip(u32 width, u32 height, int hflip, int vflip)
+/* Bring every table from the orientation it has to lsc_flip_want.  Turning
+ * is its own inverse, so a table is turned by have ^ want on the same mesh;
+ * after a mesh change it is first turned back on the mesh it was turned on.
+ * Caller holds lsc_flip_lock with interrupts off.  Returns true if a table
+ * changed. */
+static bool tisp_lsc_flip_sync_locked(void)
 {
-	return tisp_lsc_mirror_flip(width, height, hflip, vflip);
+	static uint32_t *const luts[3] = { lsc_a_lut, lsc_t_lut, lsc_d_lut };
+	u8 want = lsc_flip_want;
+	bool changed = false;
+	int rows = 0, cols = 0;
+	int i;
+
+	if (want && tisp_lsc_flip_geometry(lsc_flip_width, lsc_flip_height,
+					   &rows, &cols)) {
+		pr_warn_ratelimited("LSC: mesh %ux%u does not fit %ux%u, sensor flip not applied to the shading tables\n",
+				    lsc_mesh_size[0], lsc_mesh_size[1],
+				    lsc_flip_width, lsc_flip_height);
+		want = 0;
+	}
+
+	for (i = 0; i < 3; i++) {
+		u8 have = lsc_flip_have[i];
+
+		if (have == want)
+			continue;
+		if (have && want && rows == lsc_flip_rows && cols == lsc_flip_cols) {
+			tisp_lsc_turn_lut(luts[i], rows, cols, have ^ want);
+		} else {
+			if (have)
+				tisp_lsc_turn_lut(luts[i], lsc_flip_rows,
+						  lsc_flip_cols, have);
+			if (want)
+				tisp_lsc_turn_lut(luts[i], rows, cols, want);
+		}
+		lsc_flip_have[i] = want;
+		changed = true;
+	}
+
+	if (want) {
+		lsc_flip_rows = rows;
+		lsc_flip_cols = cols;
+	}
+	return changed;
+}
+
+/*
+ * LSC part of OEM apical_isp_hvflip_update (0x547c) for a sensor-side flip:
+ * tisp_lsc_hvflip (0x6644c) -> tisp_lsc_mirror_flip (0x23cf4) with
+ * request 1 -> mirror the columns, 2 -> turn the rows over, 3 -> both, on
+ * the vi_max_width x vi_max_height mesh.  The OEM turns the A/T/D tables in
+ * place on every request, so a second request toggles instead of setting
+ * (H, then H+V leaves only V turned; 0 keeps the last orientation), and a
+ * day/night reload brings back unturned tables while the sensor stays
+ * flipped.  Here the orientation is a state: tables are moved to it from
+ * the one they have, also after a reload or a table/mesh write.
+ */
+static void tisp_lsc_set_sensor_flip(u32 width, u32 height, u8 want)
+{
+	unsigned long flags;
+	bool changed;
+
+	spin_lock_irqsave(&lsc_flip_lock, flags);
+	lsc_flip_width = width;
+	lsc_flip_height = height;
+	lsc_flip_want = want & (LSC_FLIP_MIRROR | LSC_FLIP_UPSIDE);
+	changed = tisp_lsc_flip_sync_locked();
+	spin_unlock_irqrestore(&lsc_flip_lock, flags);
+
+	if (changed) {
+		lsc_api_flag = 1;
+		lsc_force_update = 1;
+		tisp_lsc_write_lut_datas();
+		lsc_api_flag = 0;
+	}
 }
 
 static void tisp_s_mscaler_hvflip_mask(u8 mask)
@@ -29809,43 +29910,47 @@ static void tisp_hv_flip_enable(u8 mask)
 	pr_debug("tisp_hv_flip_enable: mask=0x%x arb=0x%08x\n", mask, arb);
 }
 
+/* OEM s_ctrl 0x980914/0x980915/0x80000e4 all end in apical_isp_hvflip_update
+ * with H in bit 0 and V in bit 1. */
 static void tisp_apply_hvflip(struct isp_tuning_data *tuning)
 {
-	u8 mask;
-
 	if (!tuning)
 		return;
 
-	mask = (tuning->hflip ? 1 : 0) | (tuning->vflip ? 2 : 0);
-	tisp_s_mscaler_hvflip_mask(mask);
-	tisp_hv_flip_enable(mask);
+	apical_isp_hvflip_update(NULL, (tuning->hflip ? 1 : 0) |
+				       (tuning->vflip ? 2 : 0));
 }
 
-/* OEM EXACT: apical_isp_hvflip_update (0x547c) — handle sensor H/V flip.
- * Called from s_ctrl when HFLIP (0x980914) or VFLIP (0x980915) changes.
- * arg1 = ISP dev private, arg2 = combined flip state (bit0=hflip, bit1=vflip) */
+/*
+ * OEM apical_isp_hvflip_update (0x547c).  The OEM argument is the core
+ * private, of which only the copied sensor video_in is read: +0x134 is
+ * video.shvflip, +0x124/+0x128 video.vi_max_width/height; here they come from
+ * the live sensor.
+ *
+ * shvflip != 1: the flip is done by the MSCA alone (0x9818).
+ * shvflip == 1: the LSC tables follow the flip, the request goes to the
+ * sensor as TX_ISP_EVENT_SENSOR_VFLIP with the whole mask (OEM: pending slot
+ * 5, core+0x1a8/+0x1ac, sent by ispcore_irq_thread_handle 0x66ae0; the
+ * sensor driver takes the bits it implements, sc4336p bit 1 = V via 0x3221),
+ * and the MSCA keeps only H (mask & 0xfd).  A sensor whose Bayer order
+ * changes reports it through mbus_change, see ispcore_interrupt_service_routine.
+ */
 int apical_isp_hvflip_update(void *arg1, int arg2)
 {
-	u32 *dev = (u32 *)arg1;
-	u8 flip_mask;
-	int hflip = 0, vflip = 0;
+	struct tx_isp_sensor *sensor = ourISPdev ? ourISPdev->sensor : NULL;
+	u8 flip_mask = (u8)(arg2 & 0xff);
 
-	/* OEM: *(arg1 + 0x134) = sensor type flag.
-	 * When == 1, decode arg2 into separate h/v flags for LSC. */
-	if (dev && dev[0x134 / 4] == 1) {
-		switch (arg2) {
-		case 0: hflip = 0; vflip = 0; break;
-		case 1: hflip = 1; vflip = 0; break;
-		case 2: hflip = 0; vflip = 1; break;
-		case 3: hflip = 1; vflip = 1; break;
-		default: break;
-		}
-		tisp_lsc_hvflip(dev[0x124 / 4], dev[0x128 / 4], hflip, vflip);
-		dev[0x1ac / 4] = arg2;
-		dev[0x1a8 / 4] = 1;
+	(void)arg1;
+	if (sensor && sensor->video.shvflip == 1) {
+		int ret;
+
+		tisp_lsc_set_sensor_flip(sensor->video.vi_max_width,
+					 sensor->video.vi_max_height,
+					 (u8)(arg2 & 3));
+		ret = tx_isp_sensor_hvflip_control(arg2);
+		if (ret)
+			pr_warn("hvflip: sensor flip 0x%x failed: %d\n", arg2, ret);
 		flip_mask = (u8)(arg2 & 0xfd);
-	} else {
-		flip_mask = (u8)(arg2 & 0xff);
 	}
 
 	tisp_s_mscaler_hvflip_mask(flip_mask);
