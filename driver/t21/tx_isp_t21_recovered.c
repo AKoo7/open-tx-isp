@@ -19501,6 +19501,7 @@ int32_t tx_isp_module_init(void *arg1, void *arg2)
  */
 static void t21_vin_forget_sensor(u8 *subdev)
 {
+	struct i2c_client *evict = NULL;
 	u8 *vin = t21_vin_subdev;
 	void *host;
 	void *head;
@@ -19541,12 +19542,32 @@ static void t21_vin_forget_sensor(u8 *subdev)
 					break;
 				}
 			}
+			/* Stash full: evict the oldest entry (its driver is
+			 * gone, so unregistering it runs no remove()) and keep
+			 * the newest; it is unregistered below, outside the
+			 * vin mutex. */
+			if (client && k == T21_STALE_SENSOR_CLIENTS) {
+				evict = t21_stale_sensor_client[0];
+				for (k = 1; k < T21_STALE_SENSOR_CLIENTS; k++)
+					t21_stale_sensor_client[k - 1] =
+						t21_stale_sensor_client[k];
+				t21_stale_sensor_client[k - 1] = client;
+			}
 		}
 		isp_printf(1, "sensor subdev %p removed while registered; unlinked from vin\n",
 			   subdev);
 		break;
 	}
 	private_mutex_unlock((struct mutex *)(vin + 0xe8));
+	if (evict) {
+		struct i2c_adapter *adap = evict->adapter;
+
+		pr_warn("tx-isp-t21: stale sensor client stash full, reaping oldest %p\n",
+			evict);
+		private_i2c_unregister_device(evict);
+		if (adap)
+			private_i2c_put_adapter(adap);
+	}
 }
 
 static void t21_vin_reap_stale_sensors(void)
@@ -21894,6 +21915,24 @@ static void t21_tisp_stats_free(void)
 	}
 }
 
+/*
+ * tisp_init() failed after programming some statistics DMA addresses:
+ * quiesce the block as tisp_deinit() does, so t21_tisp_stats_free() can
+ * return the (cached) buffers at module exit instead of leaking them.
+ */
+static int32_t t21_tisp_init_fail(void)
+{
+	struct t21_tisp_runtime_info *info = (void *)tispinfo;
+
+	t21_tisp_stats_quiesced = private_reset_tx_isp_module(0) == 0;
+	info->ae_buffer = NULL;
+	info->awb_buffer = NULL;
+	info->af_buffer = NULL;
+	info->defog_buffer = NULL;
+	info->mdns_buffer = NULL;
+	return -1;
+}
+
 int32_t tisp_init(int32_t *arg1)
 {
 	uint32_t sensor_w = *(uint32_t *)(arg1);
@@ -22072,7 +22111,7 @@ int32_t tisp_init(int32_t *arg1)
 	pr_debug("tx-isp-t21: tisp buf1=%p irq_disabled=%d pid=%d\n",
 		buf1, irqs_disabled(), current->pid);
 	if (!buf1)
-		return -1;
+		return t21_tisp_init_fail();
 
 	system_reg_write(0x72c, (uint32_t)buf1 - 0x80000000);
 	system_reg_write(0x72c, (uint32_t)buf1 - 0x80000000);
@@ -22095,7 +22134,7 @@ int32_t tisp_init(int32_t *arg1)
 	pr_debug("tx-isp-t21: tisp buf2=%p irq_disabled=%d pid=%d\n",
 		buf2, irqs_disabled(), current->pid);
 	if (!buf2)
-		return -1;
+		return t21_tisp_init_fail();
 
 	system_reg_write(0x83c, (uint32_t)buf2 - 0x80000000);
 	system_reg_write(0x840, (uint32_t)buf2 - 0x7ffff000);
@@ -22110,7 +22149,7 @@ int32_t tisp_init(int32_t *arg1)
 	pr_debug("tx-isp-t21: tisp buf3=%p irq_disabled=%d pid=%d\n",
 		buf3, irqs_disabled(), current->pid);
 	if (!buf3)
-		return -1;
+		return t21_tisp_init_fail();
 
 	system_reg_write(0xe28, (uint32_t)buf3 - 0x80000000);
 	system_reg_write(0xe2c, (uint32_t)buf3 - 0x7ffff800);
@@ -22125,7 +22164,7 @@ int32_t tisp_init(int32_t *arg1)
 	pr_debug("tx-isp-t21: tisp buf4=%p irq_disabled=%d pid=%d\n",
 		buf4, irqs_disabled(), current->pid);
 	if (!buf4)
-		return -1;
+		return t21_tisp_init_fail();
 
 	system_reg_write(0x1464, (uint32_t)buf4 - 0x80000000);
 	system_reg_write(0x1468, (uint32_t)buf4 - 0x7ffff000);
@@ -22140,7 +22179,7 @@ int32_t tisp_init(int32_t *arg1)
 	pr_debug("tx-isp-t21: tisp buf5=%p irq_disabled=%d pid=%d\n",
 		buf5, irqs_disabled(), current->pid);
 	if (!buf5)
-		return -1;
+		return t21_tisp_init_fail();
 
 	system_reg_write(0x9a8, (uint32_t)buf5 - 0x80000000);
 	system_reg_write(0x9ac, (uint32_t)buf5 - 0x7ffff000);
@@ -49849,6 +49888,10 @@ int32_t ispcore_core_ops_init(uintptr_t a0, uint32_t enable)
 	if (!t21_isp_valid_ptr(thread)) {
 		isp_printf(2, "%s[%d] kthread_run was failed!\n",
 			   "ispcore_core_ops_init", 1169);
+		/* Undo tisp_init(): event/param state, and quiesce the
+		 * statistics DMA so the buffers can be freed at exit. */
+		*(struct task_struct **)(core + 0x198) = NULL;
+		tisp_deinit();
 		return -EINVAL;
 	}
 
