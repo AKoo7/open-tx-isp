@@ -30937,7 +30937,8 @@ EXPORT_SYMBOL(isp_trigger_event);
  *   return 0
  *
  * Key OEM behaviors we must match:
- *   1. Non-interruptible wait (wait_for_completion_timeout, not _interruptible_)
+ *   1. Same wait semantics (interruptible here, see below: no signals reach
+ *      the kthread, so only the reported sleep state differs)
  *   2. Always return 0 — caller ignores return value
  *   3. Callback dispatched with IRQs disabled — prevents ISR from
  *      overwriting AWB stats arrays mid-read by the AWB algorithm
@@ -30949,8 +30950,12 @@ int tisp_event_process(void)
     struct tisp_event_record event;
 
     /* OEM: wait_for_completion_timeout(&tevent_info, 0x14)
-     * 0x14 = 20 jiffies.  At HZ=100 that is 200 ms. */
-    ret = wait_for_completion_timeout(&tevent_info, msecs_to_jiffies(200));
+     * 0x14 = 20 jiffies.  At HZ=100 that is 200 ms.  Wait interruptibly:
+     * a kernel thread takes no signals, so this behaves the same, but the
+     * idle thread sleeps in S instead of D and no longer adds 1 to the
+     * load average for as long as the ISP is up. */
+    ret = wait_for_completion_interruptible_timeout(&tevent_info,
+                                                    msecs_to_jiffies(200));
 
     if (ret == -ERESTARTSYS) {
         /* OEM: prints "wake up by signal", returns 0 */
