@@ -32,6 +32,7 @@ tx-isp-t10-objs := \
 	tx_isp_t10_firmware.o
 
 ccflags-y += -DREGTRACE_KERNEL_TREE_BUILD
+ccflags-y += -DTX_ISP_T10
 ccflags-y += -DCONFIG_ISP_MODULE_USE_MMAP
 ccflags-y += -I$(src)/../include
 ccflags-y += -I$(src)/../t20/sdk/source/apical-isp
