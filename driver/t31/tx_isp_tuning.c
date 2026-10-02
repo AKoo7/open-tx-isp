@@ -9900,8 +9900,6 @@ out:
 * ISP_CORE_G_CTRL: Get control 0xc008561b
 * ISP_TUNING_ENABLE: Enable tuning 0xc00c56c6
  */
-/* Global tuning parameter buffer - Binary Ninja reference implementation */
-static void *tisp_par_ioctl = NULL;
 
 /* Character device variables - Binary Ninja reference */
 static struct cdev tisp_cdev;
@@ -10343,15 +10341,11 @@ int tisp_code_tuning_open(struct inode *inode, struct file *file)
         return -ENOMEM;
     }
 
-    /* tisp_par_ioctl = $v0 */
-    tisp_par_ioctl = tuning_buffer;
-
     /* memset($v0, 0, 0x500c) */
     memset(tuning_buffer, 0, 0x500c);
 
     pr_info("*** REFERENCE DRIVER IMPLEMENTATION ***\n");
     pr_info("ISP M0 tuning buffer allocated: %p (size=0x%x, aligned)\n", tuning_buffer, 0x500c);
-    pr_info("tisp_par_ioctl global variable set: %p\n", tisp_par_ioctl);
 
     /* Store buffer pointer for file operations */
     file->private_data = tuning_buffer;
@@ -10791,16 +10785,7 @@ int tisp_code_tuning_release(struct inode *inode, struct file *file)
         void *buf = file->private_data;
         kfree(buf);
         file->private_data = NULL;
-        /* If the global points at the same buffer, clear it */
-        if (tisp_par_ioctl == buf) {
-            tisp_par_ioctl = NULL;
-        }
         pr_info("tisp_code_tuning_release: Freed file-private tuning buffer\n");
-    } else if (tisp_par_ioctl) {
-        /* Fallback: if no file-private pointer, avoid leaking but be conservative */
-        kfree(tisp_par_ioctl);
-        tisp_par_ioctl = NULL;
-        pr_info("tisp_code_tuning_release: Freed global tuning buffer (no private_data)\n");
     }
 
     return 0;
@@ -17013,12 +16998,6 @@ int isp_m0_chardev_release(struct inode *inode, struct file *file)
         pr_info("Freeing tuning buffer: %p\n", tuning_buffer);
         kfree(tuning_buffer);
         file->private_data = NULL;
-    }
-
-    /* Clear global tuning parameter buffer if it matches */
-    if (tisp_par_ioctl == tuning_buffer) {
-        tisp_par_ioctl = NULL;
-        pr_info("Cleared global tisp_par_ioctl reference\n");
     }
 
     /* OEM release only tears down the ioctl buffer.  Do not deinit the live
