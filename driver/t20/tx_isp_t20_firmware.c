@@ -19770,6 +19770,28 @@ static void tx_isp_t20_simple_awb_update(int32_t *awb_fsm)
 		return;
 	if (t20_simple_awb_static_only)
 		return;
+	/*
+	 * Manual white balance and the presets (awb_mode, SYSTEM_AWB_RED/
+	 * BLUE_GAIN: stab.global_manual_awb and global_awb_red/blue_gain).
+	 * As OEM awb_normalise, the manual R/B gains (Q7, 128 = 1.0) replace
+	 * the AWB result on top of the static gains, without statistics.
+	 */
+	if (stab[12] != 0) {
+		static_wb = tx_isp_t20_awb_u16_table(T20_CAL_STATIC_WB, 1, 4);
+		if (!static_wb)
+			return;
+		t20_simple_awb_red_q8 = clamp_t(u32, (u32)stab[49] << 1,
+						0x40, 0x400);
+		t20_simple_awb_blue_q8 = clamp_t(u32, (u32)stab[50] << 1,
+						 0x40, 0x400);
+		/* AUTO restarts from the current gains, not the manual ones */
+		t20_simple_awb_red_target_sum = 0;
+		t20_simple_awb_blue_target_sum = 0;
+		accepted_population = 0;
+		average_rg = 0;
+		average_bg = 0;
+		goto apply_gains;
+	}
 	if (!t20_awb_feedback_ready)
 		return;
 
@@ -19911,7 +19933,12 @@ static void tx_isp_t20_simple_awb_update(int32_t *awb_fsm)
 	t20_simple_awb_blue_q8 = clamp_t(u32,
 		(t20_simple_awb_blue_target_sum + coefficient / 2) / coefficient,
 		0x40, 0x400);
+	/* As OEM awb_normalise in AUTO: report the AWB R/B gains (Q7) where
+	 * SYSTEM_AWB_RED/BLUE_GAIN and GetWB read them. */
+	stab[49] = (uint8_t)min_t(u32, t20_simple_awb_red_q8 >> 1, 0xff);
+	stab[50] = (uint8_t)min_t(u32, t20_simple_awb_blue_q8 >> 1, 0xff);
 
+apply_gains:
 	gains[0] = ((u32)static_wb[0] * t20_simple_awb_red_q8 + 0x80) >> 8;
 	gains[1] = static_wb[1];
 	gains[2] = static_wb[2];
