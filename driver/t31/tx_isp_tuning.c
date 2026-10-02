@@ -2671,6 +2671,21 @@ static void tisp_refresh_daynight_pipeline(void)
 	(void)tx_isp_callback_plan_run(&t31_daynight_refresh_plan, NULL);
 }
 
+/* Module exit: the parameter blocks are allocated once and reused across
+ * stream starts; free them so an rmmod/insmod cycle does not leave
+ * 3-4 x TISP_PARAM_BLOCK_SIZE of vmalloc behind (seen on garage). */
+void tisp_free_param_blocks(void)
+{
+	vfree(tparams_day);
+	vfree(tparams_night);
+	vfree(tparams_active);
+	vfree(tparams_cust);
+	tparams_day = NULL;
+	tparams_night = NULL;
+	tparams_active = NULL;
+	tparams_cust = NULL;
+}
+
 static int tisp_alloc_param_block(void **dst, const char *name)
 {
 	if (!dst)
@@ -8727,7 +8742,7 @@ static int apical_isp_core_ops_g_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
             case 0x8000035: { /* OEM: tiziano_isp_ae_manual_attr_g_ctrl — return AE attr */
                 /* OEM: tisp_get_ae_attr copies tisp_ae_ctrls[0..37] (0x98 bytes)
                  * back to user via ctrl->value as user-space pointer */
-                uint8_t ae_buf[0x98];
+                uint8_t ae_buf[0x98] = {0};
                 tisp_get_ae_attr(ae_buf);
                 if (copy_to_user((void __user *)(unsigned long)ctrl->value, ae_buf, 0x98))
                     ret = -EFAULT;
@@ -8838,7 +8853,7 @@ static int apical_isp_core_ops_g_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
             }
 
             default:
-                pr_warn("Unknown m0 control get command: 0x%x\n", ctrl->cmd);
+                pr_warn_ratelimited("Unknown m0 control get command: 0x%x\n", ctrl->cmd);
                 ret = -EINVAL;
             break;
             }
@@ -8911,7 +8926,7 @@ static int apical_isp_core_ops_g_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
         }
 
         case 0x800000a: { /* OEM: tisp_g_awb_start — get AWB start gains (8 bytes) */
-            uint32_t awb_start[2];
+            uint32_t awb_start[2] = {0};
             tisp_g_awb_start(awb_start);
             if (copy_to_user((void __user *)(unsigned long)ctrl->value, awb_start, 8))
                 ret = -EFAULT;
@@ -8933,7 +8948,7 @@ static int apical_isp_core_ops_g_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
             break;
 
         case 0x800000d: { /* OEM: tisp_g_wb_ct — get WB color temperature (4 bytes) */
-            uint32_t ct_val;
+            uint32_t ct_val = 0;
             tisp_g_wb_ct(&ct_val);
             if (copy_to_user((void __user *)(unsigned long)ctrl->value, &ct_val, 4))
                 ret = -EFAULT;
@@ -8941,7 +8956,7 @@ static int apical_isp_core_ops_g_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
         }
 
         case 0x800000e: { /* OEM: tisp_g_awb_cluster — get AWB cluster (0x28 bytes) */
-            uint32_t cluster_buf[0x28 / 4];
+            uint32_t cluster_buf[0x28 / 4] = {0};
             tisp_g_awb_cluster(cluster_buf);
             if (copy_to_user((void __user *)(unsigned long)ctrl->value, cluster_buf, 0x28))
                 ret = -EFAULT;
@@ -8949,7 +8964,7 @@ static int apical_isp_core_ops_g_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
         }
 
         case 0x800000f: { /* OEM: tisp_g_awb_ct_trend — get AWB CT trend (0x18 bytes) */
-            uint32_t trend_buf[0x18 / 4];
+            uint32_t trend_buf[0x18 / 4] = {0};
             tisp_g_awb_ct_trend(trend_buf);
             if (copy_to_user((void __user *)(unsigned long)ctrl->value, trend_buf, 0x18))
                 ret = -EFAULT;
@@ -9011,7 +9026,7 @@ static int apical_isp_core_ops_g_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
         }
 
         case 0x8000036: { /* OEM: tisp_get_ae_state — AE state (0xc bytes) */
-            uint32_t ae_state[3];
+            uint32_t ae_state[3] = {0};
             tisp_ae_state_get(ae_state);
             if (copy_to_user((void __user *)(unsigned long)ctrl->value, ae_state, 0xc))
                 ret = -EFAULT;
@@ -9092,7 +9107,7 @@ static int apical_isp_core_ops_g_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
         }
 
         case 0x80000a6: { /* OEM: tiziano_isp_csc_g_attr — get CSC attributes (0x40 bytes) */
-            uint32_t csc_buf[0x40 / 4];
+            uint32_t csc_buf[0x40 / 4] = {0};
             tisp_get_csc_attr(csc_buf);
             if (copy_to_user((void __user *)(unsigned long)ctrl->value, csc_buf, 0x40))
                 ret = -EFAULT;
@@ -9116,7 +9131,7 @@ static int apical_isp_core_ops_g_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
         }
 
         case 0x80000e5: { /* OEM: apical_isp_mask_g_attr — get mask (0xac bytes) */
-            uint8_t mask_buf[0xac];
+            uint8_t mask_buf[0xac] = {0};
             tisp_g_mscaler_mask_attr(mask_buf);
             if (copy_to_user((void __user *)(unsigned long)ctrl->value, mask_buf, 0xac))
                 ret = -EFAULT;
@@ -9131,7 +9146,7 @@ static int apical_isp_core_ops_g_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
         }
 
         case 0x8000100: { /* OEM: tisp_g_ccm_attr — get CCM attr (0x28 bytes) */
-            uint32_t ccm_buf[0x28 / 4];
+            uint32_t ccm_buf[0x28 / 4] = {0};
             tisp_g_ccm_attr(ccm_buf);
             if (copy_to_user((void __user *)(unsigned long)ctrl->value, ccm_buf, 0x28))
                 ret = -EFAULT;
@@ -9182,7 +9197,7 @@ static int apical_isp_core_ops_g_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
             break;
 
         default:
-            pr_warn("Unknown m0 control get command: 0x%x\n", ctrl->cmd);
+            pr_warn_ratelimited("Unknown m0 control get command: 0x%x\n", ctrl->cmd);
             ret = -EINVAL;
             break;
     }
@@ -9665,7 +9680,7 @@ static int apical_isp_core_ops_s_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
             uint8_t in_buf[0x10];
 
             if (!ctrl->value) {
-                ret = -1;
+                ret = -EINVAL;
                 goto out;
             }
             if (copy_from_user(in_buf, (void __user *)(unsigned long)(uint32_t)ctrl->value,
@@ -30937,7 +30952,8 @@ EXPORT_SYMBOL(isp_trigger_event);
  *   return 0
  *
  * Key OEM behaviors we must match:
- *   1. Non-interruptible wait (wait_for_completion_timeout, not _interruptible_)
+ *   1. Same wait semantics (interruptible here, see below: no signals reach
+ *      the kthread, so only the reported sleep state differs)
  *   2. Always return 0 — caller ignores return value
  *   3. Callback dispatched with IRQs disabled — prevents ISR from
  *      overwriting AWB stats arrays mid-read by the AWB algorithm
@@ -30949,8 +30965,12 @@ int tisp_event_process(void)
     struct tisp_event_record event;
 
     /* OEM: wait_for_completion_timeout(&tevent_info, 0x14)
-     * 0x14 = 20 jiffies.  At HZ=100 that is 200 ms. */
-    ret = wait_for_completion_timeout(&tevent_info, msecs_to_jiffies(200));
+     * 0x14 = 20 jiffies.  At HZ=100 that is 200 ms.  Wait interruptibly:
+     * a kernel thread takes no signals, so this behaves the same, but the
+     * idle thread sleeps in S instead of D and no longer adds 1 to the
+     * load average for as long as the ISP is up. */
+    ret = wait_for_completion_interruptible_timeout(&tevent_info,
+                                                    msecs_to_jiffies(200));
 
     if (ret == -ERESTARTSYS) {
         /* OEM: prints "wake up by signal", returns 0 */
