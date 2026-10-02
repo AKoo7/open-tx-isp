@@ -949,7 +949,11 @@ static int32_t iir_coeff1;
 static int32_t iir_err0;
 static int32_t iir_err1;
 static const uint32_t fps_table[6] = { 5, 10, 15, 20, 25, 30 };
-static const uint8_t awb_idx_table[6] = { 0, 1, 2, 3, 4, 5 };
+/* firmware .rodata+204 (get_awb_idx 0x2828): AWB_CLOUDY (0x35) .. AWB_WARM_
+ * FLOURESCENT (0x3a) -> preset rows 1..6; DAY_LIGHT (0x34) and anything
+ * else -> row 0. The recovered table started at 0, giving each preset the
+ * row of the one before (INCANDESCENT got CLOUDY, SHADE got TWILIGHT). */
+static const uint8_t awb_idx_table[6] = { 1, 2, 3, 4, 5, 6 };
 /* OEM symbol at this address is stab.global_max_integration_time (u16 at
  * stab+26); the recovered firmware had mis-decoded it as a dangling function
  * pointer, so every scene_mode() write below was discarded instead of
@@ -6142,11 +6146,12 @@ int32_t system_awb_blue_gain(int32_t arg1, char arg2, char arg3, int32_t *arg4)
 {
     uint32_t mode = (uint32_t)arg3 & 0xff;
 
+    /* firmware 0x1120: 0 sets, 1 gets, anything else is refused (the
+     * recovered branches were swapped: a set stored nothing) */
     if (mode != 1) {
-        if (mode != 0) {
-            stab[50] = (uint8_t)arg2;
+        if (mode != 0)
             return 2;
-        }
+        stab[50] = (uint8_t)arg2;
         return 0;
     }
 
@@ -7648,7 +7653,7 @@ int32_t awb_red_gain(void *arg1, int32_t arg2, char arg3, int32_t *arg4)
         if (mode == 1) {
             int32_t val;
             if ((int8_t)stab[12] == 0)
-                val = (int32_t)((uintptr_t *)(uintptr_t)(arg1))[0x760 / 2] >> 1;
+                val = (int32_t)(*(uint16_t *)((char *)arg1 + 0x760) >> 1);
             else
                 val = (int32_t)(uint8_t)stab[49];
             *arg4 = val;
@@ -7678,7 +7683,7 @@ int32_t awb_blue_gain(void *arg1, int32_t arg2, char arg3, int32_t *arg4)
 		if (a2 == 1) {
 			uint32_t v0_1;
 			if ((uint8_t)stab[12] == 0)
-				v0_1 = (uint16_t)((uintptr_t *)(uintptr_t)(arg1))[0x762 / 2] >> 1;
+				v0_1 = (uint32_t)(*(uint16_t *)((char *)arg1 + 0x762) >> 1);
 			else
 				v0_1 = (uint8_t)stab[50];
 			*arg4 = v0_1;
@@ -15693,45 +15698,27 @@ int32_t AWB_fsm_switch_state(int32_t *arg1, int32_t arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000028350 origin=model_output original=AWB_fsm_process_state */
+/*
+ * libt20-firmware 3.12.0 awb_mesh_NBP_fsm.c.o 0x2c0: a jump table on the
+ * state, followed until a state without a successor. Per frame the stats
+ * event switches to 4 and this runs 4 zones -> 3 grey-world average -> 5
+ * temperature/shift -> 9/10 light source -> 6 update -> 7 normalise (the
+ * output gains) -> 8 (stop until the next event); from 0 (init) it moves
+ * to 1. The recovered version did one step with a wrong successor table
+ * (4 -> 10), so awb_normalise never ran from the per-frame chain.
+ */
 int32_t AWB_fsm_process_state(int32_t *arg1)
 {
+	static const int8_t next_state[11] = {
+		1, -1, -1, 5, 3, 9, 7, 8, -1, 10, 6,
+	};
 	int32_t state = arg1[1];
-	int32_t next_state;
 
-	if (state >= 11)
-		return 0;
-
-	switch (state) {
-	case 0:
-		next_state = 3;
-		break;
-	case 1:
-		next_state = 9;
-		break;
-	case 2:
-		next_state = 7;
-		break;
-	case 3:
-		next_state = 8;
-		break;
-	case 4:
-		next_state = 10;
-		break;
-	case 5:
-		next_state = 6;
-		break;
-	case 6:
-		next_state = 1;
-		break;
-	case 7:
-		next_state = 5;
-		break;
-	default:
-		return 0;
+	while ((uint32_t)state < 11u && next_state[state] >= 0) {
+		state = next_state[state];
+		AWB_fsm_switch_state(arg1, state);
 	}
-
-	AWB_fsm_switch_state(arg1, next_state);
-	return 0x23;
+	return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002840c origin=model_output original=AWB_fsm_process_event */
@@ -19787,6 +19774,28 @@ static void tx_isp_t20_simple_awb_update(int32_t *awb_fsm)
 		return;
 	if (t20_simple_awb_static_only)
 		return;
+	/*
+	 * Manual white balance and the presets (awb_mode, SYSTEM_AWB_RED/
+	 * BLUE_GAIN: stab.global_manual_awb and global_awb_red/blue_gain).
+	 * As OEM awb_normalise, the manual R/B gains (Q7, 128 = 1.0) replace
+	 * the AWB result on top of the static gains, without statistics.
+	 */
+	if (stab[12] != 0) {
+		static_wb = tx_isp_t20_awb_u16_table(T20_CAL_STATIC_WB, 1, 4);
+		if (!static_wb)
+			return;
+		t20_simple_awb_red_q8 = clamp_t(u32, (u32)stab[49] << 1,
+						0x40, 0x400);
+		t20_simple_awb_blue_q8 = clamp_t(u32, (u32)stab[50] << 1,
+						 0x40, 0x400);
+		/* AUTO restarts from the current gains, not the manual ones */
+		t20_simple_awb_red_target_sum = 0;
+		t20_simple_awb_blue_target_sum = 0;
+		accepted_population = 0;
+		average_rg = 0;
+		average_bg = 0;
+		goto apply_gains;
+	}
 	if (!t20_awb_feedback_ready)
 		return;
 
@@ -19928,7 +19937,12 @@ static void tx_isp_t20_simple_awb_update(int32_t *awb_fsm)
 	t20_simple_awb_blue_q8 = clamp_t(u32,
 		(t20_simple_awb_blue_target_sum + coefficient / 2) / coefficient,
 		0x40, 0x400);
+	/* As OEM awb_normalise in AUTO: report the AWB R/B gains (Q7) where
+	 * SYSTEM_AWB_RED/BLUE_GAIN and GetWB read them. */
+	stab[49] = (uint8_t)min_t(u32, t20_simple_awb_red_q8 >> 1, 0xff);
+	stab[50] = (uint8_t)min_t(u32, t20_simple_awb_blue_q8 >> 1, 0xff);
 
+apply_gains:
 	gains[0] = ((u32)static_wb[0] * t20_simple_awb_red_q8 + 0x80) >> 8;
 	gains[1] = static_wb[1];
 	gains[2] = static_wb[2];
@@ -22322,58 +22336,54 @@ int32_t awb_update(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002e604 origin=model_output original=awb_normalise */
+/*
+ * As libt20-firmware 3.12.0 awb_mesh_NBP_func.c.o awb_normalise (0x2734).
+ * The recovered version shadowed the global stab with a local pointer
+ * (&stab + 0xc pointed into the stack), took the gain offsets 0x31/0x32
+ * relative to that instead of to stab and did byte offsets in int32_t
+ * units, so the manual AWB flag (stab.global_manual_awb, +12) was never
+ * seen: MANUAL and the presets 2..8 left the auto gains in place.
+ *
+ * arg1 is the AWB fsm: u16 sensor/static gains at +0x770..+0x776, the AWB
+ * R/B gains (Q8, u16) at +0x18/+0x1a, the output gains (log2 Q16) at
+ * +0x760..+0x76c. In manual mode stab.global_awb_red/blue_gain (+49/+50,
+ * Q7) replace the AWB result; otherwise the AWB result is reported there.
+ */
 int32_t *awb_normalise(int32_t *arg1)
 {
-	int32_t *stab;
-	int32_t v0, v1, v2, v3, v4;
-	int32_t s4;
-	int32_t s5;
-	int32_t s6;
-	int32_t *s3;
-	int32_t s4_2;
-	int32_t *i;
-	int32_t *result;
+	uint8_t *fsm = (uint8_t *)arg1;
+	int32_t gain[4];
+	int32_t lowest;
+	int32_t offset;
+	int i;
 
-	v0 = log2_fixed_to_fixed(*(uint16_t *)(arg1 + 0x770), 8, 0x10);
-	v1 = log2_fixed_to_fixed(*(uint16_t *)(arg1 + 0x772), 8, 0x10);
-	v2 = log2_fixed_to_fixed(*(uint16_t *)(arg1 + 0x774), 8, 0x10);
-	v3 = log2_fixed_to_fixed(*(uint16_t *)(arg1 + 0x776), 8, 0x10);
-	s5 = v0;
-	s4 = v1;
-	s3 = v2;
-	s6 = v3;
-	stab = (int32_t *)((char *)&stab + 0xc);
+	for (i = 0; i < 4; i++)
+		gain[i] = log2_fixed_to_fixed(*(uint16_t *)(fsm + 0x770 + 2 * i),
+					      8, 0x10);
 
-	if (*(uint8_t *)stab == 0) {
-		v4 = log2_fixed_to_fixed(*(uint16_t *)(arg1 + 0x18), 8, 0x10);
-		v0 = log2_fixed_to_fixed(*(uint16_t *)(arg1 + 0x1a), 8, 0x10);
-		*(uint8_t *)((uintptr_t)stab + 0x31) = *(uint16_t *)(arg1 + 0x18) >> 1;
-		*(uint8_t *)((uintptr_t)stab + 0x32) = *(uint16_t *)(arg1 + 0x1a) >> 1;
+	if (stab[12] != 0) {
+		gain[0] += log2_fixed_to_fixed(stab[49], 7, 0x10);
+		gain[3] += log2_fixed_to_fixed(stab[50], 7, 0x10);
+		*(uint16_t *)(fsm + 0x18) = (uint16_t)(stab[49] << 1);
+		*(uint16_t *)(fsm + 0x1a) = (uint16_t)(stab[50] << 1);
 	} else {
-		v4 = log2_fixed_to_fixed(*(uint8_t *)(stab + 0x31), 7, 0x10);
-		v0 = log2_fixed_to_fixed(*(uint8_t *)(stab + 0x32), 7, 0x10);
-		*(uint16_t *)(arg1 + 0x18) = *(uint8_t *)((uintptr_t)stab + 0x31) << 1;
-		*(uint16_t *)(arg1 + 0x1a) = *(uint8_t *)((uintptr_t)stab + 0x32) << 1;
+		gain[0] += log2_fixed_to_fixed(*(uint16_t *)(fsm + 0x18), 8, 0x10);
+		gain[3] += log2_fixed_to_fixed(*(uint16_t *)(fsm + 0x1a), 8, 0x10);
+		stab[49] = (uint8_t)(*(uint16_t *)(fsm + 0x18) >> 1);
+		stab[50] = (uint8_t)(*(uint16_t *)(fsm + 0x1a) >> 1);
 	}
 
-	v1 = v4 + s5;
-	v2 = v0 + s6;
-
-	if (v1 < v2)
-		v2 = v1;
-	if (s4 >= v2)
-		s4 = v2;
-	if (s3 < s4)
-		s4 = s3;
-
-	s4_2 = 0xc0000 - s4 - log2_fixed_to_fixed(0x1000 - *(uint16_t *)(*(int32_t *)arg1 + 0xe6), 0, 0x10);
-
-	for (i = 0; (uintptr_t)i != 0x10; i += 4) {
-		result = (uintptr_t)arg1 + (uintptr_t)i;
-		*(int32_t *)(arg1 + (uintptr_t)i + 0x760) = *(int32_t *)(arg1 + (uintptr_t)i) + s4_2;
-	}
-
-	return result;
+	lowest = gain[0] < gain[3] ? gain[0] : gain[3];
+	if (gain[1] < lowest)
+		lowest = gain[1];
+	if (gain[2] < lowest)
+		lowest = gain[2];
+	offset = 0xc0000 - lowest -
+		 log2_fixed_to_fixed(0x1000 - *(uint16_t *)(*(uint8_t **)fsm + 0xe6),
+				     0, 0x10);
+	for (i = 0; i < 4; i++)
+		*(int32_t *)(fsm + 0x760 + 4 * i) = gain[i] + offset;
+	return (int32_t *)(fsm + 0x760);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002e7e0 origin=model_output original=dynamic_dpc_strength_calculate */
