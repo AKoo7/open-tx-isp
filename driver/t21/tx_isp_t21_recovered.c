@@ -738,9 +738,9 @@ static int32_t *num_all_ptr = &num_all;
 
 /* WHOLE_DRIVER_SUPPORT_DECLARATIONS */
 static uint32_t slock;
-static unsigned char data_7eaf4[16384];
-static unsigned char data_7eb94[16384];
-static unsigned char data_7ec34[16384];
+static unsigned char data_7eaf4[4];	/* address-only anchor (sinfo_count_show); was 16 KB */
+static unsigned char data_7eb94[4];	/* address-only anchor (sinfo_count_show); was 16 KB */
+static unsigned char data_7ec34[4];	/* address-only anchor (sinfo_count_show); was 16 KB */
 static uintptr_t sinfo_root;
 static const char LC1[] = "BGGR";
 #ifndef REGTRACE_KERNEL_TREE_BUILD
@@ -1217,7 +1217,6 @@ static const char LC7[] = "GBRI";
 static uint32_t isp_fifostatus[16];
 static uint32_t isp_lastaddr[16];
 static uintptr_t isp_err3;
-static unsigned char data_2000[16384];
 static u8 *t21_vin_subdev;
 /* I2C clients the ISP created for sensors whose driver went away while they
  * were registered (see t21_vin_forget_sensor()); reaped outside the remove()
@@ -4157,15 +4156,6 @@ static unsigned char ae_hist_array[1024];
 static unsigned char ae_hist_ir_array[1024];
 static unsigned char tisp_ae_hist[1068];
 static unsigned char tisp_ae_hist_last[1068];
-static volatile uintptr_t data_95330;
-static volatile uintptr_t data_95334;
-static volatile uintptr_t data_95338;
-static volatile uintptr_t data_9533c;
-static volatile uintptr_t data_95340;
-static volatile unsigned char data_95344[16384];
-static volatile unsigned char data_95348[16384];
-static volatile unsigned char data_9534c[16384];
-static volatile unsigned char data_95350[16384];
 static inline uint32_t tisp_ae_abs_diff(uint32_t a, uint32_t b)
 {
 	uint32_t d = a - b;
@@ -6979,7 +6969,7 @@ static unsigned char sinfo_slots[652];
 static unsigned char vic_cmd_buf[44];
 static unsigned char video_input_cmd_buf[128];
 static uintptr_t tmp;
-static unsigned char sub_6cd0_global[16384];
+static unsigned char sub_6cd0_global[4];	/* address-only anchor (sub_6cd0, no caller); was 16 KB */
 static unsigned char lastaddr[20];
 static unsigned char g_sensor_integration[16384];
 static uintptr_t (*cb)();
@@ -16488,7 +16478,10 @@ int tx_isp_fs_probe(struct platform_device *pdev)
 		memset(channel + 0x24, 0, 0x210);
 		*(u32 *)(channel + 0x3c) = 2;
 		*(u32 *)(channel + 0x34) = 0x80;
-		*(void **)(channel + 0x38) = &data_2000;
+		/* Stock stores the constant 0x2000 here (li a0,8192; sw a0,56(s0)
+		 * at 0x7c38); the decompiler had turned it into the address of a
+		 * 16 KB placeholder array.  Nothing reads the field. */
+		*(u32 *)(channel + 0x38) = 0x2000;
 		*(u8 **)(channel + 0x210) = channel + 0x210;
 		*(u8 **)(channel + 0x214) = channel + 0x210;
 		*(u32 *)(channel + 0x24) = 1;
@@ -42160,22 +42153,6 @@ int32_t tisp_ae_get_hist(uint32_t *arg1, uint32_t arg2, uint32_t arg3)
 	memcpy(&previous[256], &hist_state[256], 5 * sizeof(u32));
 	private_spin_unlock_irqrestore(&t21_ae_hist_lock, flags);
 
-	/* Preserve the legacy BSS layout until the remaining offset-based
-	 * recovery is removed; these wrongly-sized placeholders are otherwise
-	 * optimized away and would move later anchor objects. */
-	(void)*(volatile u32 *)&data_95330;
-	(void)*(volatile u32 *)&data_95334;
-	(void)*(volatile u32 *)&data_95338;
-	(void)*(volatile u32 *)&data_9533c;
-	(void)*(volatile u32 *)&data_95340;
-	(void)*(volatile u32 *)&data_95344[0];
-	(void)*(volatile u32 *)&data_95344[sizeof(data_95344) - sizeof(u32)];
-	(void)*(volatile u32 *)&data_95348[0];
-	(void)*(volatile u32 *)&data_95348[sizeof(data_95348) - sizeof(u32)];
-	(void)*(volatile u32 *)&data_9534c[0];
-	(void)*(volatile u32 *)&data_9534c[sizeof(data_9534c) - sizeof(u32)];
-	(void)*(volatile u32 *)&data_95350[0];
-	(void)*(volatile u32 *)&data_95350[sizeof(data_95350) - sizeof(u32)];
 	return 0;
 }
 

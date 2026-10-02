@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Lift MIPS32 functions from a relocatable .ko into C (one register file per
 function, explicit delay slots, relocations resolved to C symbols)."""
-import struct, sys, re
+import os, struct, sys, re
 
 def s16(x): return x - 0x10000 if x & 0x8000 else x
 
@@ -405,9 +405,35 @@ class Lifter:
             else:
                 self.need.append(name)
                 P('{ uint64_t q_ = %s%s(r_a0, r_a1, r_a2, r_a3, sp_base); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); }' % (self.prefix, name))
-        out.append('static uint64_t %s%s(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, uint32_t r_a3, uint32_t csp)' % (self.prefix, fname))
-        out.append('{')
-        if frame > 256:
+        heap = fname in set(x for x in os.environ.get('LIFT_HEAP_FRAMES', '').split(',') if x)
+        if heap and frame > 256:
+            # per-call kzalloc'd frame (lift_frame_alloc, see heapframes.py):
+            # reentrant and kept out of .bss; only for functions that already
+            # run in sleepable (ioctl) context
+            sig = '(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, uint32_t r_a3, uint32_t csp'
+            f_ = self.prefix + fname
+            out.append('static uint64_t %s__body%s, uint32_t *frame);' % (f_, sig))
+            out.append('static uint64_t %s%s)' % (f_, sig))
+            out.append('{')
+            out.append('\t/* stock frame on the heap (reentrant, not in .bss); see audit/heapframes.py */')
+            out.append('\tuint32_t *frame = lift_frame_alloc(%d);' % (max(frame, 8) // 4))
+            out.append('\tuint64_t q_;')
+            out.append('')
+            out.append('\tif (!frame)')
+            out.append('\t\treturn (uint32_t)-ENOMEM;')
+            out.append('\tq_ = %s__body(r_a0, r_a1, r_a2, r_a3, csp, frame);' % f_)
+            out.append('\tlift_frame_free(frame);')
+            out.append('\treturn q_;')
+            out.append('}')
+            out.append('')
+            out.append('static uint64_t %s__body%s, uint32_t *frame)' % (f_, sig))
+            out.append('{')
+        else:
+            out.append('static uint64_t %s%s(uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, uint32_t r_a3, uint32_t csp)' % (self.prefix, fname))
+            out.append('{')
+        if heap and frame > 256:
+            pass
+        elif frame > 256:
             P('/* large stock frame: static (single caller context, not reentrant) */')
             P('static uint32_t frame[%d] __aligned(8);' % (max(frame, 8) // 4))
         else:
