@@ -2003,7 +2003,6 @@ static unsigned char __attribute__((aligned(4))) tparams[T23_TPARAMS_OBJECT_SIZE
     0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
 };
 static unsigned char tparamsP[8];
-static unsigned char data_ab948[16384];
 static uintptr_t (*data_abca0)();
 static uintptr_t (*data_abca8)();
 static uintptr_t data_abcb4;
@@ -2109,7 +2108,6 @@ static uint16_t tiziano_gamma_lut_wdr[129] __attribute__((aligned(4)));
 static DECLARE_WAIT_QUEUE_HEAD(dumpQueue);
 static uintptr_t tispPollValue;
 static unsigned char tisp_ae_ctrls[176];
-static unsigned char data_6d610[16384];
 static struct file_operations tisp_fops;
 static unsigned char __attribute__((aligned(4))) tiziano_gib_deirm_blc_b_linear[36] = {
     0xfd, 0x00, 0x00, 0x00, 0xfe, 0x00, 0x00, 0x00, 0xfe, 0x00, 0x00, 0x00, 0x01, 0x01, 0x00, 0x00, 
@@ -2750,9 +2748,9 @@ typedef struct {
 static unsigned char data_a0000[8]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char data_c2cdc[64]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char data_c2d00[64]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
-static unsigned char __attribute__((aligned(4))) data_c2d24[16384];
-static unsigned char __attribute__((aligned(4))) data_c4d20[16384];
-static unsigned char __attribute__((aligned(4))) data_c6d1c[16384];
+static unsigned char __attribute__((aligned(4))) data_c2d24[0x1ffc]; /* OEM lsc_d_lut extent; bounds lut_num */
+static unsigned char __attribute__((aligned(4))) data_c4d20[0x1ffc]; /* OEM lsc_t_lut extent; bounds lut_num */
+static unsigned char __attribute__((aligned(4))) data_c6d1c[0x1ffc]; /* OEM lsc_a_lut extent; bounds lut_num */
 static unsigned char __attribute__((aligned(4))) lsc_lut_num[8] = {
     0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
 };
@@ -5841,17 +5839,6 @@ static unsigned char data_98300[1024]; /* BSS shrink: was [16384] fake-anchor pa
 static unsigned char data_986c0[32]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char data_98848[256]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
 static unsigned char IspAfStaticParam[56];
-static unsigned char data_c9e90[16384];
-static unsigned char data_c9e94[16384];
-static unsigned char data_c9e98[16384];
-static unsigned char data_c9e9c[16384];
-static unsigned char data_c9ea0[16384];
-static unsigned char data_c9ea4[16384];
-static unsigned char data_c9ea8[16384];
-static unsigned char data_c9eac[16384];
-static unsigned char data_c9eb0[16384];
-static unsigned char data_c9eb4[16384];
-static unsigned char data_c9eb8[16384];
 static uintptr_t (*data_9884c)();
 static uintptr_t (*data_98854)();
 static unsigned char data_986dc[32]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
@@ -5943,7 +5930,6 @@ static unsigned char data_988c0[16384];
 static unsigned char data_988c4[16384];
 static unsigned char data_988c8[16384];
 static unsigned char data_988cc[16384];
-static unsigned char data_c9ebc[16384];
 static uintptr_t (*data_c9ec0)();
 static uintptr_t af_first;
 static unsigned char data_98814[64]; /* BSS shrink: was [16384] fake-anchor padding, real max use verified smaller */
@@ -7499,7 +7485,6 @@ static unsigned char mdns_y_sta_ave_thres_array[36];
 static unsigned char mdns_y_sta_ave_thres_wdr_array[36];
 static unsigned char mdns_y_sta_motion_thres_array[36];
 static unsigned char mdns_y_sta_motion_thres_wdr_array[36];
-static unsigned char data_98940[16384];
 static uintptr_t tisp_tattr;
 static uintptr_t cust_mode;
 static unsigned char day_night[16];
@@ -7508,7 +7493,6 @@ static unsigned char __attribute__((aligned(4))) flicker_hz[16] = {
 };
 static unsigned char data_abb7c[16384];
 static unsigned char data_abb96[16384];
-static unsigned char data_abb50[16384];
 static inline int32_t sign_extend_byte(uint8_t b)
 {
 	return (int8_t)b;
@@ -8475,9 +8459,10 @@ static unsigned char __attribute__((aligned(4))) AFParam_Tilt[20] = {
     0x13, 0x00, 0x00, 0x00, 0x3a, 0x00, 0x00, 0x00, 0x2a, 0x00, 0x00, 0x00, 0x16, 0x00, 0x00, 0x00, 
     0x06, 0x00, 0x00, 0x00, 
 };
-static unsigned char data_ca5fc[16384];
-static unsigned char data_98828[16384];
 static unsigned char af_attr[100];
+/* OEM AF_Enable and af_set_trig (.bss 0x21014 / 0x21728). */
+static uint8_t regtrace_t23_af_enable;
+static uint8_t regtrace_t23_af_set_trig;
 static unsigned char __attribute__((aligned(4))) csccr_bp[16] = {
     0x00, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
 };
@@ -41589,8 +41574,10 @@ int32_t tisp_init(uint32_t arg1, uintptr_t arg2)
     uint32_t bayer_type;
     uint32_t *arg2p = (uint32_t *)arg2;
 
-    memset((void *)((char *)&tisp_par_info + arg1 * 0x27), 0, 0x9c);
-    memcpy((void *)((char *)&tisp_par_info + arg1 * 0x27), (void *)arg2, 0x9c);
+    if (arg1 >= sizeof(tisp_par_info) / 0x9c || !arg2)
+        return -EINVAL;
+    memset((void *)((char *)&tisp_par_info + arg1 * 0x9c), 0, 0x9c);
+    memcpy((void *)((char *)&tisp_par_info + arg1 * 0x9c), (void *)arg2, 0x9c);
     memset((void *)&tispinfo, 0, 0x74);
     memset((void *)&sensor_info, 0, 0x9c);
     memcpy((void *)&sensor_info, (void *)arg2, 0x9c);
@@ -41621,8 +41608,9 @@ int32_t tisp_init(uint32_t arg1, uintptr_t arg2)
     memcpy((void *)((char *)&tparams + 0x13100), (void *)tparams_day_1, 0x15844);
     system_reg_write(4, arg2p[0] << 0x10 | arg2p[1]);
 
-    s6 = *(uint32_t *)((char *)&tisp_par_info + arg1 * 0x27);
-    s7 = *(uint32_t *)((char *)&data_ab948 + arg1 * 0x27);
+    s6 = *(uint32_t *)((char *)&tisp_par_info + arg1 * 0x9c);
+    /* OEM: words 0 and 1 of the 0x9c-byte tisp_par_info slot. */
+    s7 = *(uint32_t *)((char *)&tisp_par_info + arg1 * 0x9c + 4);
     bayer_type = arg2p[2] & 0x1f;
     tispinfo = (uintptr_t (*)())(uintptr_t)s6;
     data_abca0 = (uintptr_t (*)())(uintptr_t)s7;
@@ -45924,10 +45912,23 @@ int32_t tisp_code_tuning_ioctl(int32_t arg1, int32_t arg2, int32_t arg3)
     v0 = 0x8C00 | cmd_nr;
     s1_val = arg3 + 0x501C;
 
-    if (arg2 < 0x20007409) {
-        uint32_t *jump_table = (uint32_t *)((char *)&data_6d610 + ((arg2 - 0x20007400) << 2));
-        s1_val = arg3;
-        goto *jump_table;
+    /*
+     * The OEM dispatches commands 0x20007400..0x20007408 through a jump
+     * table; the recovered code jumped into a data array instead, with no
+     * lower bound on the index. Dispatch to the case labels directly.
+     */
+    s1_val = arg3;
+    switch (arg2) {
+    case 0x20007400: goto case_20007400;
+    case 0x20007401: goto case_20007401;
+    case 0x20007402: goto case_20007402;
+    case 0x20007403: goto case_20007403;
+    case 0x20007404: goto case_20007404;
+    case 0x20007405: goto case_20007405;
+    case 0x20007406: goto case_20007406;
+    case 0x20007407: goto case_20007407;
+    case 0x20007408: goto case_20007408;
+    default: break;
     }
 
     return -22;
@@ -52596,6 +52597,14 @@ int32_t tisp_lsc_mirror_flip(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3,
         regtrace_t23_source_lsc_lut_stride);
     if (ret < 0)
         return ret;
+    /*
+     * The flip and the mirror touch rows * cols_padded * 3 / 2 words of
+     * each LUT; the judge allows up to 0x480 * 3, beyond the 0x1ffc-byte
+     * OEM tables. Keep them within the loaded lut_num words, which a
+     * matching profile fills exactly (sc2336: 31 * 21 * 3 = 1953).
+     */
+    if (rows * (cols_padded / 2U) * 3U > regtrace_t23_source_lsc_lut_num)
+        return -EINVAL;
     if (system_reg_read(0xcU) & BIT(6))
         return 0;
 
@@ -81777,31 +81786,28 @@ Tiziano_af_fpga0x324:
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004caac origin=model_output original=tisp_af_process_impl */
 int32_t tisp_af_process_impl(void)
 {
-    int *i = 0;
-	void **isp = &IspAfStaticParam;
-	*isp = (void *)0x30000 + 18504; /* &data_98848 */
-	((void **)isp)[1] = data_c9e90; /* af_array_fird0 */
-	((void **)isp)[2] = data_c9e94; /* af_array_fird1 */
-	((void **)isp)[3] = data_c9e98; /* af_array_iird0 */
-	((void **)isp)[4] = data_c9e9c; /* af_array_iird1 */
-	((void **)isp)[5] = data_c9ea0; /* af_array_y_sum */
-	((void **)isp)[6] = data_c9ea4; /* af_array_high_luma_cnt */
-	((void **)isp)[7] = data_c9ea8; /* data_98300 */
-	((void **)isp)[8] = data_c9eac; /* AFParam_Fv */
-	((void **)isp)[9] = (void *)((char *)&tparams + 0x23684);
-	((void **)isp)[10] = data_c9eb4; /* data_986c0 */
-	((void **)isp)[11] = (void *)((char *)&tparams + 0x236d4);
+	/*
+	 * OEM: fill IspAfStaticParam with the AF statistic arrays, then call
+	 * Tiziano_af_fpga(param[0..3], param[4..]). The recovered body stored
+	 * 16 KiB placeholder arrays, copied 40 pointers (160 bytes) onto its
+	 * own stack frame and called Tiziano_af_fpga without arguments.
+	 */
+	uint32_t *p = (uint32_t *)IspAfStaticParam;
 
-	/* loop: copy 40 bytes from data_c9e9c to sp+16 */
-	char *dst = (char *)(__builtin_frame_address(0)) + 16;
-	for (int32_t i = 0; i < 40; i++) {
-		((void **)(uintptr_t)dst)[(uintptr_t)i] = ((char *)data_c9e9c)[(uintptr_t)i];
-	}
+	p[0] = (uint32_t)(uintptr_t)data_98848;
+	p[1] = (uint32_t)(uintptr_t)af_array_fird0;
+	p[2] = (uint32_t)(uintptr_t)af_array_fird1;
+	p[3] = (uint32_t)(uintptr_t)af_array_iird0;
+	p[4] = (uint32_t)(uintptr_t)af_array_iird1;
+	p[5] = (uint32_t)(uintptr_t)af_array_y_sum;
+	p[6] = (uint32_t)(uintptr_t)af_array_high_luma_cnt;
+	p[7] = (uint32_t)(uintptr_t)data_98300;
+	p[8] = (uint32_t)(uintptr_t)AFParam_Fv;
+	p[9] = (uint32_t)(uintptr_t)((char *)&tparams + 0x23684);
+	p[10] = (uint32_t)(uintptr_t)data_986c0;
+	p[11] = (uint32_t)(uintptr_t)((char *)&tparams + 0x236d4);
 
-	/* jalr to Tiziano_af_fpga with a0=40, a1=isp[1], a2=isp[2], a3=isp[3] */
-	void (* const fp)(void) = (void (*)(void))(uintptr_t)Tiziano_af_fpga;
-	fp();
-
+	Tiziano_af_fpga(p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8]);
 	return 0;
 }
 
@@ -82425,7 +82431,7 @@ int32_t tiziano_af_init(uint32_t a0, uint32_t a1)
     uintptr_t v1 = 0;
 
     /* fragment 0: CallSetup */
-    *(uint32_t *)((char *)((char *)&Cluster_rgbg_weight + 0x104)) = 0;
+    af_first = 0;
     s1 = a1;
     s0 = a0;
     v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t))(uintptr_t)tiziano_af_params_refresh)(a0); /* jalr target resolved by relocation */
@@ -82490,7 +82496,7 @@ int32_t tiziano_af_init(uint32_t a0, uint32_t a1)
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004db90 origin=fragment_seed original=tisp_af_get_metric */
 int tisp_af_get_metric(uint32_t *v)
 {
-	uint8_t v1 = *(uint8_t *)((char *)((char *)&Cluster_rgbg_weight + 0x11d));
+	uint8_t v1 = af_attr[0x11d - 0x10c];	/* OEM af_attr + 17 */
 	uint32_t v0 = *(uint32_t *)((char *)((char *)&rgbg_wght + 0x84));
 	v0 = v0 >> (v1 & 0x1f);
 	*v = v0;
@@ -82663,120 +82669,75 @@ int32_t tisp_af_get_attr(uint32_t a0, uintptr_t a1)
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004ddcc origin=model_output original=tisp_af_set_attr_refresh */
 int32_t tisp_af_set_attr_refresh(void)
 {
-	uint8_t *src = (uint8_t *)&data_ca5fc;
-	uint32_t *dst = (uint32_t *)&data_98828;
-	uint32_t a1_base = (uint32_t)&data_98828 + 18112;
-	uint32_t a0_base = (uint32_t)&data_98828 + 18504;
-	uint32_t *a2;
+	/*
+	 * OEM: spread the 88-byte af_attr over the AF parameter tables, then
+	 * tail-call tiziano_af_set_hardware_param(). The recovered body wrote
+	 * 18 KiB past a placeholder array and called into it as code.
+	 */
+	const uint8_t *src = af_attr;
+	static const struct {
+		unsigned char *table;
+		uint8_t src;
+	} ldg[] = {
+		{ data_987e0, 38 },	/* stAFParam_FIR0_Ldg */
+		{ data_9879c, 50 },	/* stAFParam_FIR1_Ldg */
+		{ data_98744, 62 },	/* stAFParam_IIR0_Ldg */
+		{ data_986ec, 74 },	/* stAFParam_IIR1_Ldg */
+	};
+	unsigned int i;
 
-	/* offset 16 -> dst[1] (offset 4) */
-	((void **)dst)[1] = src[16];
-	/* offset 33 -> dst[5] (offset 20) */
-	((void **)dst)[5] = src[33];
-	/* offset 34 -> dst[6] (offset 24) */
-	((void **)dst)[6] = src[34];
-	a2 = src[18];
-	/* offset 35 -> dst[7] (offset 28) */
-	((void **)dst)[7] = src[35];
-	/* offset 36 -> dst[8] (offset 32) */
-	((void **)dst)[8] = src[36];
+#define AF_W(table, off, val) regtrace_t23_put_le32((table) + (off), (val))
+#define AF_H(off) ((uint32_t)regtrace_t23_get_le16(src + (off)))
+	regtrace_t23_af_enable = src[16];
+	/* stAFParam_ThresEnable */
+	AF_W(data_98814, 20, src[33]);
+	AF_W(data_98814, 24, src[34]);
+	AF_W(data_98814, 28, src[35]);
+	AF_W(data_98814, 32, src[36]);
+	AF_W(data_98814, 16, AF_H(22));
+	/* AFParam_Tilt */
+	AF_W(data_986c0, 8, AF_H(18));
+	AF_W(data_986c0, 12, AF_H(20));
+	AF_W(data_986c0, 0, AF_H(24));
+	AF_W(data_986c0, 4, AF_H(26));
+	/* stAFParam_Zone */
+	AF_W(data_98848, 8, src[28]);
+	AF_W(data_98848, 0, src[29]);
+	AF_W(data_98848, 12, src[30]);
+	AF_W(data_98848, 4, src[31]);
+	for (i = 0; i < ARRAY_SIZE(ldg); i++) {
+		unsigned char *t = ldg[i].table;
+		unsigned int o = ldg[i].src;
 
-	/* call tiziano_af_set_hardware_param(a1_base, a2) */
-	((void (*)(uint32_t, uint32_t))(a1_base))(a2, 0);
-
-	a2 = src[20];
-	((void (*)(uint32_t, uint32_t))(a1_base))(a2, 8);
-	a2 = src[22];
-	((void (*)(uint32_t, uint32_t))(a1_base))(a2, 12);
-	((void **)dst)[4] = a2;
-
-	a2 = src[24];
-	((void (*)(uint32_t, uint32_t))(a1_base))(a2, 16);
-	a2 = src[26];
-	((void (*)(uint32_t, uint32_t))(a1_base))(a2, 4);
-	((void **)dst)[2] = src[28];
-
-	/* offset 30 -> dst[3] (offset 12) */
-	((void **)dst)[3] = src[30];
-	/* offset 31 -> dst[1] (offset 4) */
-	((void **)dst)[1] = src[31];
-	/* offset 38 -> dst[4500] (offset 18400) */
-	((void **)dst)[4500] = src[38];
-	/* offset 39 -> dst[1] (offset 4) */
-	((void **)dst)[1] = src[39];
-	/* offset 40 -> dst[2] (offset 8) */
-	((void **)dst)[2] = src[40];
-	/* offset 42 -> dst[3] (offset 12) */
-	((void **)dst)[3] = src[42];
-	/* offset 43 -> dst[4] (offset 16) */
-	((void **)dst)[4] = src[43];
-	/* offset 44 -> dst[5] (offset 20) */
-	((void **)dst)[5] = src[44];
-	a2 = src[46];
-	((void **)dst)[6] = a2;
-	/* offset 48 -> dst[7] (offset 28) */
-	((void **)dst)[7] = src[48];
-	/* offset 50 -> dst[4583] (offset 18332) */
-	((void **)dst)[4583] = src[50];
-	/* offset 51 -> dst[1] (offset 4) */
-	((void **)dst)[1] = src[51];
-	/* offset 52 -> dst[2] (offset 8) */
-	((void **)dst)[2] = src[52];
-	/* offset 54 -> dst[3] (offset 12) */
-	((void **)dst)[3] = src[54];
-	/* offset 55 -> dst[4] (offset 16) */
-	((void **)dst)[4] = src[55];
-	/* offset 56 -> dst[5] (offset 20) */
-	((void **)dst)[5] = src[56];
-	a2 = src[58];
-	((void **)dst)[6] = a2;
-	/* offset 60 -> dst[7] (offset 28) */
-	((void **)dst)[7] = src[60];
-	/* offset 62 -> dst[4606] (offset 18244) */
-	((void **)dst)[4606] = src[62];
-	/* offset 63 -> dst[1] (offset 4) */
-	((void **)dst)[1] = src[63];
-	/* offset 64 -> dst[2] (offset 8) */
-	((void **)dst)[2] = src[64];
-	/* offset 66 -> dst[3] (offset 12) */
-	((void **)dst)[3] = src[66];
-	/* offset 67 -> dst[4] (offset 16) */
-	((void **)dst)[4] = src[67];
-	/* offset 68 -> dst[5] (offset 20) */
-	((void **)dst)[5] = src[68];
-	a2 = src[70];
-	((void **)dst)[6] = a2;
-	/* offset 72 -> dst[7] (offset 28) */
-	((void **)dst)[7] = src[72];
-	/* offset 74 -> dst[4627] (offset 18156) */
-	((void **)dst)[4627] = src[74];
-	/* offset 75 -> dst[1] (offset 4) */
-	((void **)dst)[1] = src[75];
-	/* offset 76 -> dst[2] (offset 8) */
-	((void **)dst)[2] = src[76];
-	/* offset 78 -> dst[3] (offset 12) */
-	((void **)dst)[3] = src[78];
-	/* offset 79 -> dst[4] (offset 16) */
-	((void **)dst)[4] = src[79];
-	/* offset 80 -> dst[5] (offset 20) */
-	((void **)dst)[5] = src[80];
-	a2 = src[82];
-	((void **)dst)[6] = a2;
-	((void **)dst)[7] = src[84];
-
+		AF_W(t, 0, src[o]);
+		AF_W(t, 4, src[o + 1]);
+		AF_W(t, 8, AF_H(o + 2));
+		AF_W(t, 12, src[o + 4]);
+		AF_W(t, 16, src[o + 5]);
+		AF_W(t, 20, src[o + 6]);
+		AF_W(t, 24, AF_H(o + 8));
+		AF_W(t, 28, src[o + 10]);
+	}
+#undef AF_H
+#undef AF_W
+	tiziano_af_set_hardware_param();
 	return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004df8c origin=fragment_seed original=tisp_af_set_attr */
 int32_t tisp_af_set_attr(uint32_t a0, uint32_t a1)
 {
-    uint32_t af_attr[22];
-
-    *(uint32_t *)((char *)((char *)&Cluster_rgbg_weight + 0x104)) = 0;
-    ((uint32_t *)af_attr)[0] = a1;
-    memcpy(&ivdc_threshold_line, &af_attr[0], 88);
+    /*
+     * OEM: the 88-byte attribute arrives by value (a1.. and the stack);
+     * the recovered code copied it over ivdc_threshold_line. Take the
+     * first word, as the recovered prototype carries only that one.
+     */
+    (void)a0;
+    af_first = 0;
+    memset(af_attr, 0, 88);
+    memcpy(af_attr, &a1, sizeof(a1));
     tisp_af_set_attr_refresh();
-    *(uint8_t *)((char *)((char *)&Cluster_rgbg_weight + 0x108)) = 1;
+    regtrace_t23_af_set_trig = 1;
     return 0;
 }
 
@@ -82787,9 +82748,9 @@ int32_t tiziano_af_dn_params_refresh(void)
     uint8_t flag;
 
     REG_21724 = 0;
-    *(uint32_t *)((char *)((char *)&Cluster_rgbg_weight + 0x104)) = 0;
+    af_first = 0;
     tiziano_af_params_refresh();
-    flag = *(uint8_t *)((char *)((char *)&Cluster_rgbg_weight + 0x108));
+    flag = regtrace_t23_af_set_trig;
     if (flag == 0)
         goto lbl_4e034;
     tisp_af_set_attr_refresh();
@@ -91632,12 +91593,14 @@ tiziano_mdns_params_refresh0x2c8c:
 void tiziano_mdns_dn_params_refresh(void)
 {
     uint32_t val;
-    uint32_t *data_ptr;
 
-    data_ptr = (uint32_t *)((char *)&data_98940 + 18752);
-    val = *data_ptr;
-    val += 512;
-    *data_ptr = val;
+    /*
+     * OEM: the MDNS gain_old (.data+0x34940) moves by 512 so that the next
+     * tisp_mdns_par_refresh() sees a gain change. The recovered code wrote
+     * 2 KiB past the end of a 16 KiB placeholder array instead.
+     */
+    val = regtrace_t23_source_mdns_gain_old + 512U;
+    regtrace_t23_source_mdns_gain_old = val;
 
     tiziano_mdns_params_refresh();
     tisp_mdns_all_reg_refresh(val);
@@ -94610,7 +94573,9 @@ int tisp_s_defog_enable(int arg1, int arg2) {
 
     if (arg2 == 1) {
         system_reg_write(0xc, v0 & 0xfffff7ff);
-        tiziano_defog_init(arg1, sensor_info, data_abb50);
+        /* OEM: tiziano_defog_init(arg1, sensor_info[0], sensor_info[1]). */
+        tiziano_defog_init(arg1, regtrace_t23_get_le32(sensor_info),
+                           regtrace_t23_get_le32(sensor_info + 4));
         return 0;
     }
 
