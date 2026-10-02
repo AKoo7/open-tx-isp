@@ -17,12 +17,18 @@
 extern int t31_runtime_trace;
 
 #undef pr_info
+#undef pr_info_ratelimited
+#if defined(TX_ISP_T31_NO_TRACE)
+/* Production build (Kbuild TX_ISP_T31_TRACE=n): drop the trace and its
+ * strings (~100 KB of module memory); t31_runtime_trace has no effect. */
+#define pr_info(fmt, ...) no_printk(KERN_INFO pr_fmt(fmt), ##__VA_ARGS__)
+#define pr_info_ratelimited(fmt, ...) no_printk(KERN_INFO pr_fmt(fmt), ##__VA_ARGS__)
+#else
 #define pr_info(fmt, ...) \
 	do { if (t31_runtime_trace) printk(KERN_INFO pr_fmt(fmt), ##__VA_ARGS__); } while (0)
-
-#undef pr_info_ratelimited
 #define pr_info_ratelimited(fmt, ...) \
 	do { if (t31_runtime_trace) printk(KERN_INFO pr_fmt(fmt), ##__VA_ARGS__); } while (0)
+#endif
 
 /* =================== switchs ================== */
 

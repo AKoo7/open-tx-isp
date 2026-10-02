@@ -2,6 +2,13 @@ ccflags-y += -I$(src)/include -I$(src)/../include
 ccflags-y += -include $(src)/include/tx_isp_kernel_compat.h
 ccflags-y += -Wno-error=incompatible-pointer-types -Wno-error=strict-prototypes
 
+# TX_ISP_T31_TRACE=y keeps the bring-up trace (pr_info, off at run time
+# unless t31_runtime_trace=1) in the module; n drops it and its strings.
+TX_ISP_T31_TRACE ?= n
+ifneq ($(TX_ISP_T31_TRACE),y)
+ccflags-y += -DTX_ISP_T31_NO_TRACE
+endif
+
 # Main ISP module objects - note changed name to tx-isp-t31 (ensure tx_isp_module.o is first)
 tx-isp-t31-objs := tx_isp_module.o \
                tx_isp_core.o \
