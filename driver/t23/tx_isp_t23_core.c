@@ -9798,8 +9798,11 @@ static uint regtrace_t23_source_sensor_max_it;
 static uint regtrace_t23_source_sensor_max_again;
 static uint regtrace_t23_source_ae_initial_packed;
 static bool regtrace_t23_source_sensor_configured;
-/* The AE has moved off the bootstrap rung; stream restarts resume there. */
+/* The AE has moved off the bootstrap rung; stream restarts resume there
+ * (at the EV it reached, re-resolved on the current ladder). */
 static bool regtrace_t23_ae_hlil_resume;
+/* sensor the resume point was reached with */
+static char regtrace_t23_ae_hlil_resume_sensor[32];
 static bool regtrace_t23_source_ae_hlil = true;
 static uint regtrace_t23_source_ae_hlil_interval = 32;
 static uint regtrace_t23_source_ae_hlil_target = 60;
@@ -14311,6 +14314,17 @@ static int regtrace_t23_source_resolve_sensor_config(void)
     ret = regtrace_t23_ae_hlil_build_ladder();
     if (ret)
         return ret;
+    /* an AE resume point belongs to the sensor it was reached with */
+    if (strncmp(regtrace_t23_ae_hlil_resume_sensor, sensor_name,
+                sizeof(regtrace_t23_ae_hlil_resume_sensor))) {
+        if (regtrace_t23_ae_hlil_resume)
+            printk(KERN_INFO
+                   "tx_isp_t23_recovered: AE resume dropped, sensor %s -> %s\n",
+                   regtrace_t23_ae_hlil_resume_sensor, sensor_name);
+        regtrace_t23_ae_hlil_resume = false;
+        strlcpy(regtrace_t23_ae_hlil_resume_sensor, sensor_name,
+                sizeof(regtrace_t23_ae_hlil_resume_sensor));
+    }
     regtrace_t23_source_sensor_configured = true;
 
     printk(KERN_WARNING

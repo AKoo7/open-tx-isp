@@ -505,14 +505,41 @@ static void regtrace_t23_source_ae_hlil_trigger(void)
  * AE continues from there.  The ladder bootstrap rung (longest unity-gain
  * integration time) is only used before the AE has moved at all.
  */
-static uint32_t regtrace_t23_ae_hlil_stream_packed(void)
+/*
+ * The resume point is the exposure value, not the rung index: if the ladder
+ * was rebuilt since the AE last moved (frame rate / AE_IT_MAX / MAX_AGAIN
+ * change, another sensor), the old index names a different exposure.
+ * Re-resolve the rung nearest to the last EV, as the retime path does, and
+ * keep state and EV consistent.  Returns REGTRACE_T23_AE_HLIL_STATE_COUNT
+ * when there is nothing to resume.
+ */
+static uint32_t regtrace_t23_ae_hlil_resume_state(void)
 {
     uint32_t state = regtrace_t23_source_ae_hlil_state;
+    uint32_t ev = regtrace_t23_source_ae_hlil_ev;
+
+    if (!regtrace_t23_ae_hlil_resume || !REGTRACE_T23_AE_HLIL_STATE_COUNT)
+        return REGTRACE_T23_AE_HLIL_STATE_COUNT;
+    if (state < REGTRACE_T23_AE_HLIL_STATE_COUNT &&
+        regtrace_t23_ae_hlil_rungs[state].ev_q10 == ev)
+        return state;
+    state = regtrace_t23_ae_hlil_nearest_state(ev >> 10);
+    printk(KERN_INFO
+           "tx_isp_t23_recovered: AE resume re-resolved ev=%u -> state=%u ev=%u\n",
+           ev, state, regtrace_t23_ae_hlil_rungs[state].ev_q10);
+    regtrace_t23_source_ae_hlil_state = state;
+    regtrace_t23_source_ae_hlil_ev = regtrace_t23_ae_hlil_rungs[state].ev_q10;
+    return state;
+}
+
+static uint32_t regtrace_t23_ae_hlil_stream_packed(void)
+{
+    uint32_t state;
 
     if (regtrace_t23_source_ae_force_packed)
         return regtrace_t23_source_ae_force_packed;
-    if (regtrace_t23_ae_hlil_resume &&
-        state < REGTRACE_T23_AE_HLIL_STATE_COUNT)
+    state = regtrace_t23_ae_hlil_resume_state();
+    if (state < REGTRACE_T23_AE_HLIL_STATE_COUNT)
         return regtrace_t23_ae_hlil_rungs[state].packed;
     return regtrace_t23_source_ae_initial_packed;
 }
@@ -521,12 +548,14 @@ static uint32_t regtrace_t23_ae_hlil_stream_packed(void)
 static uint32_t regtrace_t23_ae_hlil_resume_gain(uint32_t *sensor_again)
 {
     const struct regtrace_t23_ae_hlil_rung *rung;
+    uint32_t state;
 
-    if (!regtrace_t23_ae_hlil_resume ||
-        regtrace_t23_source_ae_force_packed ||
-        regtrace_t23_source_ae_hlil_state >= REGTRACE_T23_AE_HLIL_STATE_COUNT)
+    if (regtrace_t23_source_ae_force_packed)
         return 0;
-    rung = &regtrace_t23_ae_hlil_rungs[regtrace_t23_source_ae_hlil_state];
+    state = regtrace_t23_ae_hlil_resume_state();
+    if (state >= REGTRACE_T23_AE_HLIL_STATE_COUNT)
+        return 0;
+    rung = &regtrace_t23_ae_hlil_rungs[state];
     *sensor_again = rung->packed >> 16;
     return regtrace_t23_ae_rung_total_gain(rung);
 }
@@ -553,9 +582,8 @@ static void regtrace_t23_source_ae_hlil_reset(void)
         regtrace_t23_source_ae_hlil_status = ENODEV;
         return;
     }
-    if (regtrace_t23_ae_hlil_resume &&
-        !regtrace_t23_source_ae_force_packed &&
-        regtrace_t23_source_ae_hlil_state <
+    if (!regtrace_t23_source_ae_force_packed &&
+        regtrace_t23_ae_hlil_resume_state() <
         REGTRACE_T23_AE_HLIL_STATE_COUNT) {
         /* keep the rung the stream start just programmed */
     } else {
