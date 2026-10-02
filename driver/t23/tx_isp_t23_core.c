@@ -9694,6 +9694,7 @@ int32_t tisp_gib_gain_interpolation(uint32_t gain_q16);
 int32_t tisp_ydns_refresh(uint32_t gain_q16);
 uint32_t tisp_math_exp2(uint32_t value, uint32_t input_precision,
                         uint32_t output_precision);
+int32_t tisp_log2_fixed_to_fixed(uint32_t a0, uint32_t a1, uint32_t a2);
 int32_t tiziano_ydns_init(void);
 int32_t tiziano_gamma_init(void);
 int32_t tiziano_lsc_init(uint32_t width, uint32_t height);
@@ -9864,7 +9865,16 @@ static bool regtrace_t23_source_dmsc_tuning_init = true;
 static bool regtrace_t23_source_sharpen_tuning_init = true;
 static bool regtrace_t23_source_sharpen_initialized;
 static uint regtrace_t23_source_dmsc_sharpness = 0x80U;
+/* Total gain last applied to the gain-driven blocks, linear Q16 (1x = 0x10000). */
 static uint32_t regtrace_t23_dmsc_gain_q16 = 0x10000U;
+/*
+ * The same gain as the OEM hands it to tisp_long_tgain_update and from there
+ * to every gain-indexed IQ curve: log2 of the linear total gain, Q16
+ * (tisp_ae_algo_handle: tisp_log2_fixed_to_fixed(total_q10 << 6, 16, 16)).
+ * Integer part = curve entry, so the 9 entries are 1x, 2x, 4x ... 256x.
+ * Starts at 0x10000, the gain the OEM *_init functions refresh with.
+ */
+static uint32_t regtrace_t23_tgain_log2 = 0x10000U;
 static bool regtrace_t23_source_bcsh_tuning_init = true;
 static bool regtrace_t23_source_bcsh_runtime = true;
 static bool regtrace_t23_source_bcsh_trace;
@@ -13840,42 +13850,67 @@ int32_t tisp_gib_gain_interpolation(uint32_t gain_q16)
     return 0;
 }
 
+/*
+ * Linear total gain (Q16) to the OEM tgain: log2, Q16.  The OEM total gain
+ * is sensor again times ISP dgain, both at least 1x; a lower value (only
+ * possible through the source_total_gain_q16 parameter) is taken as 1x.
+ */
+static uint32_t regtrace_t23_total_gain_log2(uint32_t gain_q16)
+{
+    if (gain_q16 <= 0x10000U)
+        return 0;
+    return (uint32_t)tisp_log2_fixed_to_fixed(gain_q16, 16U, 16U);
+}
+
 static int regtrace_t23_source_apply_total_gain_value(uint32_t gain_q16,
                                                        uint32_t sensor_again,
                                                        bool explicit,
                                                        bool restore_dmsc)
 {
+    uint32_t tgain;
+    uint32_t index;
     int ret = 0;
 
     if (!gain_q16)
         return -EINVAL;
 
+    /*
+     * OEM tisp_long_tgain_update: every gain-driven block gets the log2
+     * total gain, whose integer part indexes the 9-entry IQ curves.
+     */
+    tgain = regtrace_t23_total_gain_log2(gain_q16);
     if (regtrace_t23_source_gib_tuning_init)
-        ret = tisp_gib_gain_interpolation(gain_q16);
+        ret = tisp_gib_gain_interpolation(tgain);
     if (!ret && regtrace_t23_source_dmsc_tuning_init)
-        ret = tisp_dmsc_par_refresh(gain_q16, 0x100U,
+        ret = tisp_dmsc_par_refresh(tgain, 0x100U,
                                     restore_dmsc ? 1U : 0U);
     if (regtrace_t23_source_dpc_tuning_init)
-        tisp_dpc_refresh(gain_q16);
+        tisp_dpc_refresh(tgain);
     if (regtrace_t23_source_ydns_tuning_init)
-        tisp_ydns_refresh(gain_q16);
+        tisp_ydns_refresh(tgain);
     if (regtrace_t23_source_mdns_initialized)
-        tisp_mdns_par_refresh(gain_q16, 0x100U);
+        tisp_mdns_par_refresh(tgain, 0x100U);
     if (regtrace_t23_source_sdns_initialized)
-        tisp_sdns_refresh(gain_q16);
+        tisp_sdns_refresh(tgain);
     if (regtrace_t23_source_sharpen_initialized)
-        tisp_sharpen_refresh(gain_q16);
+        tisp_sharpen_refresh(tgain);
 
     regtrace_t23_dmsc_gain_q16 = gain_q16;
+    regtrace_t23_tgain_log2 = tgain;
     tparams[0x3934] = regtrace_t23_source_dmsc_sharpness & 0xffU;
     if (regtrace_t23_source_dmsc_tuning_init &&
         regtrace_t23_source_dmsc_sharpness != 0x80U)
         tisp_dmsc_sharpness_set(regtrace_t23_source_dmsc_sharpness, 0);
 
-    printk(KERN_WARNING
-           "tx_isp_t23_recovered: source total-gain 0x%x sensor_again=0x%x applied from loaded tuning sharpness=0x%x explicit=%u restore=%u ret=%d\n",
-           gain_q16, sensor_again,
-           regtrace_t23_source_dmsc_sharpness & 0xffU,
+    /* curve position: entry index + fraction/65536, clamped at entry 8 */
+    index = min(tgain >> 16, 8U);
+    printk_ratelimited(KERN_WARNING
+           "tx_isp_t23_recovered: source total-gain 0x%x tgain_log2=0x%x curve=%u+0x%04x/0x10000 last dmsc=0x%x dpc=0x%x ydns=0x%x mdns=0x%x sdns=0x%x sharpen=0x%x sensor_again=0x%x sharpness=0x%x explicit=%u restore=%u ret=%d\n",
+           gain_q16, tgain, index, index < 8U ? tgain & 0xffffU : 0U,
+           regtrace_t23_dmsc_gain_old, regtrace_t23_dpc_gain_old,
+           ydns_gain_old, regtrace_t23_source_mdns_gain_old,
+           regtrace_t23_source_sdns_gain_old, sharpen_gain_old,
+           sensor_again, regtrace_t23_source_dmsc_sharpness & 0xffU,
            explicit ? 1U : 0U, restore_dmsc ? 1U : 0U, ret);
     return ret;
 }
@@ -52490,7 +52525,7 @@ uint32_t regtrace_t23_lsc_scale_word(uint32_t value,
 int32_t tisp_lsc_write_lut_datas(void)
 {
     unsigned long flags;
-    uint32_t gain_q16 = regtrace_t23_dmsc_gain_q16;
+    uint32_t tgain = regtrace_t23_tgain_log2;
     uint32_t strength;
     uint32_t base;
     uint32_t ct;
@@ -52504,10 +52539,8 @@ int32_t tisp_lsc_write_lut_datas(void)
     if (!regtrace_t23_source_lsc_update_pending)
         return 0;
 
-    if (!gain_q16)
-        gain_q16 = 0x10000U;
     strength = tisp_simple_intp(
-        gain_q16 >> 16, gain_q16 & 0xffffU,
+        tgain >> 16, tgain & 0xffffU,
         (void *)lsc_mesh_str);
     if (regtrace_t23_source_lsc_mesh_scale == 0U)
         base = 0x800U;
@@ -52537,8 +52570,8 @@ int32_t tisp_lsc_write_lut_datas(void)
     regtrace_t23_source_lsc_update_pending = false;
     spin_unlock_irqrestore(&regtrace_t23_lsc_lut_lock, flags);
     printk(KERN_INFO
-           "tx_isp_t23_recovered: source LSC runtime CT%u gain=0x%x strength=%u committed (%u nodes)\n",
-           ct, gain_q16, strength,
+           "tx_isp_t23_recovered: source LSC runtime CT%u tgain_log2=0x%x strength=%u committed (%u nodes)\n",
+           ct, tgain, strength,
            regtrace_t23_source_lsc_lut_num / 3U);
     return 0;
 }
@@ -70589,12 +70622,12 @@ int tiziano_sdns_init(void) {
     ret = regtrace_t23_source_sdns_load_tuning();
     if (ret)
         return ret;
-    ret = tisp_sdns_par_refresh(regtrace_t23_dmsc_gain_q16, 0x10000U, 1U);
+    ret = tisp_sdns_par_refresh(regtrace_t23_tgain_log2, 0x10000U, 1U);
     if (!ret) {
         regtrace_t23_source_sdns_initialized = true;
         printk(KERN_WARNING
-               "tx_isp_t23_recovered: SDNS initialized gain=0x%x active=%u r8b4c=0x%x\n",
-               regtrace_t23_dmsc_gain_q16,
+               "tx_isp_t23_recovered: SDNS initialized tgain_log2=0x%x active=%u r8b4c=0x%x\n",
+               regtrace_t23_tgain_log2,
                regtrace_t23_source_sdns_internal_enable ? 1U : 0U,
                system_reg_read(0x8b4cU));
     }
@@ -85153,8 +85186,8 @@ int32_t tisp_dmsc_param_array_set(uint32_t a0, uint32_t a1)
 int tisp_dmsc_sharpness_set(uint32_t a0, uint32_t a1)
 {
     uint32_t sharpness = a0 & 0xffU;
-    uint32_t gain_index = regtrace_t23_dmsc_gain_q16 >> 16;
-    uint32_t gain_fraction = regtrace_t23_dmsc_gain_q16 & 0xffffU;
+    uint32_t gain_index = regtrace_t23_tgain_log2 >> 16;
+    uint32_t gain_fraction = regtrace_t23_tgain_log2 & 0xffffU;
     uint32_t sp_d_w;
     uint32_t sp_d_b;
     uint32_t sp_ud_w;
@@ -91453,7 +91486,7 @@ int32_t tiziano_mdns_init(uint32_t arg1, uint32_t arg2)
     if (ret)
         return ret;
     regtrace_t23_source_mdns_initialized = true;
-    tisp_mdns_par_refresh(regtrace_t23_dmsc_gain_q16, 0x10000U);
+    tisp_mdns_par_refresh(regtrace_t23_tgain_log2, 0x10000U);
     tisp_mdns_bypass(!regtrace_t23_source_park_uninitialized_mdns &&
                      regtrace_t23_source_mdns_internal_enable ? 0 : 1);
     return 0;
@@ -91834,8 +91867,8 @@ static void regtrace_t23_source_dn_params_refresh(const char *reason)
     ret = regtrace_t23_source_apply_total_gain_value(gain, 0, true, true);
 
     printk(KERN_WARNING
-           "tx_isp_t23_recovered: bank switch block refresh reason=%s gain=0x%x failed=0x%x ret=%d r0c=0x%08x\n",
-           reason ? reason : "?", gain, failed, ret,
+           "tx_isp_t23_recovered: bank switch block refresh reason=%s gain=0x%x tgain_log2=0x%x failed=0x%x ret=%d r0c=0x%08x\n",
+           reason ? reason : "?", gain, regtrace_t23_tgain_log2, failed, ret,
            system_reg_read(0x0cU));
 }
 
