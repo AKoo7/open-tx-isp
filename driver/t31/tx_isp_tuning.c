@@ -3693,11 +3693,13 @@ int tisp_set_csc_version(int version)
 	       tisp_csc_presets[ver], sizeof(preset));
 	memcpy(tisp_csc_param_current, preset, sizeof(tisp_csc_param_current));
 	tisp_csc_version_now = ver;
-	spin_unlock_irqrestore(&tisp_csc_lock, flags);
 
 	/* OEM flow: enable CSC sign/control word, clear the adjacent control
 	 * slot, then write three packed 3x10-bit magnitude rows plus offset/limit
-	 * words. Negative coefficient positions are implied by the fixed 0x1f mode. */
+	 * words. Negative coefficient positions are implied by the fixed 0x1f mode.
+	 * The writes stay under tisp_csc_lock (plain MMIO, no sleeping) so two
+	 * concurrent setters cannot leave the HW with a mix of two presets that
+	 * no longer matches tisp_csc_param_current. */
 	system_reg_write(0x6000, 0x1f);
 	system_reg_write(0x6004, 0x0);
 	system_reg_write(0x6010, tisp_csc_pack_triplet(preset[0], preset[1], preset[2]));
@@ -3710,6 +3712,7 @@ int tisp_set_csc_version(int version)
 				 (((u32)preset[14] & 0xff) << 8) |
 				 (((u32)preset[11] & 0xff) << 16) |
 				 (((u32)preset[12] & 0xff) << 24));
+	spin_unlock_irqrestore(&tisp_csc_lock, flags);
 
 	pr_info("tisp_set_csc_version: programmed CSC preset %d\n", ver);
 	return 1;
@@ -32584,7 +32587,7 @@ static int tisp_get_blc_attr(uint32_t *out)
     return 0;
 }
 
-/* OEM EXACT: tisp_set_csc_attr (0x6610c) — buf[0] is the CSC version; versions
+/* OEM EXACT: tisp_set_csc_attr (0x65f40) — buf[0] is the CSC version; versions
  * 0..3 select a built-in preset, version 4 carries a user preset in buf[1..15].
  * Callers must have range-checked the user preset (see 0x80000a6 handler). */
 static int tisp_set_csc_attr(uint32_t *buf)

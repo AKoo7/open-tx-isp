@@ -3625,54 +3625,61 @@ EXPORT_SYMBOL(tisp_s_fcrop_control);
  */
 int tisp_g_fcrop_control(char* arg1)
 {
-    int32_t v1 = data_b2e04;
+    /* OEM stores whole words (sw) for fields 1..4 and a byte (sb) for the
+     * enable flag; callers pass a zeroed u32[5] buffer. */
+    u32 *out = (u32 *)arg1;
     int32_t result;
 
-    if (v1 != 1) {
-        extern uint8_t tispinfo[];
-        extern uint32_t data_b2f34;
-        int32_t tispinfo_1;
+    if (data_b2e04 != 1) {
+        u32 isp_w;
+
+        memcpy(&isp_w, tispinfo, sizeof(isp_w)); /* OEM: ISP input width */
         *arg1 = 0;
-        memcpy(&tispinfo_1, tispinfo, sizeof(tispinfo_1)); /* OEM: read ISP width */
-        *(arg1 + 4) = 0;
+        out[1] = 0;
+        out[2] = 0;
+        out[3] = isp_w;
         result = data_b2f34;
-        *(arg1 + 8) = 0;
-        *(arg1 + 0xc) = tispinfo_1;
     } else {
-        *arg1 = (char)v1;
-        *(arg1 + 4) = data_b2e0c;
-        *(arg1 + 8) = data_b2e08;
-        *(arg1 + 0xc) = data_b2e10;
-        result = data_b2e14;
+        *arg1 = 1;
+        out[1] = data_b2e0c;   /* top  (ds0_attr word 10) */
+        out[2] = data_b2e08;   /* left (ds0_attr word 9)  */
+        out[3] = data_b2e10;   /* width */
+        result = data_b2e14;   /* height */
     }
 
-    *(arg1 + 0x10) = result;
+    out[4] = result;
     return result;
 }
 EXPORT_SYMBOL(tisp_g_fcrop_control);
 
 /**
  * tisp_s_fcrop_control_user - validated entry for the FRONT_CROP set ioctl.
- * @f: five dwords {enable, left, top, width, height} as the stock ioctl
- *     passes to tisp_s_fcrop_control().
- * Stock performs no range checks and ignores the return value; here the
- * rectangle must be non-empty and lie inside the ISP input frame, otherwise
+ * @f: five dwords {enable, top, left, width, height} (IMPISPFrontCrop order)
+ *     as the stock ioctl passes them to tisp_s_fcrop_control(); top goes to
+ *     ds0_attr word 10 / 0x9860[15:0], left to word 9 / 0x9860[31:16].
+ * enable == 0 is passed through unchanged: stock only logs and re-latches
+ * 0x9804 and the ioctl still succeeds, so apps that "disable" the crop keep
+ * working.  For enable != 0 the rectangle must be non-empty and lie inside
+ * the ISP input frame (same test as tisp_channel_attr_set), otherwise
  * -EINVAL is returned before any register or state is touched.
  */
 int tisp_s_fcrop_control_user(const u32 *f)
 {
     u32 isp_w, isp_h;
 
+    if ((f[0] & 0xff) == 0) {
+        tisp_s_fcrop_control(f[0], f[1], f[2], f[3], f[4]);
+        return 0;
+    }
+
     memcpy(&isp_w, tispinfo, sizeof(isp_w));
     isp_h = data_b2f34;
 
-    if ((f[0] & 0xff) == 0)
-        return -EINVAL;
     if (!isp_w || !isp_h)
         return -EINVAL;
     if (!f[3] || !f[4])
         return -EINVAL;
-    if ((u64)f[1] + f[3] > isp_w || (u64)f[2] + f[4] > isp_h)
+    if ((u64)f[2] + f[3] > isp_w || (u64)f[1] + f[4] > isp_h)
         return -EINVAL;
 
     return tisp_s_fcrop_control(f[0], f[1], f[2], f[3], f[4]);
@@ -3684,7 +3691,9 @@ int tisp_s_fcrop_control_user(const u32 *f)
  * @mode:  0 = off (reset filter-level registers), 1 = set level
  * @level: filter level, 0..128 (stock computes 3*level and accepts <= 384)
  * Programs the channel's scaler level registers (base 0x9800 + ch*0x100 +
- * 0x1c0..0x1cc) and re-latches 0x9804.  Channel must be enabled in msca_ch_en.
+ * 0x1c0..0x1cc) and re-latches 0x9804.  A channel not enabled in msca_ch_en
+ * is a logged no-op (stock).  Out-of-range channel/mode/level return -EINVAL
+ * (stock would re-write the current values, i.e. also a no-op).
  */
 int tisp_s_scaler_level_control(u32 ch, u32 mode, u32 level)
 {
@@ -3699,9 +3708,12 @@ int tisp_s_scaler_level_control(u32 ch, u32 mode, u32 level)
     if (en == ~0U)
         en = 0;
     if (!(en & (1U << ch))) {
+        /* Stock logs and returns without touching the registers; the
+         * ioctl still reports success, so keep that for apps that set
+         * all channels regardless of which ones are running. */
         msca_ch_en = en;
         isp_printf(2, "scaler level: channel %u is not enabled\n", ch);
-        return -EINVAL;
+        return 0;
     }
 
     base = 0x9800 + ch * 0x100;
