@@ -5262,6 +5262,9 @@ static unsigned char __attribute__((aligned(4))) wei20_16_9[128] = {
     0x0d, 0x00, 0x00, 0x00, 0x0d, 0x00, 0x00, 0x00, 0x0d, 0x00, 0x00, 0x00, 0x0d, 0x00, 0x00, 0x00, 
 };
 static uint32_t gain_old;
+/* last gain the sharpen block was interpolated for (OEM: its own static,
+ * not the one tiziano_sdns_init resets) */
+static uint32_t sharpen_gain_old = 0xffffffffU;
 static uint32_t *y_sp_b_sl_stren_0_array_now;
 static uintptr_t y_sp_b_sl_stren_0_intp;
 static uint32_t *y_sp_b_sl_stren_1_array_now;
@@ -5270,51 +5273,51 @@ static uint32_t *y_sp_b_sl_stren_2_array_now;
 static uintptr_t y_sp_b_sl_stren_2_intp;
 static uint32_t *y_sp_b_sl_stren_3_array_now;
 static uintptr_t y_sp_b_sl_stren_3_intp;
-static unsigned char y_sp_fl_min_thres_array[36];
+static unsigned char y_sp_fl_min_thres_array[36] __aligned(4);
 static uintptr_t y_sp_fl_min_thres_intp;
-static unsigned char y_sp_fl_sl_0_array[36];
+static unsigned char y_sp_fl_sl_0_array[36] __aligned(4);
 static uintptr_t y_sp_fl_sl_0_array_intp;
-static unsigned char y_sp_fl_sl_1_array[36];
+static unsigned char y_sp_fl_sl_1_array[36] __aligned(4);
 static uintptr_t y_sp_fl_sl_1_array_intp;
-static unsigned char y_sp_fl_sl_2_array[36];
+static unsigned char y_sp_fl_sl_2_array[36] __aligned(4);
 static uintptr_t y_sp_fl_sl_2_array_intp;
-static unsigned char y_sp_fl_sl_3_array[36];
+static unsigned char y_sp_fl_sl_3_array[36] __aligned(4);
 static uintptr_t y_sp_fl_sl_3_array_intp;
-static unsigned char y_sp_fl_std_thres_array[36];
+static unsigned char y_sp_fl_std_thres_array[36] __aligned(4);
 static uintptr_t y_sp_fl_std_thres_intp;
-static unsigned char y_sp_fl_thres_array[36];
+static unsigned char y_sp_fl_thres_array[36] __aligned(4);
 static uintptr_t y_sp_fl_thres_intp;
-static unsigned char y_sp_mv_fl_min_thres_array[36];
+static unsigned char y_sp_mv_fl_min_thres_array[36] __aligned(4);
 static uintptr_t y_sp_mv_fl_min_thres_intp;
-static unsigned char y_sp_mv_fl_std_thres_array[36];
+static unsigned char y_sp_mv_fl_std_thres_array[36] __aligned(4);
 static uintptr_t y_sp_mv_fl_std_thres_intp;
-static unsigned char y_sp_mv_fl_thres_array[36];
+static unsigned char y_sp_mv_fl_thres_array[36] __aligned(4);
 static uintptr_t y_sp_mv_fl_thres_intp;
-static unsigned char y_sp_mv_uu_stren_array[36];
+static unsigned char y_sp_mv_uu_stren_array[36] __aligned(4);
 static uintptr_t y_sp_mv_uu_stren_intp;
-static unsigned char y_sp_mv_uu_thres_array[36];
+static unsigned char y_sp_mv_uu_thres_array[36] __aligned(4);
 static uintptr_t y_sp_mv_uu_thres_intp;
-static unsigned char y_sp_sl_exp_num_array[36];
+static unsigned char y_sp_sl_exp_num_array[36] __aligned(4);
 static uintptr_t y_sp_sl_exp_num_intp;
-static unsigned char y_sp_sl_exp_thres_array[36];
+static unsigned char y_sp_sl_exp_thres_array[36] __aligned(4);
 static uintptr_t y_sp_sl_exp_thres_intp;
-static unsigned char y_sp_uu_min_stren_array[36];
+static unsigned char y_sp_uu_min_stren_array[36] __aligned(4);
 static uintptr_t y_sp_uu_min_stren_intp;
-static unsigned char y_sp_uu_min_thres_array[36];
+static unsigned char y_sp_uu_min_thres_array[36] __aligned(4);
 static uintptr_t y_sp_uu_min_thres_intp;
-static unsigned char y_sp_uu_sl_0_array[36];
+static unsigned char y_sp_uu_sl_0_array[36] __aligned(4);
 static uintptr_t y_sp_uu_sl_0_array_intp;
-static unsigned char y_sp_uu_sl_1_array[36];
+static unsigned char y_sp_uu_sl_1_array[36] __aligned(4);
 static uintptr_t y_sp_uu_sl_1_array_intp;
-static unsigned char y_sp_uu_sl_2_array[36];
+static unsigned char y_sp_uu_sl_2_array[36] __aligned(4);
 static uintptr_t y_sp_uu_sl_2_array_intp;
-static unsigned char y_sp_uu_sl_3_array[36];
+static unsigned char y_sp_uu_sl_3_array[36] __aligned(4);
 static uintptr_t y_sp_uu_sl_3_array_intp;
-static unsigned char y_sp_uu_stren_array[36];
+static unsigned char y_sp_uu_stren_array[36] __aligned(4);
 static uintptr_t y_sp_uu_stren_intp;
 static uint32_t *y_sp_uu_thres_array_now;
 static uintptr_t y_sp_uu_thres_intp;
-static unsigned char y_sp_v2_win5_thres_array[36];
+static unsigned char y_sp_v2_win5_thres_array[36] __aligned(4);
 static uintptr_t y_sp_v2_win5_thres_intp;
 static uint32_t *y_sp_w_sl_stren_0_array_now;
 static uintptr_t y_sp_w_sl_stren_0_intp;
@@ -5324,37 +5327,37 @@ static uint32_t *y_sp_w_sl_stren_2_array_now;
 static uintptr_t y_sp_w_sl_stren_2_intp;
 static uint32_t *y_sp_w_sl_stren_3_array_now;
 static uintptr_t y_sp_w_sl_stren_3_intp;
-static unsigned char y_sp_std_cfg_array[8];
-static unsigned char y_sp_uu_par_cfg_array[16];
+static unsigned char y_sp_std_cfg_array[8] __aligned(4);
+static unsigned char y_sp_uu_par_cfg_array[16] __aligned(4);
 static uintptr_t y_sp_out_opt_array;
 typedef struct {
     int32_t d;
     int32_t pad;
 } y_sp_fl_par_cfg_array_t;
-static unsigned char y_sp_fl_par_cfg_array[8];
-static unsigned char y_sp_v1_v2_coef_par_cfg_array[48];
-static unsigned char y_sp_w_b_ll_par_cfg_array[36];
-static unsigned char y_sp_b_wei_np_array[64];
-static unsigned char y_sp_uu_np_array[64];
-static unsigned char y_sp_w_wei_np_array[64];
-static unsigned char y_sp_uu_thres_array[36];
-static unsigned char y_sp_uu_thres_wdr_array[36];
-static unsigned char y_sp_w_sl_stren_0_array[36];
-static unsigned char y_sp_w_sl_stren_0_wdr_array[36];
-static unsigned char y_sp_w_sl_stren_1_array[36];
-static unsigned char y_sp_w_sl_stren_1_wdr_array[36];
-static unsigned char y_sp_w_sl_stren_2_array[36];
-static unsigned char y_sp_w_sl_stren_2_wdr_array[36];
-static unsigned char y_sp_w_sl_stren_3_array[36];
-static unsigned char y_sp_w_sl_stren_3_wdr_array[36];
-static unsigned char y_sp_b_sl_stren_0_array[36];
-static unsigned char y_sp_b_sl_stren_0_wdr_array[36];
-static unsigned char y_sp_b_sl_stren_1_array[36];
-static unsigned char y_sp_b_sl_stren_1_wdr_array[36];
-static unsigned char y_sp_b_sl_stren_2_array[36];
-static unsigned char y_sp_b_sl_stren_2_wdr_array[36];
-static unsigned char y_sp_b_sl_stren_3_array[36];
-static unsigned char y_sp_b_sl_stren_3_wdr_array[36];
+static unsigned char y_sp_fl_par_cfg_array[8] __aligned(4);
+static unsigned char y_sp_v1_v2_coef_par_cfg_array[48] __aligned(4);
+static unsigned char y_sp_w_b_ll_par_cfg_array[36] __aligned(4);
+static unsigned char y_sp_b_wei_np_array[64] __aligned(4);
+static unsigned char y_sp_uu_np_array[64] __aligned(4);
+static unsigned char y_sp_w_wei_np_array[64] __aligned(4);
+static unsigned char y_sp_uu_thres_array[36] __aligned(4);
+static unsigned char y_sp_uu_thres_wdr_array[36] __aligned(4);
+static unsigned char y_sp_w_sl_stren_0_array[36] __aligned(4);
+static unsigned char y_sp_w_sl_stren_0_wdr_array[36] __aligned(4);
+static unsigned char y_sp_w_sl_stren_1_array[36] __aligned(4);
+static unsigned char y_sp_w_sl_stren_1_wdr_array[36] __aligned(4);
+static unsigned char y_sp_w_sl_stren_2_array[36] __aligned(4);
+static unsigned char y_sp_w_sl_stren_2_wdr_array[36] __aligned(4);
+static unsigned char y_sp_w_sl_stren_3_array[36] __aligned(4);
+static unsigned char y_sp_w_sl_stren_3_wdr_array[36] __aligned(4);
+static unsigned char y_sp_b_sl_stren_0_array[36] __aligned(4);
+static unsigned char y_sp_b_sl_stren_0_wdr_array[36] __aligned(4);
+static unsigned char y_sp_b_sl_stren_1_array[36] __aligned(4);
+static unsigned char y_sp_b_sl_stren_1_wdr_array[36] __aligned(4);
+static unsigned char y_sp_b_sl_stren_2_array[36] __aligned(4);
+static unsigned char y_sp_b_sl_stren_2_wdr_array[36] __aligned(4);
+static unsigned char y_sp_b_sl_stren_3_array[36] __aligned(4);
+static unsigned char y_sp_b_sl_stren_3_wdr_array[36] __aligned(4);
 static uint32_t sharpen_wdr_en;
 /* T23 HLDC tuning block at active-bank offset 0x14b2c (18 u32 words). */
 static uint32_t hldc_con_par_array[18] = {
@@ -9691,6 +9694,7 @@ int32_t tisp_gib_gain_interpolation(uint32_t gain_q16);
 int32_t tisp_ydns_refresh(uint32_t gain_q16);
 uint32_t tisp_math_exp2(uint32_t value, uint32_t input_precision,
                         uint32_t output_precision);
+int32_t tisp_log2_fixed_to_fixed(uint32_t a0, uint32_t a1, uint32_t a2);
 int32_t tiziano_ydns_init(void);
 int32_t tiziano_gamma_init(void);
 int32_t tiziano_lsc_init(uint32_t width, uint32_t height);
@@ -9785,6 +9789,8 @@ static uint regtrace_t23_source_lsc_ct = 5000U;
 static uint regtrace_t23_source_lsc_runtime_ct = 5000U;
 static uint regtrace_t23_source_lsc_last_ct = 5000U;
 static uint regtrace_t23_source_lsc_event_count;
+/* LUT rewrites caused by a mesh strength change with the gain */
+static uint regtrace_t23_source_lsc_gain_events;
 static bool regtrace_t23_source_ae_stats_init = true;
 static uint regtrace_t23_source_ae_stats_irqs;
 static uint regtrace_t23_source_ae_stats_snapshots;
@@ -9798,6 +9804,11 @@ static uint regtrace_t23_source_sensor_max_it;
 static uint regtrace_t23_source_sensor_max_again;
 static uint regtrace_t23_source_ae_initial_packed;
 static bool regtrace_t23_source_sensor_configured;
+/* The AE has moved off the bootstrap rung; stream restarts resume there
+ * (at the EV it reached, re-resolved on the current ladder). */
+static bool regtrace_t23_ae_hlil_resume;
+/* sensor the resume point was reached with */
+static char regtrace_t23_ae_hlil_resume_sensor[32];
 static bool regtrace_t23_source_ae_hlil = true;
 static uint regtrace_t23_source_ae_hlil_interval = 32;
 static uint regtrace_t23_source_ae_hlil_target = 60;
@@ -9857,10 +9868,20 @@ static uint regtrace_t23_source_ccm_last_ct = 5084U;
 static uint regtrace_t23_source_ccm_event_count;
 static uint regtrace_t23_source_ccm_last_saturation = 150U;
 static bool regtrace_t23_source_dmsc_tuning_init = true;
-/* Sharpen stays bypassed until its complete IQ-bin loader is recovered. */
-static bool regtrace_t23_source_sharpen_tuning_init;
+/* Sharpen loads its curves from the active IQ bank (OEM tiziano_sharpen_init). */
+static bool regtrace_t23_source_sharpen_tuning_init = true;
+static bool regtrace_t23_source_sharpen_initialized;
 static uint regtrace_t23_source_dmsc_sharpness = 0x80U;
+/* Total gain last applied to the gain-driven blocks, linear Q16 (1x = 0x10000). */
 static uint32_t regtrace_t23_dmsc_gain_q16 = 0x10000U;
+/*
+ * The same gain as the OEM hands it to tisp_long_tgain_update and from there
+ * to every gain-indexed IQ curve: log2 of the linear total gain, Q16
+ * (tisp_ae_algo_handle: tisp_log2_fixed_to_fixed(total_q10 << 6, 16, 16)).
+ * Integer part = curve entry, so the 9 entries are 1x, 2x, 4x ... 256x.
+ * Starts at 0x10000, the gain the OEM *_init functions refresh with.
+ */
+static uint32_t regtrace_t23_tgain_log2 = 0x10000U;
 static bool regtrace_t23_source_bcsh_tuning_init = true;
 static bool regtrace_t23_source_bcsh_runtime = true;
 static bool regtrace_t23_source_bcsh_trace;
@@ -10111,6 +10132,8 @@ module_param_named(source_lsc_runtime_ct,
                    regtrace_t23_source_lsc_runtime_ct, uint, 0444);
 module_param_named(source_lsc_event_count,
                    regtrace_t23_source_lsc_event_count, uint, 0444);
+module_param_named(source_lsc_gain_events,
+                   regtrace_t23_source_lsc_gain_events, uint, 0444);
 module_param_named(source_ae_stats_init,
                    regtrace_t23_source_ae_stats_init, bool, 0644);
 module_param_named(source_ae_stats_irqs,
@@ -11252,6 +11275,7 @@ static int regtrace_t23_sensor_write_u8(uint16_t reg, uint8_t value)
 }
 
 static int regtrace_t23_source_resolve_sensor_config(void);
+static uint32_t regtrace_t23_ae_hlil_stream_packed(void);
 
 static int regtrace_t23_call_sensor_stream(int enable, const char *reason)
 {
@@ -11288,13 +11312,13 @@ static int regtrace_t23_call_sensor_stream(int enable, const char *reason)
             ret = regtrace_t23_sensor_fps_stream_on(reason);
         if (enable && !ret)
             ret = regtrace_t23_source_resolve_sensor_config();
-        packed = regtrace_t23_source_ae_force_packed ?
-            regtrace_t23_source_ae_force_packed :
-            regtrace_t23_source_ae_initial_packed;
+        packed = regtrace_t23_ae_hlil_stream_packed();
         if (enable && !ret && packed)
             ret = regtrace_t23_call_sensor_exposure(packed,
                 regtrace_t23_source_ae_force_packed ?
                 "source-ae-force-after-stream" :
+                regtrace_t23_ae_hlil_resume ?
+                "source-ae-resume-after-stream" :
                 "source-ae-bootstrap-after-stream");
     }
     printk(KERN_WARNING "tx_isp_t23_recovered: sensor stream %s ret=%d reason=%s\n",
@@ -11950,6 +11974,42 @@ static void regtrace_t23_direct_vic_mdma_stream(int channel,
            readl(base + 0x304), readl(base + 0x308), reason ? reason : "?");
 }
 
+/*
+ * Stop the core and its statistics DMA rings (the ring controls written by
+ * regtrace_t23_program_core_dma()) before the buffers go away.  Without this
+ * the registers kept the physical addresses of freed slab pages across a
+ * failed start and across module reloads, and statistics written there
+ * corrupted the page cache (the IQ file then failed its CRC with -EBADMSG,
+ * -77 on MIPS) and inode memory (prune_icache_sb oops on the next insmod).
+ */
+static void regtrace_t23_core_dma_disable(const char *reason)
+{
+    /*
+     * Only this instance's rings, and never with the core clock off.
+     * Skipping it then is benign: with the clock gated the core cannot run
+     * or issue statistics DMA, so the stale ring addresses are never used,
+     * and every start goes through regtrace_t23_source_core_set_stream(1),
+     * which rewrites all ring bases and controls
+     * (regtrace_t23_program_core_dma()) before it sets 0x800 = 1.  Nothing
+     * enables the core on the old addresses, in this instance or after a
+     * module reload.
+     */
+    if (!regtrace_t23_core_dma_bufs[0].virt || !regtrace_t23_core_clks_enabled)
+        return;
+    system_reg_write(0x800U, 0);
+    system_reg_write(0xb000U, 0);
+    system_reg_write(0xa04cU, 0);
+    system_reg_write(0xa84cU, 0);
+    system_reg_write(0xb04cU, 0);
+    system_reg_write(0x44a4U, 0);
+    system_reg_write(0x5b80U, 0);
+    system_reg_write(0xb8b8U, 0);
+    wmb();
+    printk(KERN_WARNING
+           "tx_isp_t23_recovered: core statistics DMA disabled reason=%s\n",
+           reason ? reason : "?");
+}
+
 static void regtrace_t23_core_dma_free(void)
 {
     unsigned int i;
@@ -12342,6 +12402,7 @@ static int regtrace_t23_read_tuning_data(loff_t offset, void *data, size_t size)
 #include "tx_isp_t23_mdns_interp.inc"
 #include "tx_isp_t23_mdns_writers.inc"
 #include "tx_isp_t23_ydns_tuning.inc"
+#include "tx_isp_t23_sharpen_layout.inc"
 
 static int regtrace_t23_source_awb_hlil_load_tuning(void)
 {
@@ -12846,6 +12907,7 @@ int32_t tisp_bcsh_ct_update(uintptr_t ignored, uint32_t ct);
 int32_t tiziano_bcsh_init(void);
 int32_t tisp_lsc_ct_update(uint32_t ct);
 int32_t tisp_lsc_write_lut_datas(void);
+int32_t tisp_lsc_gain_update(uint32_t a0);
 int32_t tisp_lsc_mirror_flip(uint32_t unused, uint32_t width,
                              uint32_t height, uint32_t flip,
                              uint32_t mirror);
@@ -13623,10 +13685,25 @@ restore:
  * forced_on:  blocks that stay bypassed whatever the bank says.
  * forced_off: blocks this driver initialises and runs whatever the bank
  *             says (the startup overrides of the recovered tisp_init).
+ *
+ * Sharpen (bit 14) follows the bank flag like the OEM once its curves are
+ * loaded; while it is not set up (disabled, not started yet on a switch,
+ * or its load failed) it stays bypassed.
  */
+static bool regtrace_t23_source_sharpen_parked(void)
+{
+    if (!regtrace_t23_source_sharpen_tuning_init)
+        return true;
+    return regtrace_t23_core_started &&
+           !regtrace_t23_source_sharpen_initialized;
+}
+
 static uint32_t regtrace_t23_source_bypass_forced_on(void)
 {
     uint32_t mask = 0;
+
+    if (regtrace_t23_source_sharpen_parked())
+        mask |= BIT(14);
 
     if (regtrace_t23_source_park_uninitialized_mdns ||
         !regtrace_t23_source_mdns_tuning_init)
@@ -13660,8 +13737,6 @@ static uint32_t regtrace_t23_source_bypass_forced_off(void)
         mask |= BIT(25);
     if (regtrace_t23_source_dpc_tuning_init)
         mask |= BIT(2);
-    if (regtrace_t23_source_sharpen_tuning_init)
-        mask |= BIT(14);
     if (regtrace_t23_source_ydns_tuning_init)
         mask |= BIT(17);
     if (regtrace_t23_source_defog_tuning_init &&
@@ -13689,6 +13764,36 @@ static void regtrace_t23_source_mode_flags_apply(const uint32_t *flags)
     /* OEM tisp_day_or_night_s_ctrl mask, then this driver's overrides. */
     bypass = (bypass & 0xb577fffdU) | 0x34000009U;
     system_reg_write(12U, regtrace_t23_source_bypass_overrides(bypass));
+}
+
+/*
+ * OEM tiziano_sharpen_init from the active bank: curves loaded, all
+ * 0x7000..0x707c registers written at unity gain and committed (0x7090);
+ * the gain refresh that follows moves it to the gain in use.  A failed
+ * load is not fatal: the block stays bypassed and the stream runs on.
+ */
+int32_t tiziano_sharpen_init(void);
+
+static void regtrace_t23_source_sharpen_write_tuning_startup(void)
+{
+    int ret;
+
+    regtrace_t23_source_sharpen_initialized = false;
+    ret = tiziano_sharpen_init();
+    if (ret) {
+        system_reg_write(0xcU, system_reg_read(0xcU) | BIT(14));
+        printk(KERN_ERR
+               "tx_isp_t23_recovered: sharpen init failed ret=%d, block bypassed r0c=0x%08x\n",
+               ret, system_reg_read(0xcU));
+        return;
+    }
+    regtrace_t23_source_sharpen_initialized = true;
+    printk(KERN_WARNING
+           "tx_isp_t23_recovered: sharpen initialized wdr=%u r7000=0x%08x r7010=0x%08x r7068=0x%08x r707c=0x%08x bypass=%u\n",
+           sharpen_wdr_en ? 1U : 0U,
+           system_reg_read(0x7000U), system_reg_read(0x7010U),
+           system_reg_read(0x7068U), system_reg_read(0x707cU),
+           (system_reg_read(0xcU) >> 14) & 1U);
 }
 
 static int regtrace_t23_source_dmsc_write_tuning_startup(void)
@@ -13765,51 +13870,94 @@ int32_t tisp_gib_gain_interpolation(uint32_t gain_q16)
     return 0;
 }
 
+/*
+ * Linear total gain (Q16) to the OEM tgain: log2, Q16.  The OEM total gain
+ * is sensor again times ISP dgain, both at least 1x; a lower value (only
+ * possible through the source_total_gain_q16 parameter) is taken as 1x.
+ */
+static uint32_t regtrace_t23_total_gain_log2(uint32_t gain_q16)
+{
+    if (gain_q16 <= 0x10000U)
+        return 0;
+    return (uint32_t)tisp_log2_fixed_to_fixed(gain_q16, 16U, 16U);
+}
+
 static int regtrace_t23_source_apply_total_gain_value(uint32_t gain_q16,
                                                        uint32_t sensor_again,
                                                        bool explicit,
                                                        bool restore_dmsc)
 {
+    uint32_t tgain;
+    uint32_t index;
     int ret = 0;
 
     if (!gain_q16)
         return -EINVAL;
 
+    /*
+     * OEM tisp_long_tgain_update: every gain-driven block gets the log2
+     * total gain, whose integer part indexes the 9-entry IQ curves.
+     */
+    tgain = regtrace_t23_total_gain_log2(gain_q16);
     if (regtrace_t23_source_gib_tuning_init)
-        ret = tisp_gib_gain_interpolation(gain_q16);
+        ret = tisp_gib_gain_interpolation(tgain);
     if (!ret && regtrace_t23_source_dmsc_tuning_init)
-        ret = tisp_dmsc_par_refresh(gain_q16, 0x100U,
+        ret = tisp_dmsc_par_refresh(tgain, 0x100U,
                                     restore_dmsc ? 1U : 0U);
     if (regtrace_t23_source_dpc_tuning_init)
-        tisp_dpc_refresh(gain_q16);
+        tisp_dpc_refresh(tgain);
     if (regtrace_t23_source_ydns_tuning_init)
-        tisp_ydns_refresh(gain_q16);
+        tisp_ydns_refresh(tgain);
     if (regtrace_t23_source_mdns_initialized)
-        tisp_mdns_par_refresh(gain_q16, 0x100U);
+        tisp_mdns_par_refresh(tgain, 0x100U);
     if (regtrace_t23_source_sdns_initialized)
-        tisp_sdns_refresh(gain_q16);
-    if (regtrace_t23_source_sharpen_tuning_init)
-        tisp_sharpen_refresh(gain_q16);
+        tisp_sdns_refresh(tgain);
+    if (regtrace_t23_source_sharpen_initialized)
+        tisp_sharpen_refresh(tgain);
+    /*
+     * OEM tisp_long_tgain_update -> tisp_lsc_gain_update stores the gain;
+     * the OEM frame-done interrupt (tisp_ipc_frame_done_interrupt_static)
+     * then runs tisp_lsc_write_lut_datas unless LSC is bypassed (0x0c bit
+     * 6).  This driver does not hook that interrupt, so the LUT check runs
+     * here, after the gain change, in the same (process) context as the
+     * CT-driven rewrite from the AWB work.
+     */
+    tisp_lsc_gain_update(tgain);
+    if (regtrace_t23_source_lsc_tuning_init &&
+        regtrace_t23_source_lsc_tables_initialized &&
+        !(system_reg_read(0xcU) & 0x40U))
+        tisp_lsc_write_lut_datas();
 
     regtrace_t23_dmsc_gain_q16 = gain_q16;
+    regtrace_t23_tgain_log2 = tgain;
     tparams[0x3934] = regtrace_t23_source_dmsc_sharpness & 0xffU;
     if (regtrace_t23_source_dmsc_tuning_init &&
         regtrace_t23_source_dmsc_sharpness != 0x80U)
         tisp_dmsc_sharpness_set(regtrace_t23_source_dmsc_sharpness, 0);
 
-    printk(KERN_WARNING
-           "tx_isp_t23_recovered: source total-gain 0x%x sensor_again=0x%x applied from loaded tuning sharpness=0x%x explicit=%u restore=%u ret=%d\n",
-           gain_q16, sensor_again,
-           regtrace_t23_source_dmsc_sharpness & 0xffU,
+    /* curve position: entry index + fraction/65536, clamped at entry 8 */
+    index = min(tgain >> 16, 8U);
+    printk_ratelimited(KERN_WARNING
+           "tx_isp_t23_recovered: source total-gain 0x%x tgain_log2=0x%x curve=%u+0x%04x/0x10000 last dmsc=0x%x dpc=0x%x ydns=0x%x mdns=0x%x sdns=0x%x sharpen=0x%x sensor_again=0x%x sharpness=0x%x explicit=%u restore=%u ret=%d\n",
+           gain_q16, tgain, index, index < 8U ? tgain & 0xffffU : 0U,
+           regtrace_t23_dmsc_gain_old, regtrace_t23_dpc_gain_old,
+           ydns_gain_old, regtrace_t23_source_mdns_gain_old,
+           regtrace_t23_source_sdns_gain_old, sharpen_gain_old,
+           sensor_again, regtrace_t23_source_dmsc_sharpness & 0xffU,
            explicit ? 1U : 0U, restore_dmsc ? 1U : 0U, ret);
     return ret;
 }
+
+static uint32_t regtrace_t23_ae_hlil_resume_gain(uint32_t *sensor_again);
 
 static int regtrace_t23_source_apply_total_gain(void)
 {
     uint32_t sensor_again = regtrace_t23_source_ae_force_packed >> 16;
     uint32_t gain_q16 = regtrace_t23_source_total_gain_q16;
 
+    /* a resumed AE rung keeps its gain-driven block strengths */
+    if (!gain_q16)
+        gain_q16 = regtrace_t23_ae_hlil_resume_gain(&sensor_again);
     if (!gain_q16)
         gain_q16 = 0x10000U;
 
@@ -14231,6 +14379,17 @@ static int regtrace_t23_source_resolve_sensor_config(void)
     ret = regtrace_t23_ae_hlil_build_ladder();
     if (ret)
         return ret;
+    /* an AE resume point belongs to the sensor it was reached with */
+    if (strncmp(regtrace_t23_ae_hlil_resume_sensor, sensor_name,
+                sizeof(regtrace_t23_ae_hlil_resume_sensor))) {
+        if (regtrace_t23_ae_hlil_resume)
+            printk(KERN_INFO
+                   "tx_isp_t23_recovered: AE resume dropped, sensor %s -> %s\n",
+                   regtrace_t23_ae_hlil_resume_sensor, sensor_name);
+        regtrace_t23_ae_hlil_resume = false;
+        strlcpy(regtrace_t23_ae_hlil_resume_sensor, sensor_name,
+                sizeof(regtrace_t23_ae_hlil_resume_sensor));
+    }
     regtrace_t23_source_sensor_configured = true;
 
     printk(KERN_WARNING
@@ -14262,6 +14421,7 @@ static int regtrace_t23_source_core_set_stream(int enable,
         regtrace_t23_source_sdns_initialized = false;
         regtrace_t23_source_adr_initialized = false;
         regtrace_t23_source_defog_initialized = false;
+        regtrace_t23_source_sharpen_initialized = false;
         printk(KERN_WARNING "tx_isp_t23_recovered: source core stopped r800=0x%x reason=%s\n",
                system_reg_read(0x800U), reason ? reason : "?");
         return 0;
@@ -14370,6 +14530,8 @@ static int regtrace_t23_source_core_set_stream(int enable,
     }
     if (regtrace_t23_source_adr_tuning_init)
         regtrace_t23_adr_strength_apply();
+    if (regtrace_t23_source_sharpen_tuning_init)
+        regtrace_t23_source_sharpen_write_tuning_startup();
     ret = regtrace_t23_source_apply_total_gain();
     if (ret)
         return ret;
@@ -14961,7 +15123,7 @@ copy_out:
  * so a second opener (a tuning tool) does not wipe the streamer's state.
  */
 static atomic_t regtrace_tx_isp_open_count = ATOMIC_INIT(0);
-static void regtrace_t23_txisp_stream(int enable, const char *reason);
+static int regtrace_t23_txisp_stream(int enable, const char *reason);
 static void regtrace_t23_txisp_last_close(void);
 
 static int regtrace_tx_isp_open(struct inode *inode, struct file *file)
@@ -15046,9 +15208,11 @@ static long regtrace_tx_isp_ioctl_body(struct file *file, unsigned int cmd,
         return ret;
     }
 
-    if (cmd == REGTRACE_T23_VIDIOC_STREAMON)
-        regtrace_t23_txisp_stream(1, "tx-isp-streamon");
-    else if (cmd == REGTRACE_T23_VIDIOC_STREAMOFF)
+    if (cmd == REGTRACE_T23_VIDIOC_STREAMON) {
+        ret = regtrace_t23_txisp_stream(1, "tx-isp-streamon");
+        if (ret)
+            return ret;
+    } else if (cmd == REGTRACE_T23_VIDIOC_STREAMOFF)
         regtrace_t23_txisp_stream(0, "tx-isp-streamoff");
 
     if (cmd == REGTRACE_T23_REGISTER_SENSOR ||
@@ -15493,32 +15657,26 @@ static int regtrace_t23_program_msca_format(
     return 0;
 }
 
-static int regtrace_t23_program_msca_qbuf(int channel,
-                                          uint32_t phys,
-                                          uint32_t length)
+/*
+ * Check a buffer against the channel format and compute its NV12 plane
+ * addresses for the MSCA address FIFOs. No register access.
+ */
+static int regtrace_t23_build_msca_qbuf(int channel,
+                                        uint32_t phys,
+                                        uint32_t length,
+                                        struct tx_isp_nv12_buffer *buffer)
 {
-    struct tx_isp_nv12_buffer buffer;
     int ret;
 
-    if (!regtrace_t23_direct_msca_qbuf)
-        return 0;
     if (channel < 0 || channel >= 3 || !phys)
         return -EINVAL;
 
     ret = tx_isp_nv12_buffer_build(regtrace_t23_frame_width(channel),
                                    regtrace_t23_frame_height(channel),
-                                   1, 16, phys, length, &buffer);
-    if (ret) {
+                                   1, 16, phys, length, buffer);
+    if (ret)
         printk(KERN_ERR "tx_isp_t23_recovered: reject MSCA qbuf ch=%d y=0x%x len=0x%x ret=%d\n",
                channel, phys, length, ret);
-        return ret;
-    }
-
-    ret = tisp_msca_addr_fifo_write((char)channel, buffer.y_dma,
-                                    buffer.uv_dma);
-    if (regtrace_t23_log_framechan_payloads)
-        printk(KERN_WARNING "tx_isp_t23_recovered: direct MSCA qbuf ch=%d y=0x%x uv=0x%x len=0x%x ret=%d\n",
-               channel, buffer.y_dma, buffer.uv_dma, length, ret);
     return ret;
 }
 
@@ -15574,22 +15732,38 @@ static void regtrace_framechan_forget_qbufs_locked(int channel)
 
 static int regtrace_framechan_record_qbuf(int channel, const uint32_t *words)
 {
+    struct tx_isp_nv12_buffer buffer;
     unsigned long flags;
     uint32_t userptr;
+    bool program;
     int slot = -1;
     int i;
-    int ret;
+    int ret = 0;
 
     if (channel < 0 || channel >= REGTRACE_FRAMECHAN_COUNT || !words)
         return -EINVAL;
 
     userptr = words[TX_ISP_FRAME_WORD_DMA];
+    program = regtrace_t23_direct_msca_qbuf;
+    if (program) {
+        ret = regtrace_t23_build_msca_qbuf(
+            channel, userptr, words[TX_ISP_FRAME_WORD_LENGTH], &buffer);
+        if (ret)
+            return ret;
+    }
 
     /*
      * Record the buffer as queued before it reaches the MSCA address FIFO,
      * so that its completion cannot arrive first and be lost. A buffer
      * queued again keeps its slot; a new one takes a free slot, so a
      * queued buffer is never overwritten while there is room.
+     *
+     * The Y and UV addresses go into two FIFOs that the MSCA pops as a
+     * pair. Like the OEM ispcore_pad_event_handle() QBUF, which writes
+     * both under the channel spinlock, write them in the same critical
+     * section: two threads queueing at once (libimp releases frames from
+     * the encoder and the pooling threads) could otherwise interleave
+     * their writes and pair one buffer's Y plane with another's UV plane.
      */
     spin_lock_irqsave(&regtrace_framechan_done_lock, flags);
     for (i = 0; i < REGTRACE_FRAMECHAN_QBUF_SLOTS; i++) {
@@ -15614,15 +15788,18 @@ static int regtrace_framechan_record_qbuf(int channel, const uint32_t *words)
     regtrace_framechan_qbuf_queued[channel][slot] = true;
     regtrace_framechan_qbuf_last[channel] = slot;
     regtrace_framechan_qbuf_count[channel]++;
+    if (program) {
+        ret = tisp_msca_addr_fifo_write((char)channel, buffer.y_dma,
+                                        buffer.uv_dma);
+        if (ret)
+            regtrace_framechan_qbuf_queued[channel][slot] = false;
+    }
     spin_unlock_irqrestore(&regtrace_framechan_done_lock, flags);
 
-    ret = regtrace_t23_program_msca_qbuf(
-        channel, userptr, words[TX_ISP_FRAME_WORD_LENGTH]);
-    if (ret) {
-        spin_lock_irqsave(&regtrace_framechan_done_lock, flags);
-        regtrace_framechan_qbuf_queued[channel][slot] = false;
-        spin_unlock_irqrestore(&regtrace_framechan_done_lock, flags);
-    }
+    if (program && regtrace_t23_log_framechan_payloads)
+        printk(KERN_WARNING "tx_isp_t23_recovered: direct MSCA qbuf ch=%d y=0x%x uv=0x%x len=0x%x ret=%d\n",
+               channel, buffer.y_dma, buffer.uv_dma,
+               words[TX_ISP_FRAME_WORD_LENGTH], ret);
     return ret;
 }
 
@@ -15886,10 +16063,84 @@ static long regtrace_framechan_wait_frame(int channel, unsigned long arg)
     return 0;
 }
 
-static void regtrace_framechan_stream_on(struct file *file, int channel)
+/*
+ * Start the TISP core (IQ banks, statistics DMA rings, run) before any input
+ * is switched on.  Called with regtrace_framechan_stream_lock held and the
+ * stream clocks enabled.  A refused start must fail STREAMON: the sensor,
+ * VIC, MSCA and VIC MDMA were otherwise started without a configured core
+ * ("unmatched MSCA completion"), and the core statistics DMA registers kept
+ * the previous module instance's freed buffer addresses while frames flowed.
+ */
+static int regtrace_t23_tisp_prestart(const char *reason)
 {
+    int ret;
+
+    if (!regtrace_t23_direct_tisp_stream_regs)
+        return 0;
+    ret = regtrace_t23_source_core_set_stream(1, reason);
+    if (ret) {
+        printk(KERN_ERR
+               "tx_isp_t23_recovered: refusing TISP stream start ret=%d reason=%s\n",
+               ret, reason ? reason : "?");
+        /* A start that failed after programming the rings. */
+        if (!regtrace_t23_core_started)
+            regtrace_t23_core_dma_disable(reason);
+    }
+    return ret;
+}
+
+/*
+ * Drop the completions left in a stopped channel's MSCA done FIFO. The OEM
+ * core ISR pops that FIFO whatever the stream state; ours only pops the
+ * channels whose MSCA bit is set, which STREAMOFF clears. A frame the MSCA
+ * finished after that stayed in the FIFO, and at the next STREAMON its
+ * address matched the same buffer queued again by the new stream: DQBUF
+ * handed userspace a buffer the MSCA had not written yet (its real
+ * completion then showed up as "unmatched MSCA completion"). Called before
+ * the channel is marked streaming, with interrupts off since the core ISR
+ * pops the done FIFOs of the other, streaming channels.
+ */
+static unsigned int regtrace_framechan_drop_stale_done(int channel)
+{
+    unsigned long flags;
+    uint32_t fifo_base;
+    unsigned int dropped = 0;
+
+    if (!regtrace_t23_source_frame_done || channel < 0 || channel >= 3 ||
+        !regtrace_t23_core_sd || !regtrace_t23_core_clks_enabled)
+        return 0;
+    if (regtrace_t23_msca_ch_en & (1U << channel))
+        return 0;
+
+    fifo_base = ((uint32_t)channel + 0xd0U) << 8;
+    local_irq_save(flags);
+    while (dropped < REGTRACE_FRAMECHAN_DONE_SLOTS &&
+           !(system_reg_read(fifo_base + 0x13cU) & 1U)) {
+        (void)system_reg_read(fifo_base + 0x138U);
+        (void)system_reg_read(fifo_base + 0x158U);
+        dropped++;
+    }
+    local_irq_restore(flags);
+    if (dropped)
+        printk(KERN_INFO "tx_isp_t23_recovered: framechan%d dropped %u stale MSCA completions before stream on\n",
+               channel, dropped);
+    return dropped;
+}
+
+static int regtrace_framechan_stream_on(struct file *file, int channel)
+{
+    int ret;
+
     mutex_lock(&regtrace_framechan_stream_lock);
+    regtrace_t23_enable_stream_clks();
+    ret = regtrace_t23_tisp_prestart("framechan-streamon");
+    if (ret) {
+        mutex_unlock(&regtrace_framechan_stream_lock);
+        return ret;
+    }
     if (channel >= 0 && channel < REGTRACE_FRAMECHAN_COUNT) {
+        if (!regtrace_framechan_streaming[channel])
+            regtrace_framechan_drop_stale_done(channel);
         regtrace_framechan_stream_mask |= 1U << channel;
         regtrace_framechan_stream_owner[channel] = file;
     }
@@ -15903,6 +16154,7 @@ static void regtrace_framechan_stream_on(struct file *file, int channel)
     regtrace_t23_direct_vic_mdma_stream(channel, 1, "framechan-streamon");
     regtrace_t23_stream_irq_gate(1, "framechan-streamon", channel);
     mutex_unlock(&regtrace_framechan_stream_lock);
+    return 0;
 }
 
 /*
@@ -15939,10 +16191,15 @@ static void regtrace_framechan_stream_off_owned(struct file *file,
 }
 
 /* tx-isp STREAMON/STREAMOFF; caller holds regtrace_framechan_stream_lock. */
-static void regtrace_t23_txisp_stream_locked(int enable, const char *reason)
+static int regtrace_t23_txisp_stream_locked(int enable, const char *reason)
 {
     if (enable) {
+        int ret;
+
         regtrace_t23_enable_stream_clks();
+        ret = regtrace_t23_tisp_prestart(reason);
+        if (ret)
+            return ret;
         regtrace_t23_source_input_stream(1, reason);
         regtrace_t23_direct_vic_input_stream(1, reason);
         regtrace_t23_tisp_stream_regs(1, -1, reason);
@@ -15954,14 +16211,18 @@ static void regtrace_t23_txisp_stream_locked(int enable, const char *reason)
         regtrace_t23_stream_irq_gate(0, reason, -1);
     }
     regtrace_t23_txisp_streaming = enable != 0;
+    return 0;
 }
 
 /* tx-isp STREAMON/STREAMOFF, serialised with the frame channels. */
-static void regtrace_t23_txisp_stream(int enable, const char *reason)
+static int regtrace_t23_txisp_stream(int enable, const char *reason)
 {
+    int ret;
+
     mutex_lock(&regtrace_framechan_stream_lock);
-    regtrace_t23_txisp_stream_locked(enable, reason);
+    ret = regtrace_t23_txisp_stream_locked(enable, reason);
     mutex_unlock(&regtrace_framechan_stream_lock);
+    return ret;
 }
 
 /*
@@ -16179,10 +16440,10 @@ static long regtrace_framechan_ioctl_body(struct file *file, unsigned int cmd,
             channel, arg, file && (file->f_flags & O_NONBLOCK));
         break;
     case REGTRACE_T23_VIDIOC_STREAMON:
-        regtrace_framechan_stream_on(file, channel);
+        ret = regtrace_framechan_stream_on(file, channel);
         if (regtrace_t23_log_framechan_payloads)
-            printk(KERN_WARNING "tx_isp_t23_recovered: framechan%d streamon arg=0x%lx ret=0 core=%p vic=%p csi=%p fs=%p\n",
-                   channel, arg, regtrace_t23_core_sd, regtrace_t23_vic_sd,
+            printk(KERN_WARNING "tx_isp_t23_recovered: framechan%d streamon arg=0x%lx ret=%ld core=%p vic=%p csi=%p fs=%p\n",
+                   channel, arg, (long)ret, regtrace_t23_core_sd, regtrace_t23_vic_sd,
                    regtrace_t23_csi_sd, regtrace_t23_fs_sd);
         break;
     case REGTRACE_T23_VIDIOC_STREAMOFF:
@@ -16557,7 +16818,6 @@ int32_t tisp_lsc_lut_valid_judge(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t
 int tisp_lsc_wdr_en(int arg1);
 int32_t tisp_lsc_ct_update(uint32_t a0);
 int32_t tisp_lsc_gain_update(uint32_t a0);
-void tiziano_lsc_params_refresh(void);
 int32_t tiziano_lsc_dn_params_refresh(void);
 int tisp_lsc_param_array_get(int param_id, void *out_buf, int *size_buf);
 int32_t tisp_lsc_judge_ct_update_flag(void);
@@ -52032,13 +52292,23 @@ int32_t tisp_lsc_ct_update(uint32_t a0)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000021410 origin=fragment_seed original=tisp_lsc_gain_update */
 int32_t tisp_lsc_gain_update(uint32_t a0)
 {
-    if (a0 != (uint32_t)lsc_gain_curr) {
-        lsc_gain_curr = a0;
-        regtrace_t23_source_lsc_update_pending = true;
-    }
+    /*
+     * OEM: only stores the log2 total gain; tisp_lsc_write_lut_datas
+     * decides through tisp_lsc_judge_gain_update_flag whether the mesh
+     * strength, and so the LUT, changes.
+     */
+    lsc_gain_curr = a0;
     return 0;
 }
 
+/*
+ * tiziano_lsc_params_refresh (OEM fn 0x21420) is not built: nothing in this
+ * driver calls or references it, and the recovered body only memcpy()s the
+ * LSC tables into ~24 KB of locals that are then dropped (a 24712-byte stack
+ * frame, three times the 8 KB MIPS kernel stack, if it were ever called).
+ * Kept for provenance only.
+ */
+#if 0
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000021420 origin=fragment_seed original=tiziano_lsc_params_refresh */
 void tiziano_lsc_params_refresh(void)
 {
@@ -52066,6 +52336,7 @@ void tiziano_lsc_params_refresh(void)
 	memcpy(&data_c2cdc, (void *)((char *)&param_adr_weigth_02_lut_array_tmp_1728_972 + 0x38), 0x24);
 	memcpy(&sdns_sp_mv_wei_uu_value, (void *)((char *)&param_adr_weigth_02_lut_array_tmp_1728_972 + 0x5c), 4);
 }
+#endif
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000021550 origin=fragment_seed original=tiziano_lsc_dn_params_refresh */
 int32_t tiziano_lsc_dn_params_refresh(void)
@@ -52270,27 +52541,25 @@ tisp_lsc_judge_ct_update_flag0xd8:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000217b8 origin=fragment_seed original=tisp_lsc_judge_gain_update_flag */
+/*
+ * OEM 0x217b8: 1 when the mesh strength interpolated at the stored gain
+ * differs from the last judged one.  Returns 0 while the previous result
+ * (lsc_gain_update_flag) is still 1, so a gain-driven rewrite is judged at
+ * most every other call.  Caller holds regtrace_t23_lsc_lut_lock.
+ */
 int32_t tisp_lsc_judge_gain_update_flag(void)
 {
-	uint32_t lsc_gain_update_flag_val;
-	uint32_t lsc_gain_curr;
-	int32_t *result;
-	uint32_t lsc_curr_str_value;
-	uint32_t lsc_last_str;
+	uint32_t gain = (uint32_t)lsc_gain_curr;
+	uint32_t strength;
 
-	lsc_gain_update_flag_val = *(uint8_t *)((char *)((char *)&lsc_a_lut + 0x1da4));
-	if (lsc_gain_update_flag_val == 1)
+	if (lsc_gain_update_flag == 1)
 		return 0;
-
-	lsc_gain_curr = *(uint32_t *)((char *)((char *)&lsc_a_lut + 0x1dbc));
-	result = tisp_simple_intp(lsc_gain_curr >> 16, lsc_gain_curr & 0xffff, (const uint32_t *)((char *)&lsc_mesh_str_now - 17472));
-	lsc_curr_str_value = result;
-
-	lsc_last_str = *(uint32_t *)((char *)((char *)&lsc_a_lut + 0x1db4));
-	if (lsc_curr_str_value == lsc_last_str)
+	strength = (uint32_t)tisp_simple_intp(gain >> 16, gain & 0xffffU,
+					      (void *)lsc_mesh_str);
+	lsc_curr_str = strength;
+	if (strength == (uint32_t)lsc_last_str)
 		return 0;
-
-	*(uint32_t *)((char *)((char *)&lsc_a_lut + 0x1db4)) = lsc_curr_str_value;
+	lsc_last_str = strength;
 	return 1;
 }
 
@@ -52366,24 +52635,36 @@ uint32_t regtrace_t23_lsc_scale_word(uint32_t value,
 int32_t tisp_lsc_write_lut_datas(void)
 {
     unsigned long flags;
-    uint32_t gain_q16 = regtrace_t23_dmsc_gain_q16;
+    uint32_t tgain;
     uint32_t strength;
     uint32_t base;
     uint32_t ct;
     uint32_t i;
+    bool by_gain;
     int ret;
 
     ret = regtrace_t23_source_lsc_initialize_tables();
     if (ret)
         return ret;
     lsc_count++;
-    if (!regtrace_t23_source_lsc_update_pending)
-        return 0;
 
-    if (!gain_q16)
-        gain_q16 = 0x10000U;
+    /*
+     * OEM: the CT flag and the gain flag (tisp_lsc_judge_gain_update_flag)
+     * are judged on every call, and either one rewrites the LUT.  Under the
+     * LUT lock: the AE and AWB work items and the ioctl paths all get here.
+     */
+    spin_lock_irqsave(&regtrace_t23_lsc_lut_lock, flags);
+    lsc_gain_update_flag = tisp_lsc_judge_gain_update_flag();
+    by_gain = lsc_gain_update_flag == 1 &&
+              !regtrace_t23_source_lsc_update_pending;
+    if (!regtrace_t23_source_lsc_update_pending && !by_gain) {
+        spin_unlock_irqrestore(&regtrace_t23_lsc_lut_lock, flags);
+        return 0;
+    }
+
+    tgain = (uint32_t)lsc_gain_curr;
     strength = tisp_simple_intp(
-        gain_q16 >> 16, gain_q16 & 0xffffU,
+        tgain >> 16, tgain & 0xffffU,
         (void *)lsc_mesh_str);
     if (regtrace_t23_source_lsc_mesh_scale == 0U)
         base = 0x800U;
@@ -52394,7 +52675,6 @@ int32_t tisp_lsc_write_lut_datas(void)
     else
         base = 0x100U;
 
-    spin_lock_irqsave(&regtrace_t23_lsc_lut_lock, flags);
     ct = regtrace_t23_source_lsc_runtime_ct;
     for (i = 0; i + 2U < regtrace_t23_source_lsc_lut_num; i += 3U) {
         uint32_t offset = (i / 3U) << 4;
@@ -52411,10 +52691,13 @@ int32_t tisp_lsc_write_lut_datas(void)
     }
     system_reg_write(0x2800cU, 0);
     regtrace_t23_source_lsc_update_pending = false;
+    if (by_gain)
+        regtrace_t23_source_lsc_gain_events++;
     spin_unlock_irqrestore(&regtrace_t23_lsc_lut_lock, flags);
-    printk(KERN_INFO
-           "tx_isp_t23_recovered: source LSC runtime CT%u gain=0x%x strength=%u committed (%u nodes)\n",
-           ct, gain_q16, strength,
+    printk_ratelimited(KERN_INFO
+           "tx_isp_t23_recovered: source LSC runtime CT%u tgain_log2=0x%x strength=%u by=%s gain_events=%u committed (%u nodes)\n",
+           ct, tgain, strength, by_gain ? "gain" : "ct",
+           regtrace_t23_source_lsc_gain_events,
            regtrace_t23_source_lsc_lut_num / 3U);
     return 0;
 }
@@ -70465,12 +70748,12 @@ int tiziano_sdns_init(void) {
     ret = regtrace_t23_source_sdns_load_tuning();
     if (ret)
         return ret;
-    ret = tisp_sdns_par_refresh(regtrace_t23_dmsc_gain_q16, 0x10000U, 1U);
+    ret = tisp_sdns_par_refresh(regtrace_t23_tgain_log2, 0x10000U, 1U);
     if (!ret) {
         regtrace_t23_source_sdns_initialized = true;
         printk(KERN_WARNING
-               "tx_isp_t23_recovered: SDNS initialized gain=0x%x active=%u r8b4c=0x%x\n",
-               regtrace_t23_dmsc_gain_q16,
+               "tx_isp_t23_recovered: SDNS initialized tgain_log2=0x%x active=%u r8b4c=0x%x\n",
+               regtrace_t23_tgain_log2,
                regtrace_t23_source_sdns_internal_enable ? 1U : 0U,
                system_reg_read(0x8b4cU));
     }
@@ -70672,202 +70955,65 @@ int32_t tisp_y_sp_v1_v2_coef_cfg(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000041db4 origin=fragment_seed original=tisp_y_sp_w_b_ll_cfg */
+static uint32_t regtrace_t23_sharpen_pack8(const unsigned char *array,
+                                           unsigned int first)
+{
+    const uint32_t *v = (const uint32_t *)(const void *)array + first;
+
+    return v[0] | (v[1] << 8) | (v[2] << 16) | (v[3] << 24);
+}
+
 int32_t tisp_y_sp_w_b_ll_cfg(void)
 {
-    uint32_t *local_14 = 0;
-    uint32_t *local_18 = 0;
-    uint32_t local_1c = 0;
-    uintptr_t *a0 = 0;
-    uint32_t *a1 = 0;
-    uint32_t ra = 0;
-    uintptr_t *s0 = 0;
-    uint32_t *s1 = 0;
-    uintptr_t *v0 = 0;
-    uint32_t v1 = 0;
+    const uint32_t *ll = (const uint32_t *)(const void *)y_sp_w_b_ll_par_cfg_array;
 
-    /* fragment 0: Prologue */
-    /* function prologue: stack frame and callee-saved register setup */
-
-    /* fragment 1: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(28716, ((*(uint32_t *)((char *)((char *)&y_sp_w_b_ll_par_cfg_array + 0x4))) << 8) | ((*(uint32_t *)((char *)((char *)&y_sp_w_b_ll_par_cfg_array + 0x8))) << 16) | (*(uint32_t *)((char *)(uintptr_t)&y_sp_w_b_ll_par_cfg_array)) | ((*(uint32_t *)((char *)((char *)&y_sp_w_b_ll_par_cfg_array + 0xc))) << 24)); /* jalr target resolved by relocation */
-
-    /* fragment 2: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(28720, ((*(uint32_t *)((char *)((uintptr_t)s0) + 20)) << 8) | ((*(uint32_t *)((char *)((uintptr_t)s0) + 24)) << 16) | (*(uint32_t *)((char *)((uintptr_t)s0) + 16))); /* jalr target resolved by relocation */
-
-    /* fragment 3: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(28724, ((*(uint32_t *)((char *)((uintptr_t)s0) + 32)) << 16) | (*(uint32_t *)((char *)((uintptr_t)s0) + 28))); /* jalr target resolved by relocation */
-
-    /* fragment 4: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    /* fragment 5: Arithmetic */
-    v0 = 0;
-
-    /* fragment 6: Epilogue */
-    /* function epilogue: restore registers and return */
-
+    system_reg_write(0x702cU, regtrace_t23_sharpen_pack8(y_sp_w_b_ll_par_cfg_array, 0));
+    system_reg_write(0x7030U, ll[4] | (ll[5] << 8) | (ll[6] << 16));
+    system_reg_write(0x7034U, ll[7] | (ll[8] << 16));
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000041e58 origin=fragment_seed original=tisp_y_sp_uu_w_b_wei_cfg */
 int32_t tisp_y_sp_uu_w_b_wei_cfg(void)
 {
-    uint32_t val;
+    unsigned int i;
 
-    __asm__ __volatile__(
-        "addiu $sp, $sp, -32\n\t"
-        "sw $ra, 28($sp)\n\t"
-        "sw $s1, 24($sp)\n\t"
-        "sw $s0, 20($sp)\n\t"
-        : : : "memory"
-    );
-
-    val = (*(uint32_t *)((char *)((char *)&y_sp_uu_np_array + 0x4))) << 8
-        | (*(uint32_t *)((char *)((char *)&y_sp_uu_np_array + 0x8))) << 16
-        | (*(uint32_t *)((char *)(uintptr_t)&y_sp_uu_np_array))
-        | (*(uint32_t *)((char *)((char *)&y_sp_uu_np_array + 0xc))) << 24;
-    system_reg_write(0x7038, val);
-
-    val = (*(uint32_t *)((char *)((char *)&y_sp_uu_np_array + 0x14))) << 8
-        | (*(uint32_t *)((char *)((char *)&y_sp_uu_np_array + 0x18))) << 16
-        | (*(uint32_t *)((char *)((char *)&y_sp_uu_np_array + 0x10)))
-        | (*(uint32_t *)((char *)((char *)&y_sp_uu_np_array + 0x1c))) << 24;
-    system_reg_write(0x703c, val);
-
-    val = (*(uint32_t *)((char *)((char *)&y_sp_uu_np_array + 0x24))) << 8
-        | (*(uint32_t *)((char *)((char *)&y_sp_uu_np_array + 0x28))) << 16
-        | (*(uint32_t *)((char *)((char *)&y_sp_uu_np_array + 0x20)))
-        | (*(uint32_t *)((char *)((char *)&y_sp_uu_np_array + 0x2c))) << 24;
-    system_reg_write(0x7040, val);
-
-    val = (*(uint32_t *)((char *)((char *)&y_sp_uu_np_array + 0x34))) << 8
-        | (*(uint32_t *)((char *)((char *)&y_sp_uu_np_array + 0x38))) << 16
-        | (*(uint32_t *)((char *)((char *)&y_sp_uu_np_array + 0x30)))
-        | (*(uint32_t *)((char *)((char *)&y_sp_uu_np_array + 0x3c))) << 24;
-    system_reg_write(0x7044, val);
-
-    val = (*(uint32_t *)((char *)((char *)&y_sp_w_wei_np_array + 0x4))) << 8
-        | (*(uint32_t *)((char *)((char *)&y_sp_w_wei_np_array + 0x8))) << 16
-        | (*(uint32_t *)((char *)(uintptr_t)&y_sp_w_wei_np_array))
-        | (*(uint32_t *)((char *)((char *)&y_sp_w_wei_np_array + 0xc))) << 24;
-    system_reg_write(0x7048, val);
-
-    val = (*(uint32_t *)((char *)((char *)&y_sp_w_wei_np_array + 0x14))) << 8
-        | (*(uint32_t *)((char *)((char *)&y_sp_w_wei_np_array + 0x18))) << 16
-        | (*(uint32_t *)((char *)((char *)&y_sp_w_wei_np_array + 0x10)))
-        | (*(uint32_t *)((char *)((char *)&y_sp_w_wei_np_array + 0x1c))) << 24;
-    system_reg_write(0x704c, val);
-
-    val = (*(uint32_t *)((char *)((char *)&y_sp_w_wei_np_array + 0x24))) << 8
-        | (*(uint32_t *)((char *)((char *)&y_sp_w_wei_np_array + 0x28))) << 16
-        | (*(uint32_t *)((char *)((char *)&y_sp_w_wei_np_array + 0x20)))
-        | (*(uint32_t *)((char *)((char *)&y_sp_w_wei_np_array + 0x2c))) << 24;
-    system_reg_write(0x7050, val);
-
-    val = (*(uint32_t *)((char *)((char *)&y_sp_w_wei_np_array + 0x34))) << 8
-        | (*(uint32_t *)((char *)((char *)&y_sp_w_wei_np_array + 0x38))) << 16
-        | (*(uint32_t *)((char *)((char *)&y_sp_w_wei_np_array + 0x30)))
-        | (*(uint32_t *)((char *)((char *)&y_sp_w_wei_np_array + 0x3c))) << 24;
-    system_reg_write(0x7054, val);
-
-    val = (*(uint32_t *)((char *)((char *)&y_sp_b_wei_np_array + 0x4))) << 8
-        | (*(uint32_t *)((char *)((char *)&y_sp_b_wei_np_array + 0x8))) << 16
-        | (*(uint32_t *)((char *)(uintptr_t)&y_sp_b_wei_np_array))
-        | (*(uint32_t *)((char *)((char *)&y_sp_b_wei_np_array + 0xc))) << 24;
-    system_reg_write(0x7058, val);
-
-    val = (*(uint32_t *)((char *)((char *)&y_sp_b_wei_np_array + 0x14))) << 8
-        | (*(uint32_t *)((char *)((char *)&y_sp_b_wei_np_array + 0x18))) << 16
-        | (*(uint32_t *)((char *)((char *)&y_sp_b_wei_np_array + 0x10)))
-        | (*(uint32_t *)((char *)((char *)&y_sp_b_wei_np_array + 0x1c))) << 24;
-    system_reg_write(0x705c, val);
-
-    val = (*(uint32_t *)((char *)((char *)&y_sp_b_wei_np_array + 0x24))) << 8
-        | (*(uint32_t *)((char *)((char *)&y_sp_b_wei_np_array + 0x28))) << 16
-        | (*(uint32_t *)((char *)((char *)&y_sp_b_wei_np_array + 0x20)))
-        | (*(uint32_t *)((char *)((char *)&y_sp_b_wei_np_array + 0x2c))) << 24;
-    system_reg_write(0x7060, val);
-
-    val = (*(uint32_t *)((char *)((char *)&y_sp_b_wei_np_array + 0x34))) << 8
-        | (*(uint32_t *)((char *)((char *)&y_sp_b_wei_np_array + 0x38))) << 16
-        | (*(uint32_t *)((char *)((char *)&y_sp_b_wei_np_array + 0x30)))
-        | (*(uint32_t *)((char *)((char *)&y_sp_b_wei_np_array + 0x3c))) << 24;
-    system_reg_write(0x7064, val);
-
-    __asm__ __volatile__(
-        "lw $ra, 28($sp)\n\t"
-        "lw $s1, 24($sp)\n\t"
-        "lw $s0, 20($sp)\n\t"
-        "addiu $sp, $sp, 32\n\t"
-        : : : "memory"
-    );
-
+    for (i = 0; i < 4U; ++i) {
+        system_reg_write(0x7038U + i * 4U,
+                         regtrace_t23_sharpen_pack8(y_sp_uu_np_array, i * 4U));
+        system_reg_write(0x7048U + i * 4U,
+                         regtrace_t23_sharpen_pack8(y_sp_w_wei_np_array, i * 4U));
+        system_reg_write(0x7058U + i * 4U,
+                         regtrace_t23_sharpen_pack8(y_sp_b_wei_np_array, i * 4U));
+    }
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000420e0 origin=fragment_seed original=tisp_y_sp_w_b_sl_cfg */
 int32_t tisp_y_sp_w_b_sl_cfg(void)
 {
-    uint32_t *local_10 = 0;
-    uint32_t *local_14 = 0;
-    uint32_t *a0 = 0;
-    uint32_t *a1 = 0;
-    uint32_t ra = 0;
-    uint32_t *s0 = 0;
-    uintptr_t *v0 = 0;
-    uintptr_t v1 = 0;
-
-    /* fragment 0: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(28776, ((*(uint32_t *)((char *)(uintptr_t)&y_sp_w_sl_stren_1_intp)) << 16) | (*(uint32_t *)((char *)(uintptr_t)&y_sp_w_sl_stren_0_intp))); /* jalr target resolved by relocation */
-
-    /* fragment 1: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(28780, ((*(uint32_t *)((char *)(uintptr_t)&y_sp_w_sl_stren_3_intp)) << 16) | (*(uint32_t *)((char *)(uintptr_t)&y_sp_w_sl_stren_2_intp))); /* jalr target resolved by relocation */
-
-    /* fragment 2: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(28784, ((*(uint32_t *)((char *)(uintptr_t)&y_sp_b_sl_stren_1_intp)) << 16) | (*(uint32_t *)((char *)(uintptr_t)&y_sp_b_sl_stren_0_intp))); /* jalr target resolved by relocation */
-
-    /* fragment 3: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(28788, ((*(uint32_t *)((char *)(uintptr_t)&y_sp_b_sl_stren_3_intp)) << 16) | (*(uint32_t *)((char *)(uintptr_t)&y_sp_b_sl_stren_2_intp))); /* jalr target resolved by relocation */
-
-    /* fragment 4: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    /* fragment 5: Arithmetic */
-    v0 = 0;
-
-    /* fragment 6: Epilogue */
-    /* function epilogue: restore registers and return */
-
+    system_reg_write(0x7068U, ((uint32_t)y_sp_w_sl_stren_1_intp << 16) |
+                              (uint32_t)y_sp_w_sl_stren_0_intp);
+    system_reg_write(0x706cU, ((uint32_t)y_sp_w_sl_stren_3_intp << 16) |
+                              (uint32_t)y_sp_w_sl_stren_2_intp);
+    system_reg_write(0x7070U, ((uint32_t)y_sp_b_sl_stren_1_intp << 16) |
+                              (uint32_t)y_sp_b_sl_stren_0_intp);
+    system_reg_write(0x7074U, ((uint32_t)y_sp_b_sl_stren_3_intp << 16) |
+                              (uint32_t)y_sp_b_sl_stren_2_intp);
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000042188 origin=fragment_seed original=tisp_y_sp_uu_fl_sl_cfg */
 int32_t tisp_y_sp_uu_fl_sl_cfg(void)
 {
-    uint32_t *local_10 = 0;
-    uint32_t *local_14 = 0;
-    uint32_t *a0 = 0;
-    uint32_t *a1 = 0;
-    uint32_t ra = 0;
-    uint32_t *s0 = 0;
-    uintptr_t *v0 = 0;
-    uintptr_t v1 = 0;
-
-    /* fragment 0: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(28792, ((*(uint32_t *)((char *)(uintptr_t)&y_sp_uu_sl_1_array_intp)) << 8) | ((*(uint32_t *)((char *)(uintptr_t)&y_sp_uu_sl_2_array_intp)) << 16) | (*(uint32_t *)((char *)(uintptr_t)&y_sp_uu_sl_0_array_intp)) | ((*(uint32_t *)((char *)(uintptr_t)&y_sp_uu_sl_3_array_intp)) << 24)); /* jalr target resolved by relocation */
-
-    /* fragment 1: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uintptr_t)system_reg_write)(28796, ((*(uint32_t *)((char *)(uintptr_t)&y_sp_fl_sl_1_array_intp)) << 8) | ((*(uint32_t *)((char *)(uintptr_t)&y_sp_fl_sl_2_array_intp)) << 16) | (*(uint32_t *)((char *)(uintptr_t)&y_sp_fl_sl_0_array_intp)) | ((*(uint32_t *)((char *)(uintptr_t)&y_sp_fl_sl_3_array_intp)) << 24)); /* jalr target resolved by relocation */
-
-    /* fragment 2: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    /* fragment 3: Arithmetic */
-    v0 = 0;
-
-    /* fragment 4: Epilogue */
-    /* function epilogue: restore registers and return */
-
+    system_reg_write(0x7078U, (uint32_t)y_sp_uu_sl_0_array_intp |
+                              ((uint32_t)y_sp_uu_sl_1_array_intp << 8) |
+                              ((uint32_t)y_sp_uu_sl_2_array_intp << 16) |
+                              ((uint32_t)y_sp_uu_sl_3_array_intp << 24));
+    system_reg_write(0x707cU, (uint32_t)y_sp_fl_sl_0_array_intp |
+                              ((uint32_t)y_sp_fl_sl_1_array_intp << 8) |
+                              ((uint32_t)y_sp_fl_sl_2_array_intp << 16) |
+                              ((uint32_t)y_sp_fl_sl_3_array_intp << 24));
     return 0;
 }
 
@@ -70935,351 +71081,71 @@ int32_t tisp_sharpen_intp_reg_refresh(int32_t arg1)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000042480 origin=fragment_seed original=tisp_sharpen_par_refresh */
 int32_t tisp_sharpen_par_refresh(uint32_t arg1, uint32_t arg2, uint32_t arg3)
 {
-	uint32_t *base = (void *)&gain_old;
-	uint32_t gain_old = base[0];
-	uint32_t *s0 = arg3;
-	uint32_t diff;
+	if (sharpen_gain_old == 0xffffffffU) {
+		sharpen_gain_old = arg1;
+		tisp_sharpen_all_reg_refresh(arg1);
+	} else {
+		uint32_t diff = arg1 >= sharpen_gain_old ? arg1 - sharpen_gain_old :
+						   sharpen_gain_old - arg1;
 
-	if (gain_old != 0xffffffff) {
-		diff = gain_old - arg1;
-		if (arg1 >= gain_old)
-			diff = arg1 - gain_old;
 		if (diff >= arg2) {
-			*(uint32_t *)base = arg1;
+			sharpen_gain_old = arg1;
 			tisp_sharpen_intp_reg_refresh(arg1);
 		}
-	} else {
-		*(uint32_t *)base = arg1;
-		tisp_sharpen_all_reg_refresh(arg1);
 	}
 
-	if (s0 == 1)
-		system_reg_write(0x7090, 1);
-
+	if (arg3 == 1U)
+		system_reg_write(0x7090U, 1U);
 	return 0;
 }
 
-/* WHOLE_DRIVER_CANDIDATE fn_0000000000042514 origin=fragment_seed original=tiziano_sharpen_params_refresh */
+/*
+ * WHOLE_DRIVER_CANDIDATE fn_0000000000042514 origin=fragment_seed original=tiziano_sharpen_params_refresh
+ *
+ * OEM: 49 memcpy()s from the active bank (tparams+0x1e4e0..0x1ebb8).  The
+ * source path reads the same window from the active IQ bank and fails
+ * closed when no bank is loaded.
+ */
 int32_t tiziano_sharpen_params_refresh(void)
 {
-    uint32_t *local_10 = 0;
-    uint32_t *local_14 = 0;
-    uint32_t *a0 = 0;
-    uint32_t *a1 = 0;
-    uint32_t *a2 = 0;
-    uint32_t ra = 0;
-    uint32_t *s0 = 0;
-    uintptr_t *v0 = 0;
+    unsigned char *params;
+    int ret;
 
-    /* fragment 0: Prologue */
-    /* function prologue: stack frame and callee-saved register setup */
+    params = private_vmalloc(REGTRACE_T23_SHARPEN_TUNING_SIZE);
+    if (!params)
+        return -ENOMEM;
+    ret = regtrace_t23_read_tuning_data(REGTRACE_T23_SHARPEN_TUNING_OFFSET,
+                                        params,
+                                        REGTRACE_T23_SHARPEN_TUNING_SIZE);
+    if (ret) {
+        printk(KERN_WARNING
+               "tx_isp_t23_recovered: sharpen tuning refresh failed path=%s ret=%d\n",
+               regtrace_t23_source_core_tuning_path, ret);
+        private_vfree(params);
+        return ret;
+    }
 
-    /* fragment 1: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_out_opt_array, (void *)(uintptr_t)&tparams, 4); /* jalr target resolved by relocation */
+#define REGTRACE_T23_SHARPEN_COPY_FIELD(name, offset, size) \
+    BUILD_BUG_ON(sizeof(name) != (size)); \
+    memcpy(&(name), params + (offset), (size));
+    REGTRACE_T23_SHARPEN_TUNING_FIELDS(REGTRACE_T23_SHARPEN_COPY_FIELD)
+#undef REGTRACE_T23_SHARPEN_COPY_FIELD
 
-    /* fragment 2: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_sl_exp_thres_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 3: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_sl_exp_num_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 4: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_std_cfg_array, (void *)(uintptr_t)&tparams, 8); /* jalr target resolved by relocation */
-
-    /* fragment 5: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_uu_min_stren_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 6: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_uu_min_thres_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 7: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_uu_thres_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 8: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_mv_uu_thres_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 9: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_mv_uu_stren_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 10: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_uu_stren_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 11: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_uu_par_cfg_array, (void *)(uintptr_t)&tparams, 16); /* jalr target resolved by relocation */
-
-    /* fragment 12: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_fl_std_thres_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 13: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_mv_fl_std_thres_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 14: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_fl_thres_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 15: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_fl_min_thres_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 16: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_mv_fl_thres_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 17: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_mv_fl_min_thres_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 18: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_fl_par_cfg_array, (void *)(uintptr_t)&tparams, 8); /* jalr target resolved by relocation */
-
-    /* fragment 19: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_v2_win5_thres_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 20: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_v1_v2_coef_par_cfg_array, (void *)(uintptr_t)&tparams, 48); /* jalr target resolved by relocation */
-
-    /* fragment 21: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_w_b_ll_par_cfg_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 22: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_uu_np_array, (void *)(uintptr_t)&tparams, 64); /* jalr target resolved by relocation */
-
-    /* fragment 23: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_w_wei_np_array, (void *)(uintptr_t)&tparams, 64); /* jalr target resolved by relocation */
-
-    /* fragment 24: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_b_wei_np_array, (void *)(uintptr_t)&tparams, 64); /* jalr target resolved by relocation */
-
-    /* fragment 25: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_w_sl_stren_0_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 26: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_w_sl_stren_1_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 27: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_w_sl_stren_2_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 28: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_w_sl_stren_3_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 29: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_b_sl_stren_0_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 30: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_b_sl_stren_1_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 31: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_b_sl_stren_2_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 32: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_b_sl_stren_3_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 33: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_uu_sl_0_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 34: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_uu_sl_1_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 35: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_uu_sl_2_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 36: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_uu_sl_3_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 37: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_fl_sl_0_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 38: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_fl_sl_1_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 39: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_fl_sl_2_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 40: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_uu_thres_wdr_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 41: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_w_sl_stren_0_wdr_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 42: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_w_sl_stren_1_wdr_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 43: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_w_sl_stren_2_wdr_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 44: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_w_sl_stren_3_wdr_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 45: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_b_sl_stren_0_wdr_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 46: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_b_sl_stren_1_wdr_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 47: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_b_sl_stren_2_wdr_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 48: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_b_sl_stren_3_wdr_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 49: CallSetup */
-    v0 = (uintptr_t *)memcpy((void *)(uint32_t *)&y_sp_fl_sl_3_array, (void *)(uintptr_t)&tparams, 36); /* jalr target resolved by relocation */
-
-    /* fragment 50: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    /* fragment 51: Arithmetic */
-    v0 = 0;
-
-    /* fragment 52: Epilogue */
-    /* function epilogue: restore registers and return */
-
+    private_vfree(params);
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000429d4 origin=fragment_seed original=tiziano_sharpen_init */
 int32_t tiziano_sharpen_init(void)
 {
-    if (sharpen_wdr_en) {
-        y_sp_uu_thres_array_now = (uint32_t *)(void *)y_sp_uu_thres_wdr_array;
-        y_sp_w_sl_stren_0_array_now = (uint32_t *)(void *)y_sp_w_sl_stren_0_wdr_array;
-        y_sp_w_sl_stren_1_array_now = (uint32_t *)(void *)y_sp_w_sl_stren_1_wdr_array;
-        y_sp_w_sl_stren_2_array_now = (uint32_t *)(void *)y_sp_w_sl_stren_2_wdr_array;
-        y_sp_w_sl_stren_3_array_now = (uint32_t *)(void *)y_sp_w_sl_stren_3_wdr_array;
-        y_sp_b_sl_stren_0_array_now = (uint32_t *)(void *)y_sp_b_sl_stren_0_wdr_array;
-        y_sp_b_sl_stren_1_array_now = (uint32_t *)(void *)y_sp_b_sl_stren_1_wdr_array;
-        y_sp_b_sl_stren_2_array_now = (uint32_t *)(void *)y_sp_b_sl_stren_2_wdr_array;
-        y_sp_b_sl_stren_3_array_now = (uint32_t *)(void *)y_sp_b_sl_stren_3_wdr_array;
-    } else {
-        y_sp_uu_thres_array_now = (uint32_t *)(void *)y_sp_uu_thres_array;
-        y_sp_w_sl_stren_0_array_now = (uint32_t *)(void *)y_sp_w_sl_stren_0_array;
-        y_sp_w_sl_stren_1_array_now = (uint32_t *)(void *)y_sp_w_sl_stren_1_array;
-        y_sp_w_sl_stren_2_array_now = (uint32_t *)(void *)y_sp_w_sl_stren_2_array;
-        y_sp_w_sl_stren_3_array_now = (uint32_t *)(void *)y_sp_w_sl_stren_3_array;
-        y_sp_b_sl_stren_0_array_now = (uint32_t *)(void *)y_sp_b_sl_stren_0_array;
-        y_sp_b_sl_stren_1_array_now = (uint32_t *)(void *)y_sp_b_sl_stren_1_array;
-        y_sp_b_sl_stren_2_array_now = (uint32_t *)(void *)y_sp_b_sl_stren_2_array;
-        y_sp_b_sl_stren_3_array_now = (uint32_t *)(void *)y_sp_b_sl_stren_3_array;
-    }
+    int ret;
 
-    gain_old = 0xffffffffU;
-    tiziano_sharpen_params_refresh();
-    tisp_sharpen_par_refresh(0x10000U, 0x10000U, 1U);
-    return 0;
-}
-
-static int32_t __attribute__((unused))
-regtrace_t23_collapsed_tiziano_sharpen_init(void)
-{
-    uint32_t *local_14 = 0;
-    uintptr_t *a0 = 0;
-    uintptr_t *a1 = 0;
-    uintptr_t *a2 = 0;
-    uintptr_t *a3 = 0;
-    uint32_t ra = 0;
-    uintptr_t *t0 = 0;
-    uintptr_t t1 = 0;
-    uintptr_t t2 = 0;
-    uintptr_t *t3 = 0;
-    uintptr_t *v0 = 0;
-    uintptr_t v1 = 0;
-
-    /* fragment 0: Arithmetic */
-    v0 = (uintptr_t *)&ivdc_threshold_line;
-
-    /* fragment 1: MemoryAccess */
-    v0 = *(uint32_t *)((char *)&ivdc_threshold_line + -20748);
-    t3 = (uint32_t *)&y_sp_uu_thres_array_now;
-    t2 = (uintptr_t)&y_sp_w_sl_stren_0_array_now;
-    local_14 = ra;
-    t1 = (uintptr_t)&y_sp_w_sl_stren_1_array_now;
-    t0 = (uint32_t *)&y_sp_w_sl_stren_2_array_now;
-    a3 = (uint32_t *)&y_sp_w_sl_stren_3_array_now;
-    a2 = (uint32_t *)&y_sp_b_sl_stren_0_array_now;
-    a1 = (uint32_t *)&y_sp_b_sl_stren_1_array_now;
-    a0 = (uintptr_t *)&y_sp_b_sl_stren_2_array_now;
-
-    /* fragment 2: Branch */
-    v1 = (uintptr_t)&y_sp_b_sl_stren_3_array_now;
-    if (v0 != 0) { goto tiziano_sharpen_init0xa4; }
-
-    /* fragment 3: ConstantLoad */
-    v0 = 0x0;
-
-    /* fragment 4: MemoryAccess */
-    *(uint32_t *)((char *)((char *)&y_sp_uu_thres_array_now)) = v0;
-    v0 = (uintptr_t *)&y_sp_w_sl_stren_0_array;
-    v0 = v0;
-    *(uint32_t *)((char *)((char *)&y_sp_w_sl_stren_0_array_now)) = v0;
-    v0 = (uintptr_t *)&y_sp_w_sl_stren_1_array;
-    v0 = v0;
-    *(uint32_t *)((char *)((char *)&y_sp_w_sl_stren_1_array_now)) = v0;
-    v0 = (uintptr_t *)&y_sp_w_sl_stren_2_array;
-    v0 = v0;
-    *(uint32_t *)((char *)((char *)&y_sp_w_sl_stren_2_array_now)) = v0;
-    v0 = (uintptr_t *)&y_sp_w_sl_stren_3_array;
-    v0 = v0;
-    *(uint32_t *)((char *)((char *)&y_sp_w_sl_stren_3_array_now)) = v0;
-    v0 = (uintptr_t *)&y_sp_b_sl_stren_0_array;
-    v0 = v0;
-    *(uint32_t *)((char *)((char *)&y_sp_b_sl_stren_0_array_now)) = v0;
-    v0 = (uintptr_t *)&y_sp_b_sl_stren_1_array;
-    v0 = v0;
-    *(uint32_t *)((char *)((char *)&y_sp_b_sl_stren_1_array_now)) = v0;
-    v0 = (uintptr_t *)&y_sp_b_sl_stren_2_array;
-    v0 = v0;
-    *(uint32_t *)((char *)((char *)&y_sp_b_sl_stren_2_array_now)) = v0;
-    v0 = (uintptr_t *)&y_sp_b_sl_stren_3_array;
-
-    /* fragment 5: Branch */
-    v0 = (uintptr_t *)&y_sp_b_sl_stren_3_array;
-    goto tiziano_sharpen_init0x10c;
-
-tiziano_sharpen_init0xa4:
-    /* fragment 6: ConstantLoad */
-    v0 = 0x0;
-
-    /* fragment 7: MemoryAccess */
-    *(uint32_t *)((char *)((char *)&y_sp_uu_thres_array_now)) = v0;
-    v0 = (uintptr_t *)&y_sp_w_sl_stren_0_wdr_array;
-    v0 = v0;
-    *(uint32_t *)((char *)((char *)&y_sp_w_sl_stren_0_array_now)) = v0;
-    v0 = (uintptr_t *)&y_sp_w_sl_stren_1_wdr_array;
-    v0 = v0;
-    *(uint32_t *)((char *)((char *)&y_sp_w_sl_stren_1_array_now)) = v0;
-    v0 = (uintptr_t *)&y_sp_w_sl_stren_2_wdr_array;
-    v0 = v0;
-    *(uint32_t *)((char *)((char *)&y_sp_w_sl_stren_2_array_now)) = v0;
-    v0 = (uintptr_t *)&y_sp_w_sl_stren_3_wdr_array;
-    v0 = v0;
-    *(uint32_t *)((char *)((char *)&y_sp_w_sl_stren_3_array_now)) = v0;
-    v0 = (uintptr_t *)&y_sp_b_sl_stren_0_wdr_array;
-    v0 = v0;
-    *(uint32_t *)((char *)((char *)&y_sp_b_sl_stren_0_array_now)) = v0;
-    v0 = (uintptr_t *)&y_sp_b_sl_stren_1_wdr_array;
-    v0 = v0;
-    *(uint32_t *)((char *)((char *)&y_sp_b_sl_stren_1_array_now)) = v0;
-    v0 = (uintptr_t *)&y_sp_b_sl_stren_2_wdr_array;
-    v0 = v0;
-    *(uint32_t *)((char *)((char *)&y_sp_b_sl_stren_2_array_now)) = v0;
-    v0 = (uintptr_t *)&y_sp_b_sl_stren_3_wdr_array;
-    v0 = v0;
-
-tiziano_sharpen_init0x10c:
-    /* fragment 8: CallSetup */
-    *(uint32_t *)((char *)v1 + 0) = v0;
-    *(uint32_t *)((char *)((char *)&tparams + 0x1f60)) = (-1);
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t))(uintptr_t)tiziano_sharpen_params_refresh)(a0); /* jalr target resolved by relocation */
-
-    /* fragment 9: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t))(uint32_t *)tisp_sharpen_par_refresh)(65536, 65536, 1); /* jalr target resolved by relocation */
-
-    /* fragment 10: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    /* fragment 11: Arithmetic */
-    v0 = 0;
-
-    /* fragment 12: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    return 0;
+    tisp_sharpen_wdr_en(sharpen_wdr_en);
+    sharpen_gain_old = 0xffffffffU;
+    ret = tiziano_sharpen_params_refresh();
+    if (ret)
+        return ret;
+    return tisp_sharpen_par_refresh(0x10000U, 0x10000U, 1U);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000042b28 origin=model_output original=tisp_sharpen_refresh */
@@ -71292,9 +71158,11 @@ int32_t tisp_sharpen_refresh(uint32_t arg1)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000042b54 origin=model_output original=tiziano_sharpen_dn_params_refresh */
 int32_t tiziano_sharpen_dn_params_refresh(void)
 {
-	tiziano_sharpen_params_refresh();
-	tisp_sharpen_all_reg_refresh(gain_old);
-	return 0;
+	int ret = tiziano_sharpen_params_refresh();
+
+	if (ret)
+		return ret;
+	return tisp_sharpen_all_reg_refresh(sharpen_gain_old);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000042b94 origin=fragment_seed original=tisp_sharpen_param_array_get */
@@ -85444,8 +85312,8 @@ int32_t tisp_dmsc_param_array_set(uint32_t a0, uint32_t a1)
 int tisp_dmsc_sharpness_set(uint32_t a0, uint32_t a1)
 {
     uint32_t sharpness = a0 & 0xffU;
-    uint32_t gain_index = regtrace_t23_dmsc_gain_q16 >> 16;
-    uint32_t gain_fraction = regtrace_t23_dmsc_gain_q16 & 0xffffU;
+    uint32_t gain_index = regtrace_t23_tgain_log2 >> 16;
+    uint32_t gain_fraction = regtrace_t23_tgain_log2 & 0xffffU;
     uint32_t sp_d_w;
     uint32_t sp_d_b;
     uint32_t sp_ud_w;
@@ -91744,7 +91612,7 @@ int32_t tiziano_mdns_init(uint32_t arg1, uint32_t arg2)
     if (ret)
         return ret;
     regtrace_t23_source_mdns_initialized = true;
-    tisp_mdns_par_refresh(regtrace_t23_dmsc_gain_q16, 0x10000U);
+    tisp_mdns_par_refresh(regtrace_t23_tgain_log2, 0x10000U);
     tisp_mdns_bypass(!regtrace_t23_source_park_uninitialized_mdns &&
                      regtrace_t23_source_mdns_internal_enable ? 0 : 1);
     return 0;
@@ -92026,8 +91894,10 @@ static void regtrace_t23_source_algo_resume(void)
  * settings (BCSH values, sinter/temper/DPC/DRC/defog strengths, the sensor
  * flip of the LSC mesh) are applied on top again.  CCM and the AWB colour
  * bias are reloaded by regtrace_t23_source_ccm_select_bank().  AE and AWB
- * keep their HLIL state; sharpen and AF are not initialised by this
- * driver.  The gain-driven blocks are then rewritten at the gain in use.
+ * keep their HLIL state; AF is not initialised by this driver.  Sharpen is
+ * reloaded and rewritten at its last gain like the OEM
+ * tiziano_sharpen_dn_params_refresh.  The gain-driven blocks are then
+ * rewritten at the gain in use.
  *
  * Only while the core runs: a stream start loads every block from the
  * active bank anyway.
@@ -92107,6 +91977,10 @@ static void regtrace_t23_source_dn_params_refresh(const char *reason)
         else
             failed |= BIT(11);
     }
+    /* OEM: curves from the new bank, all registers at the current gain. */
+    if (regtrace_t23_source_sharpen_initialized &&
+        tiziano_sharpen_dn_params_refresh())
+        failed |= BIT(12);
 
     /* Rewrite the gain-interpolated blocks once at the gain in use. */
     regtrace_t23_dpc_gain_old = 0xffffffffU;
@@ -92119,8 +91993,8 @@ static void regtrace_t23_source_dn_params_refresh(const char *reason)
     ret = regtrace_t23_source_apply_total_gain_value(gain, 0, true, true);
 
     printk(KERN_WARNING
-           "tx_isp_t23_recovered: bank switch block refresh reason=%s gain=0x%x failed=0x%x ret=%d r0c=0x%08x\n",
-           reason ? reason : "?", gain, failed, ret,
+           "tx_isp_t23_recovered: bank switch block refresh reason=%s gain=0x%x tgain_log2=0x%x failed=0x%x ret=%d r0c=0x%08x\n",
+           reason ? reason : "?", gain, regtrace_t23_tgain_log2, failed, ret,
            system_reg_read(0x0cU));
 }
 
@@ -101514,6 +101388,8 @@ void cleanup_module(void)
      */
     regtrace_t23_stream_irq_gate(0, "module-exit", -1);
     regtrace_t23_source_core_set_stream(0, "module-exit");
+    /* Registers are still mapped here (the platforms go below). */
+    regtrace_t23_core_dma_disable("module-exit");
     cancel_work_sync(&regtrace_t23_source_ae_hlil_work_item);
     cancel_work_sync(&regtrace_t23_source_awb_hlil_work_item);
     /* Needs the VIC DMA device, which goes with the platforms. */

@@ -52,9 +52,9 @@ their computed return values or call state.
 implementation used by the newer recovered drivers. Its small adapter records
 the T21-specific client, attribute, image-size, frame-rate, and I2C-adapter
 offsets established from the OEM module and recovered `sinfo_show()` traversal.
-The six broken recovered public registry functions remain available behind
-`TX_ISP_T21_SHARED_SINFO` for provenance, while normal builds use the shared
-locking, slot ownership, procfs publication, and teardown paths.
+The six broken recovered public registry functions have been removed; the
+module always uses the shared locking, slot ownership, procfs publication, and
+teardown paths.
 
 The common implementation owns the four sensor registry exports, so the T21
 export adapter no longer duplicates them. The linked module still exposes the

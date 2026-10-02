@@ -17,10 +17,9 @@ fallback image.
 The source startup path derives Bayer order and MIPI packing from the bound
 media-bus/attribute data, builds the AE ladder through the sensor callbacks,
 and loads Gamma, LSC, AWB, CCM, DPC, GIB, YDNS, DMSC, ADR, HLDC, BCSH, CLM,
-MDNS, and SDNS data from the selected IQ file. No executable T23 source names
-a sensor model and no generated sensor-profile tables are linked into the
-module. Sharpening remains bypassed until its complete profile loader is
-recovered. The current direct input path accepts the T23 MIPI RAW8, RAW10,
+MDNS, SDNS, and sharpen data from the selected IQ file. No executable T23
+source names a sensor model and no generated sensor-profile tables are linked
+into the module. The current direct input path accepts the T23 MIPI RAW8, RAW10,
 RAW12, and YUV422 format identifiers; unsupported formats and buses are
 rejected rather than guessed.
 
@@ -416,6 +415,18 @@ the sensor-generic contract above; they are retained as recovery history.
   `109.6/128.9/126.1/6.5`, retained `37615/3261` ISP/VIC interrupts without
   new faults, and rebooted cleanly. The binary audit now reports 39 hard stubs
   and 83 collapses.
+- Sharpening now loads its 49 OEM curves and configuration words from the
+  active IQ bank (bank offset `0xb3e0`, file offset `0xb3f8`, `0x6d8` bytes,
+  the window the OEM `tiziano_sharpen_params_refresh` copies from
+  `tparams+0x1e4e0`) and runs `tiziano_sharpen_init` on every source core
+  start: all `0x7000..0x707c` registers are written at unity gain and
+  committed through `0x7090`, then the gain refresh moves the block to the
+  gain in use (refresh threshold `0x100`, as the OEM). Bit 14 of `0xc`
+  follows the bank flag like the OEM once the block is loaded and stays set
+  (bypassed) while it is disabled (`source_sharpen_tuning_init=0`) or its
+  load failed; a failed load does not stop the stream. A day/night,
+  custom-mode or bin switch reloads the curves from the new bank and
+  rewrites all sharpen registers (OEM `tiziano_sharpen_dn_params_refresh`).
 - Sharpening initialization now selects all nine OEM linear/WDR interpolation
   tables through live pointer state instead of nulling the threshold table and
   consulting an unrelated global. Gain refresh consumes those selected tables,
