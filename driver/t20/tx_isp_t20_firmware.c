@@ -719,6 +719,12 @@ static bool t20_simple_awb = true;
 module_param(t20_simple_awb, bool, 0644);
 MODULE_PARM_DESC(t20_simple_awb,
 	"use bounded metering feedback instead of the recovered OEM AWB state graph");
+
+bool tx_isp_t20_simple_awb_enabled(void)
+{
+	return t20_simple_awb;
+}
+
 static bool t20_simple_awb_static_only;
 module_param(t20_simple_awb_static_only, bool, 0644);
 MODULE_PARM_DESC(t20_simple_awb_static_only,

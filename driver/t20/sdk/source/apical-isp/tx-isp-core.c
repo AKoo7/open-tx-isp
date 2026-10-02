@@ -43,7 +43,8 @@ MODULE_PARM_DESC(isp_clk, "isp core clock");
 static bool t20_park_fw_after_first_pass = true;
 module_param(t20_park_fw_after_first_pass, bool, 0644);
 MODULE_PARM_DESC(t20_park_fw_after_first_pass,
-	"park the recovered T20 firmware thread after its proven-good first pass");
+	"park the recovered T20 firmware thread after its proven-good first pass (only with t20_simple_awb=1)");
+extern bool tx_isp_t20_simple_awb_enabled(void);
 
 /*
    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
@@ -795,8 +796,12 @@ static int isp_fw_process(void *data)
 		 * Until every late T20 FSM path is recovered, preserve the stable
 		 * bring-up state formerly imposed by the broken API-buffer loop.  Park
 		 * explicitly instead of burning the CPU; kthread_stop() wakes us.
+		 * Not with the OEM AWB (t20_simple_awb=0): it is driven by firmware
+		 * events (frame end 11, statistics 4) queued from the IRQ and
+		 * consumed here, so the thread keeps running as in the vendor SDK.
 		 */
-		if (t20_park_fw_after_first_pass) {
+		if (t20_park_fw_after_first_pass &&
+		    tx_isp_t20_simple_awb_enabled()) {
 			do {
 				set_current_state(TASK_INTERRUPTIBLE);
 				if (kthread_should_stop())
