@@ -17460,8 +17460,30 @@ int32_t tx_isp_video_link_stream(void *arg1, int32_t arg2)
 	return result;
 }
 
-/* WHOLE_DRIVER_CANDIDATE fn_0000000000009e08 origin=model_output original=tx_isp_open */
+/*
+ * Serialises /dev/tx-isp open and release.  The stock open/release (OEM
+ * tx_isp_open @0x9528, tx_isp_release @0x9c8c) only increment/decrement the
+ * count at dev+0x108 when it is already non-zero and never set it to 1 after
+ * the activate loop, so every open ran activate and every release ran the
+ * full slake/link-destroy teardown, unlocked.  Here the first successful open
+ * sets the count to 1 and only the last release tears down, as on T31.
+ */
+static DEFINE_MUTEX(t21_isp_open_mutex);
+
+static int32_t tx_isp_open_unlocked(int32_t arg1, void *arg2);
+
 int32_t tx_isp_open(int32_t arg1, void *arg2)
+{
+	int32_t ret;
+
+	mutex_lock(&t21_isp_open_mutex);
+	ret = tx_isp_open_unlocked(arg1, arg2);
+	mutex_unlock(&t21_isp_open_mutex);
+	return ret;
+}
+
+/* WHOLE_DRIVER_CANDIDATE fn_0000000000009e08 origin=model_output original=tx_isp_open */
+static int32_t tx_isp_open_unlocked(int32_t arg1, void *arg2)
 {
 	/* file->private_data is the ISP device; the recovered body had
 	 * accidentally used the address of the field itself. */
@@ -17510,7 +17532,9 @@ int32_t tx_isp_open(int32_t arg1, void *arg2)
 	}
 
 	if (i == 16 && result == -515)
-		return 0;
+		result = 0;
+	if (result == 0)
+		*ref = 1;
 
 	return result;
 }
@@ -18173,8 +18197,20 @@ static int t21_tx_isp_video_link_setup(void *arg1, int32_t index)
 	return 0;
 }
 
-/* WHOLE_DRIVER_CANDIDATE fn_000000000000a56c origin=model_output original=tx_isp_release */
+static int32_t tx_isp_release_unlocked(int32_t arg1, void *arg2);
+
 int32_t tx_isp_release(int32_t arg1, void *arg2)
+{
+	int32_t ret;
+
+	mutex_lock(&t21_isp_open_mutex);
+	ret = tx_isp_release_unlocked(arg1, arg2);
+	mutex_unlock(&t21_isp_open_mutex);
+	return ret;
+}
+
+/* WHOLE_DRIVER_CANDIDATE fn_000000000000a56c origin=model_output original=tx_isp_release */
+static int32_t tx_isp_release_unlocked(int32_t arg1, void *arg2)
 {
 	void *dev = *(void **)((char *)arg2 + 0x70);
 	int32_t count = *(int32_t *)((char *)dev + 0x108);
@@ -18189,7 +18225,9 @@ int32_t tx_isp_release(int32_t arg1, void *arg2)
 
 	T21_STOP_TRACE("tx_isp_release count=%d link=%d", count,
 		       *(int32_t *)((char *)dev + 0x10c));
-	if (count == 0) {
+	if (count <= 1) {
+		/* last close (count 0 only if open never completed) */
+		*(int32_t *)((char *)dev + 0x108) = 0;
 		for (i = 0; i < 0x40; i += 4) {
 			link = *(void **)((char *)dev + i - 0xc + 0x38);
 			if (link == 0)
