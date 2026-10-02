@@ -393,16 +393,33 @@ void frame_channel_dmabuf_resolver_unregister(void)
 }
 
 #ifdef	CONFIG_ISP_MODULE_USE_MMAP
+/* The coherent pool only backs V4L2_MEMORY_MMAP frame buffers.  libimp and
+ * OpenIMP queue USERPTR buffers from rmem, and the stock T10/T20 modules are
+ * built without this pool at all (their 8 MiB ispmem carve-out holds the
+ * temper/WDR buffers, see tx-isp-core-tuning.c).  A contiguous 8 MiB
+ * allocation fails on small or fragmented heaps (T10: mem=42M), so the pool
+ * is best effort: isp_mmap_pool_kb=0 disables it, and a failed allocation
+ * leaves MMAP requests failing with -ENOMEM instead of failing the probe. */
+static unsigned int isp_mmap_pool_kb = TX_ISP_FRAME_CHANNEL_BUFFER_MAX >> 10;
+module_param(isp_mmap_pool_kb, uint, 0444);
+MODULE_PARM_DESC(isp_mmap_pool_kb, "V4L2 MMAP frame pool in KiB (0: none; USERPTR always works)");
+
 static int frame_buffer_mmap_init(struct vb2_mmap_conf *mmap, struct device *dev)
 {
 	mmap->dev = dev;
 	mmap->used = 0;
-	mmap->size = TX_ISP_FRAME_CHANNEL_BUFFER_MAX;
-	mmap->vaddr = dma_alloc_coherent(mmap->dev, mmap->size, &mmap->paddr,
-					GFP_KERNEL);
+	mmap->size = PAGE_ALIGN((unsigned long)isp_mmap_pool_kb << 10);
+	mmap->vaddr = NULL;
+	if (mmap->size)
+		mmap->vaddr = dma_alloc_coherent(mmap->dev, mmap->size,
+						 &mmap->paddr,
+						 GFP_KERNEL | __GFP_NOWARN);
 	if (!mmap->vaddr) {
-		dev_err(mmap->dev, "dma_alloc_coherent of size %ld failed\n",
-			mmap->size);
+		if (mmap->size)
+			dev_warn(mmap->dev, "no %lu KiB MMAP frame pool "
+				 "(dma_alloc_coherent failed); USERPTR only\n",
+				 mmap->size >> 10);
+		mmap->size = 0;
 		return -ENOMEM;
 	}
 	memset(mmap->vaddr, 0x2f, mmap->size);
@@ -436,7 +453,8 @@ void *frame_buffer_manager_create(struct device *dev)
 #endif
 #ifdef	CONFIG_ISP_MODULE_USE_MMAP
 	conf->mmap_enable = 1;
-	ret = frame_buffer_mmap_init(&(conf->mmap), dev);
+	if (frame_buffer_mmap_init(&(conf->mmap), dev) != ISP_SUCCESS)
+		conf->mmap_enable = 0;
 #endif
 	if(ret != ISP_SUCCESS)
 		goto exit;
