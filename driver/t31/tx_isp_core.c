@@ -4674,7 +4674,11 @@ int isp_printf(unsigned int level, unsigned char *fmt, ...)
 
         r = printk("%pV",&vaf);
         va_end(args);
-        if(level >= ISP_ERROR_LEVEL)
+        /* The OEM dumps the stack on every error.  Sensor drivers report
+         * expected conditions this way (sc4336p: "gpio request failed" for
+         * its reset GPIO on every stream start), so the log filled with
+         * oops-like traces.  Keep the trace for print_level=0 only. */
+        if (level >= ISP_ERROR_LEVEL && print_level <= ISP_INFO_LEVEL)
             dump_stack();
     }
     return r;
