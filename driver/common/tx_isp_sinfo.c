@@ -116,6 +116,14 @@ static struct tx_isp_sinfo_stats tx_isp_sinfo_stats = {
 };
 #define tx_isp_sinfo_heap_slots tx_isp_sinfo_stats.slots
 static DEFINE_MUTEX(tx_isp_sinfo_lock);
+/*
+ * Outer lock for slot (un)publication.  remove_proc_subtree() waits for
+ * every active proc reader, and tx_isp_sinfo_show() takes tx_isp_sinfo_lock,
+ * so a sensorN subtree must be removed without tx_isp_sinfo_lock held.  This
+ * lock keeps driver_add/sensor_bind from republishing the same sensorN name
+ * until that removal has finished.  Never taken by a proc show().
+ */
+static DEFINE_MUTEX(tx_isp_sinfo_publish_lock);
 #ifdef TX_ISP_SINFO_BSS_COMPAT_SLOTS
 /*
  * Some recovered monoliths address anonymous core state beyond their last
@@ -629,14 +637,6 @@ tx_isp_sinfo_slot_publish(struct tx_isp_sinfo_slot *slot, int index)
 }
 #undef TX_ISP_SINFO_LAYOUT_OPT
 
-static void tx_isp_sinfo_slot_unpublish(struct tx_isp_sinfo_slot *slot)
-{
-	if (slot->dir) {
-		remove_proc_subtree(slot->dirname, tx_isp_sinfo_root);
-		slot->dir = NULL;
-	}
-}
-
 static void
 tx_isp_sinfo_slot_sync_compat(int index)
 {
@@ -668,6 +668,7 @@ int tx_isp_sinfo_driver_add(struct i2c_driver *drv, int default_i2c_addr,
 	if (!drv || !tx_isp_sinfo_slots || !tx_isp_sinfo_root)
 		return -EINVAL;
 
+	mutex_lock(&tx_isp_sinfo_publish_lock);
 	mutex_lock(&tx_isp_sinfo_lock);
 	tx_isp_sinfo_stats.driver_add_calls++;
 	/*
@@ -732,6 +733,7 @@ int tx_isp_sinfo_driver_add(struct i2c_driver *drv, int default_i2c_addr,
 		tx_isp_sinfo_stats.driver_add_successes++;
 	}
 	mutex_unlock(&tx_isp_sinfo_lock);
+	mutex_unlock(&tx_isp_sinfo_publish_lock);
 	if (i == TX_ISP_SINFO_MAX_SENSORS) {
 		pr_warn("tx-isp-sinfo: driver_add full drv=%p owner=%p addr=0x%x\n",
 			drv, owner, default_i2c_addr);
@@ -787,21 +789,37 @@ void tx_isp_sinfo_driver_del(struct i2c_driver *drv)
 {
 	int i;
 	int removed = 0;
+	struct proc_dir_entry *root = NULL;
+	char dirnames[TX_ISP_SINFO_MAX_SENSORS][16];
+	bool had_dir[TX_ISP_SINFO_MAX_SENSORS];
 
 	if (!drv || !tx_isp_sinfo_slots)
 		return;
 
 	if (tx_isp_sinfo_config.driver_removing)
 		tx_isp_sinfo_config.driver_removing(drv);
+	mutex_lock(&tx_isp_sinfo_publish_lock);
 	mutex_lock(&tx_isp_sinfo_lock);
 	tx_isp_sinfo_stats.driver_del_calls++;
+	root = tx_isp_sinfo_root;
 	for (i = 0; i < TX_ISP_SINFO_MAX_SENSORS; ++i) {
 		struct tx_isp_sinfo_slot *slot = &tx_isp_sinfo_slots[i];
 
+		had_dir[i] = false;
 		if (slot->used && slot->drv == drv) {
 			pr_info("tx-isp-sinfo: driver_del slot=%d drv=%p owner=%p subdev=%p\n",
 				i, drv, slot->owner, slot->subdev);
-			tx_isp_sinfo_slot_unpublish(slot);
+			/*
+			 * Only detach the proc dir here; it is removed below
+			 * after tx_isp_sinfo_lock is dropped (a concurrent
+			 * show() holds the PDE and waits for that lock).  The
+			 * cleared slot makes such a reader print nothing.
+			 */
+			if (slot->dir) {
+				memcpy(dirnames[i], slot->dirname,
+				       sizeof(dirnames[i]));
+				had_dir[i] = true;
+			}
 			memset(slot, 0, sizeof(*slot));
 			tx_isp_sinfo_slot_sync_compat(i);
 			removed++;
@@ -809,6 +827,10 @@ void tx_isp_sinfo_driver_del(struct i2c_driver *drv)
 		}
 	}
 	mutex_unlock(&tx_isp_sinfo_lock);
+	for (i = 0; i < TX_ISP_SINFO_MAX_SENSORS; ++i)
+		if (had_dir[i] && root)
+			remove_proc_subtree(dirnames[i], root);
+	mutex_unlock(&tx_isp_sinfo_publish_lock);
 	if (!removed)
 		pr_info("tx-isp-sinfo: driver_del unmatched drv=%p\n", drv);
 }
@@ -824,6 +846,7 @@ int tx_isp_sinfo_sensor_bind(void *subdev, struct module *owner)
 		return -EINVAL;
 	if (tx_isp_sinfo_config.sensor_bound)
 		tx_isp_sinfo_config.sensor_bound(subdev, owner);
+	mutex_lock(&tx_isp_sinfo_publish_lock);
 	mutex_lock(&tx_isp_sinfo_lock);
 	tx_isp_sinfo_stats.sensor_bind_calls++;
 	for (i = 0; i < TX_ISP_SINFO_MAX_SENSORS; ++i) {
@@ -904,6 +927,7 @@ int tx_isp_sinfo_sensor_bind(void *subdev, struct module *owner)
 		tx_isp_sinfo_stats.sensor_bind_successes++;
 	}
 	mutex_unlock(&tx_isp_sinfo_lock);
+	mutex_unlock(&tx_isp_sinfo_publish_lock);
 	if (i == TX_ISP_SINFO_MAX_SENSORS) {
 		pr_warn("tx-isp-sinfo: sensor_bind full subdev=%p owner=%p\n",
 			subdev, owner);
