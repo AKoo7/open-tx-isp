@@ -27452,6 +27452,18 @@ int32_t tisp_mdns_sta_func_cfg(uint32_t arg1, uint32_t arg2)
     return 0;
 }
 
+/* (diff << 3) / (390 - sad_thres) as in stock tisp_mdns_{y,c}_3d_param_cfg
+ * (oem-t21.ko divu at 0x1da58 / 0x1f284), which divides without a check.
+ * Beyond vendor: a tuning value of exactly 390 is a divide by zero (undefined
+ * in C; this build uses -mno-check-zero-division so it would not trap, but
+ * the compiler may assume it never happens); yield 0 for that slope instead. */
+static inline uint32_t mdns_sad_slope(uint32_t diff, uint32_t sad_thres)
+{
+	uint32_t den = 390 - sad_thres;
+
+	return den ? (diff << 3) / den : 0;
+}
+
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001db00 origin=fragment_seed original=tisp_mdns_y_3d_param_cfg */
 int32_t tisp_mdns_y_3d_param_cfg(void)
 {
@@ -27982,7 +27994,7 @@ int32_t tisp_mdns_y_3d_param_cfg(void)
 
     /* fragment 64: CallSetup */
     system_reg_write(0x1cf4,
-		((((s4 - s2) << 3) / (390 - mdns_y_sad_thres_intp)) << 16) |
+		(mdns_sad_slope(s4 - s2, mdns_y_sad_thres_intp) << 16) |
 		(((s5 - s4) << 3) / 10));
 
     /* fragment 65: CallSetup */
@@ -29299,7 +29311,7 @@ int32_t tisp_mdns_c_3d_param_cfg(void)
 
     /* fragment 51: CallSetup */
     system_reg_write(0x1e54,
-		((((s3 - s1) << 3) / (390 - mdns_c_sad_thres_intp)) << 16) |
+		(mdns_sad_slope(s3 - s1, mdns_c_sad_thres_intp) << 16) |
 		(((s4 - s3) << 3) / 10));
 
     /* fragment 52: CallSetup */
