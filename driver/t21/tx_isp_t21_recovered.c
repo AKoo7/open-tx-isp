@@ -1218,6 +1218,13 @@ static uint32_t isp_fifostatus[16];
 static uint32_t isp_lastaddr[16];
 static uintptr_t isp_err3;
 static unsigned char data_2000[16384];
+static u8 *t21_vin_subdev;
+/* I2C clients the ISP created for sensors whose driver went away while they
+ * were registered (see t21_vin_forget_sensor()); reaped outside the remove()
+ * callback, before the next registration and at ISP unload. */
+#define T21_STALE_SENSOR_CLIENTS 4
+static struct i2c_client *t21_stale_sensor_client[T21_STALE_SENSOR_CLIENTS];
+static void t21_vin_reap_stale_sensors(void);
 static struct file_operations isp_framesource_fops;
 static unsigned char __attribute__((aligned(4))) fs_subdev_ops[20] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -7945,6 +7952,13 @@ static void regtrace_patch_relocated_data(void)
     *(const void **)((char *)fs_internal_ops + 0x4) = (const void *)&fs_slake_module;
     *(const void **)((char *)fs_subdev_ops + 0x10) = (const void *)&fs_internal_ops;
     BUILD_BUG_ON(offsetof(struct file_operations, poll) != 0x1c);
+    /* Pin the module while a /dev/framechanN or an isp-w0x proc node is
+     * open (stock leaves .owner NULL: rmmod succeeds with a framechan fd
+     * still open and the later close runs freed module text). */
+    BUILD_BUG_ON(offsetof(struct file_operations, owner) != 0);
+    *(struct module **)fs_channel_ops = THIS_MODULE;
+    isp_vic_frd_fops.owner = THIS_MODULE;
+    isp_framesource_fops.owner = THIS_MODULE;
     *(const void **)((char *)fs_channel_ops + 0x1c) = (const void *)&frame_channel_poll;
     *(const void **)((char *)fs_channel_ops + 0x20) = (const void *)&frame_channel_unlocked_ioctl;
     *(const void **)((char *)fs_channel_ops + 0x2c) = (const void *)&frame_channel_open;
@@ -11715,6 +11729,7 @@ int tx_isp_vin_probe(struct platform_device *pdev)
 
 	*(uint32_t *)((char *)vin + 0xd8) = (uint32_t)(unsigned long)vin;
 	private_platform_set_drvdata(pdev, vin);
+	t21_vin_subdev = vin;
 	*(uint32_t *)((char *)vin + 0x34) = (uint32_t)(unsigned long)&video_input_cmd_fops;
 	*(uint32_t *)((char *)vin + 0xf4) = 1;
 
@@ -12536,6 +12551,7 @@ int32_t subdev_sensor_ops_ioctl(void *file, int32_t cmd, void *arg)
 			void *subdev = NULL;
 			void *board_info;
 
+			t21_vin_reap_stale_sensors();
 			if (type == 1) {
 				int32_t adapter_nr = *(int32_t *)((char *)arg + 0x3c);
 				struct i2c_adapter *adap = private_i2c_get_adapter(adapter_nr);
@@ -12562,7 +12578,11 @@ int32_t subdev_sensor_ops_ioctl(void *file, int32_t cmd, void *arg)
 				((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))isp_printf)((uintptr_t)(1), (uintptr_t)("%s[%d] the type of sensor SBUS hasn't been defined.\n"), (uintptr_t)("subdev_sensor_ops_register_sensor"), (uintptr_t)(101));
 				return -22;
 			}
-			board_info = (void *)0x27397530;
+			/* SBUS type 2 has no subdevice behind it here; the recovered
+			 * body then copied the record to a fixed bogus address. */
+			isp_printf(1, "%s[%d] sensor SBUS type 2 is not supported.\n",
+				   "subdev_sensor_ops_register_sensor", 101);
+			return -EINVAL;
 register_sensor:
 			memcpy((char *)board_info + 0xec, arg, 0x50);
 			if (subdev) {
@@ -12604,7 +12624,10 @@ register_sensor:
 				struct i2c_adapter *adap2 = *(struct i2c_adapter **)((char *)i2c_client + 0x18);
 				if (adap2)
 					private_i2c_put_adapter(adap2);
+				/* The sensor's i2c remove() deinits and frees the
+				 * subdevice; touching it afterwards is a use-after-free. */
 				private_i2c_unregister_device((struct i2c_client *)i2c_client);
+				return -22;
 			}
 			tx_isp_subdev_deinit((uintptr_t)subdev);
 			return -22;
@@ -12639,7 +12662,9 @@ register_sensor:
 					break;
 				node = *(void **)((char *)node + 0xe4) - 0xe4;
 			}
-			if (!node) {
+			if (!node || (char *)node + 0xe4 == end) {
+				/* No sensor of that name: the walk ended on the list
+				 * head, which must not be unlinked as a sensor. */
 				private_mutex_unlock((struct mutex *)((char *)file + 0xe8));
 				return 0;
 			}
@@ -14206,7 +14231,15 @@ int private_i2c_transfer(struct i2c_adapter *adap, struct i2c_msg *msgs, int num
 
 void private_i2c_del_driver(struct i2c_driver *driver)
 {
-    i2c_del_driver(driver);
+#ifdef TX_ISP_T21_SHARED_SINFO
+	/* The sensor module published this driver to /proc/jz/sensor through
+	 * tx_isp_sinfo_driver_add() at insmod.  Drop the slot before the module
+	 * text goes away; otherwise the registry keeps a dangling drv/owner and
+	 * the next /proc/jz/sensor read or sensor re-insmod dereferences freed
+	 * module memory.  T31 does the same in its private_i2c_del_driver(). */
+	tx_isp_sinfo_driver_del(driver);
+#endif
+	i2c_del_driver(driver);
 }
 
 
@@ -17653,10 +17686,18 @@ int32_t tx_isp_unregister_platforms(void *arg0)
 			*(struct platform_device **)(platforms + i * 8);
 		void **driver = *(void ***)(platforms + i * 8 + 4);
 
-		if (driver && driver[1])
+		/* tx_isp_probe() registers a child only when it found its driver
+		 * table (and NULLs the device slot when the registration failed);
+		 * a slot with a device but no driver was never registered, and
+		 * platform_device_unregister() on it would oops. */
+		if (!driver)
+			continue;
+		if (driver[1])
 			((int (*)(struct platform_device *))driver[1])(pdev);
 		if (pdev)
 			private_platform_device_unregister(pdev);
+		*(void **)(platforms + i * 8) = NULL;
+		*(void **)(platforms + i * 8 + 4) = NULL;
 	}
 	return 0;
 }
@@ -19457,6 +19498,91 @@ int32_t tx_isp_module_init(void *arg1, void *arg2)
     return 0;
 }
 
+/*
+ * A sensor module calls tx_isp_subdev_deinit() from its i2c remove().  When
+ * that happens while the sensor is still on the VIN's registered list (the
+ * sensor module was rmmod'ed, or its I2C client unregistered, before the ISP
+ * released it), stock leaves the freed sensor on the list and as the active
+ * input: the next enum/set-input/stream ioctl or the VIN slake on close walks
+ * freed memory.  Unlink it here (same list poison as the stock release path)
+ * and drop it as the active input.
+ */
+static void t21_vin_forget_sensor(u8 *subdev)
+{
+	u8 *vin = t21_vin_subdev;
+	void *host;
+	void *head;
+	void **node;
+
+	if (!vin || subdev == vin)
+		return;
+	host = *(void **)(subdev + 0xd8);
+	head = vin + 0xdc;
+	private_mutex_lock((struct mutex *)(vin + 0xe8));
+	for (node = *(void ***)head; node && (void *)node != head;
+	     node = (void **)*node) {
+		u8 *entry = (u8 *)node - 0xe4;
+		void **prev;
+
+		if (entry != subdev && entry != host)
+			continue;
+		prev = (void **)node[1];
+		*(void **)((u8 *)node[0] + 4) = prev;
+		*prev = node[0];
+		node[0] = (void *)0x100100;
+		node[1] = (void *)0x200200;
+		if (*(u8 **)(vin + 0xe4) == entry) {
+			*(void **)(vin + 0xe4) = NULL;
+			if (*(u32 *)(vin + 0xf4) > 2)
+				*(u32 *)(vin + 0xf4) = 2;
+		}
+		/* Registered over I2C (type 1): the client stays on the adapter
+		 * (and keeps its address busy) until the ISP unregisters it. */
+		if (*(u32 *)(entry + 0x10c) == 1) {
+			struct i2c_client *client =
+				*(struct i2c_client **)(subdev + 0xd4);
+			u32 k;
+
+			for (k = 0; client && k < T21_STALE_SENSOR_CLIENTS; k++) {
+				if (!t21_stale_sensor_client[k]) {
+					t21_stale_sensor_client[k] = client;
+					break;
+				}
+			}
+		}
+		isp_printf(1, "sensor subdev %p removed while registered; unlinked from vin\n",
+			   subdev);
+		break;
+	}
+	private_mutex_unlock((struct mutex *)(vin + 0xe8));
+}
+
+static void t21_vin_reap_stale_sensors(void)
+{
+	struct i2c_client *stale[T21_STALE_SENSOR_CLIENTS];
+	u8 *vin = t21_vin_subdev;
+	u32 k;
+
+	if (!vin)
+		return;
+	private_mutex_lock((struct mutex *)(vin + 0xe8));
+	for (k = 0; k < T21_STALE_SENSOR_CLIENTS; k++) {
+		stale[k] = t21_stale_sensor_client[k];
+		t21_stale_sensor_client[k] = NULL;
+	}
+	private_mutex_unlock((struct mutex *)(vin + 0xe8));
+	for (k = 0; k < T21_STALE_SENSOR_CLIENTS; k++) {
+		struct i2c_adapter *adap;
+
+		if (!stale[k])
+			continue;
+		adap = stale[k]->adapter;
+		private_i2c_unregister_device(stale[k]);
+		if (adap)
+			private_i2c_put_adapter(adap);
+	}
+}
+
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b534 origin=fragment_seed original=tx_isp_module_deinit */
 int32_t tx_isp_module_deinit(uint32_t a0)
 {
@@ -19593,6 +19719,8 @@ int32_t tx_isp_subdev_deinit(uintptr_t a0)
 
 	if (!subdev)
 		return 0;
+
+	t21_vin_forget_sensor(subdev);
 
 	if (*(u32 *)(subdev + 0x30))
 		private_misc_deregister((struct miscdevice *)(subdev + 0xc));
@@ -51280,6 +51408,10 @@ int tx_isp_vin_remove(struct platform_device *pdev)
 	if (!vin || (uintptr_t)vin >= (uintptr_t)-4095)
 		vin = NULL;
 	private_platform_set_drvdata(pdev, NULL);
+	if (vin && vin == t21_vin_subdev) {
+		t21_vin_reap_stale_sensors();
+		t21_vin_subdev = NULL;
+	}
 	tx_isp_subdev_deinit((uintptr_t)vin);
 	private_kfree(vin);
 	return 0;
