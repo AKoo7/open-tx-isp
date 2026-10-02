@@ -19251,30 +19251,15 @@ int32_t tisp_event_push(void *arg1)
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000f880 origin=fragment_seed original=tisp_event_exit */
 int32_t tisp_event_exit(void)
 {
-    uint32_t local_10 = 0;
-    uint32_t local_18 = 0;
-    uint32_t local_44 = 0;
-    uint32_t *a0 = 0;
-    uint32_t ra = 0;
-    uintptr_t *v0 = 0;
+	/* Stock (oem-t21.ko 0xf880) builds the event on its stack frame with
+	 * only the event id (word 2) stored as 0 and pushes it.  tisp_event_push
+	 * reads the id from word 2 and the callback args from words 4..11, so
+	 * pass a fully zeroed 12-word frame: event 0 with zero args, never a
+	 * stale id that could fire a real AE/AWB/ADR callback during teardown. */
+	uint32_t event[12] = { 0 };
 
-    /* fragment 0: Prologue */
-    /* function prologue: stack frame and callee-saved register setup */
-
-    /* fragment 1: CallSetup */
-    local_18 = 0;
-    v0 = (uintptr_t *)((uintptr_t (*)(int32_t *))(uintptr_t)tisp_event_push)(&local_10); /* jalr target resolved by relocation */
-
-    /* fragment 2: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    /* fragment 3: Arithmetic */
-    v0 = 0;
-
-    /* fragment 4: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    return 0;
+	tisp_event_push(event);
+	return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000f8ac origin=model_output original=tisp_event_process */
