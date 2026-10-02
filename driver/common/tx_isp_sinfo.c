@@ -843,15 +843,45 @@ int tx_isp_sinfo_sensor_bind(void *subdev, struct module *owner)
 	 * preserve that ABI by publishing a subdevice-only fallback slot.
 	 */
 	if (i == TX_ISP_SINFO_MAX_SENSORS) {
+		int orphan = -1;
+
 		for (i = 0; i < TX_ISP_SINFO_MAX_SENSORS; ++i) {
-			if (!tx_isp_sinfo_slots[i].used && target < 0)
+			struct tx_isp_sinfo_slot *slot = &tx_isp_sinfo_slots[i];
+
+			if (!slot->used && target < 0)
 				target = i;
-			if (tx_isp_sinfo_slots[i].used &&
-			    tx_isp_sinfo_slots[i].owner == owner)
+			/*
+			 * A fallback slot whose subdevice was unbound and that
+			 * never got a driver is an orphan: its owner may be a
+			 * sensor module that has since been unloaded.  Reuse it so
+			 * sensor module reload cycles neither fill the table nor
+			 * move the sensor to a new sensorN index.
+			 */
+			if (slot->used && !slot->drv && !slot->subdev &&
+			    orphan < 0)
+				orphan = i;
+			if (slot->used && slot->owner == owner)
 				source = i;
 		}
+		if (orphan >= 0) {
+			/*
+			 * Rebind in place: the sensorN proc entries already
+			 * point at this slot, and removing them here (under the
+			 * lock their show() takes) could deadlock with a reader.
+			 */
+			struct tx_isp_sinfo_slot *slot =
+				&tx_isp_sinfo_slots[orphan];
 
-		if (target >= 0) {
+			slot->owner = owner;
+			slot->subdev = subdev;
+			if (source >= 0 && source != orphan) {
+				slot->drv = tx_isp_sinfo_slots[source].drv;
+				slot->default_i2c_addr =
+					tx_isp_sinfo_slots[source].
+					default_i2c_addr;
+			}
+			i = orphan;
+		} else if (target >= 0) {
 			struct tx_isp_sinfo_slot *slot =
 				&tx_isp_sinfo_slots[target];
 

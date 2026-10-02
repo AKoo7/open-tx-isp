@@ -335,36 +335,44 @@ static int tx_isp_md_link_notify(struct media_pad *source, struct media_pad *sin
 static void tx_isp_release_subdevs(tx_isp_device_t* ispdev)
 {
 	struct v4l2_device *v4l2_dev = &ispdev->v4l2_dev;
-	struct v4l2_subdev *sd;
-	struct list_head *pos;
-	int index = 0;
+	struct v4l2_subdev *sd, *found;
 
-	list_for_each(pos, &v4l2_dev->subdevs) {
-		sd = list_entry(pos, struct v4l2_subdev, list);
-		switch(sd->grp_id){
-			case  TX_ISP_CORE_GRP_IDX:
-				release_tx_isp_core_device(sd);
-				index++;
-				break;
-			case  TX_ISP_VIC_GRP_IDX:
-				release_tx_isp_vic_device(sd);
-				index++;
-				break;
-			case  TX_ISP_CSI_GRP_IDX:
-				release_tx_isp_csi_device(sd);
-				index++;
-				break;
-			case  TX_ISP_VIDEO_IN_GRP_IDX:
-				release_tx_isp_video_in_device(sd);
-				index++;
+	/*
+	 * Each release unregisters (and frees) its subdev, and releasing the
+	 * video-in subdev also unregisters the sensor subdevs, so rescan from
+	 * the head after every release.  The SDK loop restarted on every entry
+	 * it did not own, which spun forever once only sensor subdevs were
+	 * left on the list (rmmod with a sensor still registered).
+	 */
+	for (;;) {
+		found = NULL;
+		list_for_each_entry(sd, &v4l2_dev->subdevs, list) {
+			switch (sd->grp_id) {
+			case TX_ISP_CORE_GRP_IDX:
+			case TX_ISP_VIC_GRP_IDX:
+			case TX_ISP_CSI_GRP_IDX:
+			case TX_ISP_VIDEO_IN_GRP_IDX:
+				found = sd;
 				break;
 			default:
-				break;
-
+				continue;
+			}
+			break;
 		}
-		pos = &v4l2_dev->subdevs;
-		if(index > TX_ISP_MAX_GRP_IDX){
-			v4l2_info(v4l2_dev, "%s[%d] Failed to release isp's subdevs\n",__func__,__LINE__);
+		if (!found)
+			break;
+		switch (found->grp_id) {
+		case TX_ISP_CORE_GRP_IDX:
+			release_tx_isp_core_device(found);
+			break;
+		case TX_ISP_VIC_GRP_IDX:
+			release_tx_isp_vic_device(found);
+			break;
+		case TX_ISP_CSI_GRP_IDX:
+			release_tx_isp_csi_device(found);
+			break;
+		case TX_ISP_VIDEO_IN_GRP_IDX:
+			release_tx_isp_video_in_device(found);
 			break;
 		}
 	}
@@ -448,12 +456,15 @@ static int tx_isp_probe(struct platform_device *pdev)
 	ispdev->revision = 20150320;
 	printk("@@@@ tx-isp-probe ok @@@@@\n");
 	return 0;
-err_req_irq:
 err_nodes:
 err_link:
 err_vin:
-	tx_isp_release_subdevs(ispdev);
 err_match:
+	/* Same order as remove; bus_for_each_dev() may have registered some
+	 * subdevs before failing. */
+	tx_isp_free_irq(ispdev);
+	tx_isp_release_subdevs(ispdev);
+err_req_irq:
 	media_device_unregister(&ispdev->media_dev);
 err_media_dev:
 	v4l2_device_unregister(&ispdev->v4l2_dev);

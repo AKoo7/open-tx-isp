@@ -81,16 +81,35 @@ static long subdev_core_ops_register_sensor(struct tx_isp_video_in_device *vi, v
 	ret = v4l2_subdev_call(sd, core, g_chip_ident, NULL);
 	printk(KERN_INFO "T20TRACE register_sensor chip_ident sd=%p name=%s ret=%d\n",
 	       sd, sd->name, ret);
+	if (ret == ISP_SUCCESS && info->cbus_type == TX_SENSOR_CONTROL_INTERFACE_I2C) {
+		struct i2c_client *client = v4l2_get_subdevdata(sd);
+
+		/*
+		 * Pin the sensor module while the ISP holds this sensor: its
+		 * remove() frees the sensor, so an rmmod now would leave a
+		 * dangling entry on vi->sensors (and in the sinfo registry).
+		 * Released in tx_isp_video_in_drop_sensor().
+		 */
+		if (!client->dev.driver ||
+		    !try_module_get(client->dev.driver->owner))
+			ret = -ENODEV;
+	}
 	if(ret != ISP_SUCCESS){
 		if(info->cbus_type == TX_SENSOR_CONTROL_INTERFACE_I2C){
 			struct i2c_client *client = v4l2_get_subdevdata(sd);
 			struct i2c_adapter *adapter = client->adapter;
+
+			/*
+			 * Delete the client created above (its remove() also
+			 * unregisters the subdev); the SDK kept it, so the address
+			 * stayed busy and every later register_sensor failed.
+			 */
+			i2c_unregister_device(client);
 			if (adapter)
 				i2c_put_adapter(adapter);
-		//	i2c_unregister_device(client);
 		}else{
+			v4l2_device_unregister_subdev(sd);
 		}
-		v4l2_device_unregister_subdev(sd);
 		return -ISP_ERROR;
 	}
 
@@ -115,6 +134,31 @@ static long subdev_core_ops_register_sensor(struct tx_isp_video_in_device *vi, v
 	printk(KERN_INFO "T20TRACE register_sensor exit sensor=%p sd=%p\n", sensor, sd);
 	return ISP_SUCCESS;
 }
+/*
+ * Undo a successful subdev_core_ops_register_sensor() for a sensor already
+ * unlinked from vi->sensors: withdraw it from the sinfo registry, delete the
+ * I2C client (the sensor driver's remove() frees the sensor) and drop the
+ * adapter and sensor-module references taken at registration.
+ */
+static void tx_isp_video_in_drop_sensor(struct tx_isp_sensor *sensor)
+{
+	struct v4l2_subdev *sd = &sensor->sd;
+	struct i2c_client *client;
+	struct i2c_adapter *adapter;
+	struct module *owner;
+
+	tx_isp_sinfo_sensor_unbind(sensor, THIS_MODULE);
+	if (sensor->info.cbus_type != TX_SENSOR_CONTROL_INTERFACE_I2C)
+		return;
+	client = v4l2_get_subdevdata(sd);
+	adapter = client->adapter;
+	owner = client->dev.driver ? client->dev.driver->owner : NULL;
+	i2c_unregister_device(client);
+	if (adapter)
+		i2c_put_adapter(adapter);
+	module_put(owner);
+}
+
 static long subdev_core_ops_release_sensor(struct tx_isp_video_in_device *vi, void *arg)
 {
 	struct v4l2_tx_isp_sensor_register_info *info = arg;
@@ -151,29 +195,40 @@ static long subdev_core_ops_release_sensor(struct tx_isp_video_in_device *vi, vo
 
 	list_del(&sensor->list);
 	spin_unlock(&vi->slock);
-	tx_isp_sinfo_sensor_unbind(sensor, THIS_MODULE);
-
-	if(sensor->info.cbus_type == TX_SENSOR_CONTROL_INTERFACE_I2C){
-		struct i2c_client *client = v4l2_get_subdevdata(sd);
-		struct i2c_adapter *adapter = client->adapter;
-		if (adapter)
-			i2c_put_adapter(adapter);
-		i2c_unregister_device(client);
-
-	}else if (sensor->info.cbus_type == TX_SENSOR_CONTROL_INTERFACE_SPI){
-	}else{
-		v4l2_warn(v4l2_dev, "%s[%d] the type of sensor SBUS hasn't been defined.\n",__func__,__LINE__);
-		return -ISP_ERROR;
-	}
-//	v4l2_device_unregister_subdev(sd);
+	tx_isp_video_in_drop_sensor(sensor);
 	return ISP_SUCCESS;
+}
+
+static void tx_isp_video_in_drop_all_sensors(struct tx_isp_video_in_device *vi)
+{
+	struct tx_isp_sensor *sensor;
+
+	for (;;) {
+		spin_lock(&vi->slock);
+		if (list_empty(&vi->sensors)) {
+			spin_unlock(&vi->slock);
+			break;
+		}
+		sensor = list_first_entry(&vi->sensors, struct tx_isp_sensor, list);
+		list_del(&sensor->list);
+		if (vi->active == sensor) {
+			/* Only reached on module removal: the pipeline that
+			 * referenced it is being torn down with the ISP. */
+			vi->active = NULL;
+		}
+		spin_unlock(&vi->slock);
+		/*
+		 * i2c_unregister_device() runs the sensor driver's remove(), which
+		 * frees this sensor; the helper withdraws it from the sinfo
+		 * registry first (timps stop/restart oops otherwise).
+		 */
+		tx_isp_video_in_drop_sensor(sensor);
+	}
 }
 
 static long subdev_core_ops_release_all_sensor(struct tx_isp_video_in_device *vi)
 {
 	struct v4l2_device *v4l2_dev = NULL;
-	struct v4l2_subdev *sd = NULL;
-	struct tx_isp_sensor *sensor = NULL;
 
 	if (!vi)
 		return -ISP_ERROR;
@@ -182,33 +237,7 @@ static long subdev_core_ops_release_all_sensor(struct tx_isp_video_in_device *vi
 		v4l2_warn(v4l2_dev, "the devnode does't have been opened.\n");
 		return -ISP_ERROR;
 	}
-
-	while(!list_empty(&vi->sensors)){
-		sensor = list_first_entry(&vi->sensors, struct tx_isp_sensor, list);
-		list_del(&sensor->list);
-		/*
-		 * i2c_unregister_device() below runs the sensor driver's
-		 * remove(), which frees this sensor.  Withdraw it from the
-		 * sinfo registry first, as release_sensor does; otherwise the
-		 * next read of /proc/jz/sensor/sensorN/ dereferences the freed
-		 * sensor with the registry lock held (timps stop/restart oops,
-		 * after which the next timps blocks on that lock in D state).
-		 */
-		tx_isp_sinfo_sensor_unbind(sensor, THIS_MODULE);
-		sd = &sensor->sd;
-		if(sensor->info.cbus_type == TX_SENSOR_CONTROL_INTERFACE_I2C){
-			struct i2c_client *client = v4l2_get_subdevdata(sd);
-			struct i2c_adapter *adapter = client->adapter;
-			if (adapter)
-				i2c_put_adapter(adapter);
-			i2c_unregister_device(client);
-
-		}else if (sensor->info.cbus_type == TX_SENSOR_CONTROL_INTERFACE_SPI){
-		}else{
-			v4l2_warn(v4l2_dev, "%s[%d] the type of sensor SBUS hasn't been defined.\n",__func__,__LINE__);
-			return -ISP_ERROR;
-		}
-	}
+	tx_isp_video_in_drop_all_sensors(vi);
 	return ISP_SUCCESS;
 }
 
@@ -460,13 +489,22 @@ int tx_isp_video_in_subdev_open(struct v4l2_subdev *sd, struct v4l2_subdev_fh *f
 	printk(KERN_INFO "T20TRACE vin_open enter sd=%p state=%d notify=%p\n",
 	       sd, atomic_read(&vi->state),
 	       sd->v4l2_dev ? sd->v4l2_dev->notify : NULL);
+	/*
+	 * v4l2 subdev nodes are owned by videodev, so an open fd did not keep
+	 * tx-isp-t20 loaded; pin it until the matching close.
+	 */
+	if (!try_module_get(THIS_MODULE))
+		return -ENODEV;
 	if(atomic_read(&vi->state) == TX_ISP_STATE_STOP){
 		atomic_set(&vi->state, TX_ISP_STATE_START);
 		sd->v4l2_dev->notify(sd, TX_ISP_NOTIFY_GET_PIPELINE, &arg);
 		printk(KERN_INFO "T20TRACE vin_open pipeline value=%p ret=%d\n",
 		       (void *)arg.value, arg.ret);
-		if(arg.ret != ISP_SUCCESS)
+		if(arg.ret != ISP_SUCCESS) {
+			atomic_set(&vi->state, TX_ISP_STATE_STOP);
+			module_put(THIS_MODULE);
 			return -ISP_ERROR;
+		}
 		vi->p = (struct tx_isp_media_pipeline *)arg.value;
 	}
 	vi->refcnt++;
@@ -494,9 +532,20 @@ int tx_isp_video_in_subdev_close(struct v4l2_subdev *sd, struct v4l2_subdev_fh *
 				subdev_core_ops_release_all_sensor(vi);
 			}
 		}
-		if(atomic_read(&vi->state) == TX_ISP_STATE_START)
+		if(atomic_read(&vi->state) == TX_ISP_STATE_START) {
+			/*
+			 * Last user gone without streaming (or after a crash):
+			 * deselect and release the sensors it registered, as the
+			 * RUN path above does.  Otherwise the I2C client keeps the
+			 * address busy and the next AddSensor fails until reboot.
+			 */
+			index = -1;
+			if (subdev_core_ops_set_input(vi, &index) == ISP_SUCCESS)
+				tx_isp_video_in_drop_all_sensors(vi);
 			atomic_set(&vi->state, TX_ISP_STATE_STOP);
+		}
 	}
+	module_put(THIS_MODULE);
 	return ret;
 }
 
@@ -608,6 +657,10 @@ void release_tx_isp_video_in_device(struct v4l2_subdev *sd)
 {
 	struct tx_isp_video_in_device *vi = v4l2_get_subdevdata(sd);
 
+	/* Sensors still registered here would keep their I2C clients (and the
+	 * sensor modules) alive past rmmod. */
+	tx_isp_video_in_drop_all_sensors(vi);
 	v4l2_device_unregister_subdev(&vi->sd);
+	media_entity_cleanup(&vi->sd.entity);
 	kfree(vi);
 }
