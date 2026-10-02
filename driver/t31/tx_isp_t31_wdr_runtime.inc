@@ -401,6 +401,9 @@ static irqreturn_t wdr_interrupt_wrapper(int irq, void *context)
 
 int tisp_wdr_init(void)
 {
+	/* t31_wdr_buffers_get() failed or was not run: no stats buffer. */
+	if (!wdr_buf)
+		return -ENODEV;
 	memset(&wdr_ev, 0, sizeof(wdr_ev));
 	memset(&wdr_buf->stats, 0, sizeof(wdr_buf->stats));
 	wdr_block_mean1_end = wdr_block_mean1_end_old = 0;
