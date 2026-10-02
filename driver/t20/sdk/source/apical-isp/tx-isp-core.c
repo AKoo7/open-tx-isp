@@ -47,6 +47,15 @@ MODULE_PARM_DESC(t20_park_fw_after_first_pass,
 extern bool tx_isp_t20_simple_awb_enabled(void);
 
 /*
+ * True when the firmware thread parks after its first pass, i.e. the
+ * frame-end event 11 never reaches the tuning FSMs (sharpening, ...).
+ */
+bool tx_isp_t20_fw_parked(void)
+{
+	return t20_park_fw_after_first_pass && tx_isp_t20_simple_awb_enabled();
+}
+
+/*
    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
    manager the buffer of frame channels
    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
@@ -272,9 +281,21 @@ static int isp_set_buffer_address_vflip_enable(struct tx_isp_frame_channel *chan
 		case V4L2_PIX_FMT_NV21:
 			/* UV */
 			offset = output->fmt.pix.width * output->fmt.pix.height;
-			offset_uv = (output->fmt.pix.height & 0xf) ? output->fmt.pix.width * (0x10 - (output->fmt.pix.height & 0xf)) :0; /* align at 16 lines */
+			/*
+			 * Last UV line: the UV plane starts at the 16-line aligned
+			 * luma height (as in the vflip-disable path) and holds
+			 * height/2 lines.  The stock driver derived it from
+			 * sizeimage (width * height * 3/2 there) plus the alignment
+			 * pad; here sizeimage is width * ALIGN(height,16) * 3/2, so
+			 * that put the first UV line 12 lines past the plane for
+			 * 1080/360-line outputs: the top 24 rows of the flipped
+			 * picture kept stale chroma (green/magenta stripes) and the
+			 * DMA wrote past the end of the frame buffer.
+			 */
+			offset_uv = output->fmt.pix.width * ALIGN(output->fmt.pix.height, 16) +
+				output->fmt.pix.width * (output->fmt.pix.height / 2);
 			APICAL_WRITE_32((regw + 0x88 + 0x100 * (video->index) + 0x04 * bank_id),
-					buf->addr + output->fmt.pix.sizeimage + offset_uv - video->attr.lineoffset);
+					buf->addr + offset_uv - video->attr.lineoffset);
 			/* Y */
 			APICAL_WRITE_32((regw + 0x08 + 0x100 * (video->index) + 0x04 * bank_id), buf->addr + offset - video->attr.lineoffset);
 			break;

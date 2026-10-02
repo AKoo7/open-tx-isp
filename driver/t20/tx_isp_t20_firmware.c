@@ -714,7 +714,8 @@ MODULE_PARM_DESC(t20_simple_nr,
 static bool t20_simple_sharpen;
 module_param(t20_simple_sharpen, bool, 0644);
 MODULE_PARM_DESC(t20_simple_sharpen,
-	"apply gain-driven ISP sharpening from the active IQ calibration tables");
+	"always apply gain-driven ISP sharpening from the compact AE (it already runs whenever the firmware thread is parked)");
+extern bool tx_isp_t20_fw_parked(void);
 static bool t20_simple_awb = true;
 module_param(t20_simple_awb, bool, 0644);
 MODULE_PARM_DESC(t20_simple_awb,
@@ -18406,7 +18407,16 @@ int32_t AE_fsm_process_interrupt(int32_t *arg1, char arg2)
 					       "T20NR update failed rc=%d\n",
 					       nr_result);
 			}
-			if (t20_simple_sharpen)
+			/*
+			 * The OEM firmware runs sharpening_update() from the
+			 * sharpening FSM on every frame-end event 11, which is what
+			 * applies the strength stored by SHARPENING_STRENGTH_ID
+			 * (V4L2_CID_SHARPNESS) together with the gain modulation.
+			 * With the firmware thread parked (default simple AWB) that
+			 * event is never consumed, so the sharpness control had no
+			 * effect; run the same update from here instead.
+			 */
+			if (t20_simple_sharpen || tx_isp_t20_fw_parked())
 				sharpening_update(sharpening);
 
 			/*
