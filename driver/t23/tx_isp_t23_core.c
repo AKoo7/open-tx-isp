@@ -14960,10 +14960,22 @@ copy_out:
     return ret;
 }
 
+/*
+ * Open files of /dev/tx-isp. Like the OEM tx_isp_release(), the last close
+ * tears down what the files left running: a streamer killed between its
+ * tx-isp STREAMON and STREAMOFF must not leave the sensor, the VIC and the
+ * ISP interrupts on. The private block is cleared only by the first open,
+ * so a second opener (a tuning tool) does not wipe the streamer's state.
+ */
+static atomic_t regtrace_tx_isp_open_count = ATOMIC_INIT(0);
+static void regtrace_t23_txisp_stream(int enable, const char *reason);
+static void regtrace_t23_txisp_last_close(void);
+
 static int regtrace_tx_isp_open(struct inode *inode, struct file *file)
 {
     (void)inode;
-    memset(regtrace_tx_isp_private, 0, sizeof(regtrace_tx_isp_private));
+    if (atomic_inc_return(&regtrace_tx_isp_open_count) == 1)
+        memset(regtrace_tx_isp_private, 0, sizeof(regtrace_tx_isp_private));
     if (file)
         file->private_data = regtrace_tx_isp_private;
     printk(KERN_INFO "tx_isp_t23_recovered: open /dev/tx-isp pid=%d comm=%s\n",
@@ -14976,6 +14988,8 @@ static int regtrace_tx_isp_release(struct inode *inode, struct file *file)
     (void)inode;
     if (file)
         file->private_data = NULL;
+    if (atomic_dec_and_test(&regtrace_tx_isp_open_count))
+        regtrace_t23_txisp_last_close();
     printk(KERN_INFO "tx_isp_t23_recovered: release /dev/tx-isp pid=%d comm=%s\n",
            current->pid, current->comm);
     return 0;
@@ -15039,18 +15053,10 @@ static long regtrace_tx_isp_ioctl_body(struct file *file, unsigned int cmd,
         return ret;
     }
 
-    if (cmd == REGTRACE_T23_VIDIOC_STREAMON) {
-        regtrace_t23_enable_stream_clks();
-        regtrace_t23_source_input_stream(1, "tx-isp-streamon");
-        regtrace_t23_direct_vic_input_stream(1, "tx-isp-streamon");
-        regtrace_t23_tisp_stream_regs(1, -1, "tx-isp-streamon");
-        regtrace_t23_stream_irq_gate(1, "tx-isp-streamon", -1);
-    } else if (cmd == REGTRACE_T23_VIDIOC_STREAMOFF) {
-        regtrace_t23_source_input_stream(0, "tx-isp-streamoff");
-        regtrace_t23_direct_vic_input_stream(0, "tx-isp-streamoff");
-        regtrace_t23_tisp_stream_regs(0, -1, "tx-isp-streamoff");
-        regtrace_t23_stream_irq_gate(0, "tx-isp-streamoff", -1);
-    }
+    if (cmd == REGTRACE_T23_VIDIOC_STREAMON)
+        regtrace_t23_txisp_stream(1, "tx-isp-streamon");
+    else if (cmd == REGTRACE_T23_VIDIOC_STREAMOFF)
+        regtrace_t23_txisp_stream(0, "tx-isp-streamoff");
 
     if (cmd == REGTRACE_T23_REGISTER_SENSOR ||
         cmd == REGTRACE_T23_REGISTER_SENSOR_ALT) {
@@ -15912,11 +15918,74 @@ static void regtrace_framechan_stream_on(struct file *file, int channel)
  * MSCA completion FIFOs of every channel, the TISP, the VIC and the sensor
  * keep running for the others. Stop those only with the last channel.
  */
+static bool regtrace_t23_txisp_streaming;
+
+static void regtrace_framechan_stream_off_locked(int channel,
+                                                 const char *reason);
+
 static void regtrace_framechan_stream_off(int channel, const char *reason)
+{
+    mutex_lock(&regtrace_framechan_stream_lock);
+    regtrace_framechan_stream_off_locked(channel, reason);
+    mutex_unlock(&regtrace_framechan_stream_lock);
+}
+
+/*
+ * Close of a frame channel file: stop the channel only if this file started
+ * it. The owner is checked under the stream lock, so a racing STREAMON of
+ * another file of the same channel is not stopped by this close.
+ */
+static void regtrace_framechan_stream_off_owned(struct file *file,
+                                                int channel,
+                                                const char *reason)
+{
+    mutex_lock(&regtrace_framechan_stream_lock);
+    if (regtrace_framechan_stream_owner[channel] == file)
+        regtrace_framechan_stream_off_locked(channel, reason);
+    mutex_unlock(&regtrace_framechan_stream_lock);
+}
+
+/* tx-isp STREAMON/STREAMOFF, serialised with the frame channels. */
+static void regtrace_t23_txisp_stream(int enable, const char *reason)
+{
+    mutex_lock(&regtrace_framechan_stream_lock);
+    if (enable) {
+        regtrace_t23_enable_stream_clks();
+        regtrace_t23_source_input_stream(1, reason);
+        regtrace_t23_direct_vic_input_stream(1, reason);
+        regtrace_t23_tisp_stream_regs(1, -1, reason);
+        regtrace_t23_stream_irq_gate(1, reason, -1);
+    } else {
+        regtrace_t23_source_input_stream(0, reason);
+        regtrace_t23_direct_vic_input_stream(0, reason);
+        regtrace_t23_tisp_stream_regs(0, -1, reason);
+        regtrace_t23_stream_irq_gate(0, reason, -1);
+    }
+    regtrace_t23_txisp_streaming = enable != 0;
+    mutex_unlock(&regtrace_framechan_stream_lock);
+}
+
+/*
+ * Last close of /dev/tx-isp. Frame channels still streaming belong to open
+ * framechan files, whose own close stops them (and the input with the last
+ * one). Without any, an input left on by a tx-isp STREAMON is stopped here.
+ */
+static void regtrace_t23_txisp_last_close(void)
+{
+    bool stop;
+
+    mutex_lock(&regtrace_framechan_stream_lock);
+    stop = regtrace_t23_txisp_streaming && !regtrace_framechan_stream_mask;
+    mutex_unlock(&regtrace_framechan_stream_lock);
+    if (stop)
+        regtrace_t23_txisp_stream(0, "tx-isp-last-close");
+}
+
+static void regtrace_framechan_stream_off_locked(int channel,
+                                                 const char *reason)
 {
     bool last;
 
-    mutex_lock(&regtrace_framechan_stream_lock);
     if (channel >= 0 && channel < REGTRACE_FRAMECHAN_COUNT) {
         regtrace_framechan_stream_mask &= ~(1U << channel);
         regtrace_framechan_stream_owner[channel] = NULL;
@@ -15931,10 +16000,10 @@ static void regtrace_framechan_stream_off(int channel, const char *reason)
         regtrace_t23_direct_vic_input_stream(0, reason);
         regtrace_t23_tisp_stream_regs(0, -1, reason);
         regtrace_t23_stream_irq_gate(0, reason, channel);
+        regtrace_t23_txisp_streaming = false;
     }
     printk(KERN_INFO "tx_isp_t23_recovered: framechan%d stream off, still streaming mask=0x%x reason=%s\n",
            channel, regtrace_framechan_stream_mask, reason ? reason : "?");
-    mutex_unlock(&regtrace_framechan_stream_lock);
 }
 
 static int regtrace_framechan_index_from_misc(struct miscdevice *mdev)
@@ -15983,9 +16052,9 @@ static int regtrace_framechan_release(struct inode *inode, struct file *file)
      * this file started it. Another open file of the same channel (or of
      * another channel) does not touch the stream.
      */
-    if (file && channel >= 0 && channel < REGTRACE_FRAMECHAN_COUNT &&
-        regtrace_framechan_stream_owner[channel] == file)
-        regtrace_framechan_stream_off(channel, "framechan-release");
+    if (file && channel >= 0 && channel < REGTRACE_FRAMECHAN_COUNT)
+        regtrace_framechan_stream_off_owned(file, channel,
+                                            "framechan-release");
     if (file)
         file->private_data = NULL;
     printk(KERN_INFO "tx_isp_t23_recovered: release /dev/framechan%d pid=%d comm=%s\n",
@@ -101430,13 +101499,24 @@ void cleanup_module(void)
     regtrace_framechan_set_streaming(1, false);
     regtrace_framechan_set_streaming(2, false);
     regtrace_framechan_set_streaming(3, false);
+    /*
+     * No file is open here (each holds a module reference), so the frame
+     * channels are stopped; mask the stream interrupts anyway, then stop
+     * the core. The AE/AWB work is scheduled from the core interrupt:
+     * cancel it, free the interrupts with the subdevices, and cancel once
+     * more before the buffers the work and the handlers use are freed.
+     */
+    regtrace_t23_stream_irq_gate(0, "module-exit", -1);
     regtrace_t23_source_core_set_stream(0, "module-exit");
+    cancel_work_sync(&regtrace_t23_source_ae_hlil_work_item);
+    cancel_work_sync(&regtrace_t23_source_awb_hlil_work_item);
+    /* Needs the VIC DMA device, which goes with the platforms. */
+    regtrace_t23_snapraw_buffer_free();
+    regtrace_unregister_real_platforms();
     cancel_work_sync(&regtrace_t23_source_ae_hlil_work_item);
     cancel_work_sync(&regtrace_t23_source_awb_hlil_work_item);
     regtrace_t23_source_parameter_banks_free();
     regtrace_t23_core_dma_free();
-    regtrace_t23_snapraw_buffer_free();
-    regtrace_unregister_real_platforms();
     regtrace_unregister_framechans();
     regtrace_unregister_misc_ivdc();
     regtrace_unregister_isp_m0_miscdev();
