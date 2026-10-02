@@ -9755,6 +9755,14 @@ static bool regtrace_t23_source_gamma_tuning_init = true;
 static bool regtrace_t23_source_lsc_tuning_init = true;
 static bool regtrace_t23_source_lsc_events = true;
 static bool regtrace_t23_source_lsc_update_pending;
+/*
+ * Guards the three LSC LUTs (data_c6d1c/c4d20/c2d24) against
+ * tisp_lsc_mirror_flip() rewriting them in place while
+ * tisp_lsc_write_lut_datas() reads them, which also runs from the frame-done
+ * interrupt (tisp_ipc_frame_done_interrupt_static).  Also serialises two
+ * flips, which would otherwise both see the old last_status_* and cancel.
+ */
+static DEFINE_SPINLOCK(regtrace_t23_lsc_lut_lock);
 static bool regtrace_t23_source_lsc_tables_initialized;
 static uint32_t regtrace_t23_source_lsc_lut_num;
 static uint32_t regtrace_t23_source_lsc_mesh_scale;
@@ -52349,6 +52357,7 @@ uint32_t regtrace_t23_lsc_scale_word(uint32_t value,
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000021830 origin=fragment_seed original=tisp_lsc_write_lut_datas */
 int32_t tisp_lsc_write_lut_datas(void)
 {
+    unsigned long flags;
     uint32_t gain_q16 = regtrace_t23_dmsc_gain_q16;
     uint32_t strength;
     uint32_t base;
@@ -52377,6 +52386,7 @@ int32_t tisp_lsc_write_lut_datas(void)
     else
         base = 0x100U;
 
+    spin_lock_irqsave(&regtrace_t23_lsc_lut_lock, flags);
     ct = regtrace_t23_source_lsc_runtime_ct;
     for (i = 0; i + 2U < regtrace_t23_source_lsc_lut_num; i += 3U) {
         uint32_t offset = (i / 3U) << 4;
@@ -52393,6 +52403,7 @@ int32_t tisp_lsc_write_lut_datas(void)
     }
     system_reg_write(0x2800cU, 0);
     regtrace_t23_source_lsc_update_pending = false;
+    spin_unlock_irqrestore(&regtrace_t23_lsc_lut_lock, flags);
     printk(KERN_INFO
            "tx_isp_t23_recovered: source LSC runtime CT%u gain=0x%x strength=%u committed (%u nodes)\n",
            ct, gain_q16, strength,
@@ -52584,6 +52595,7 @@ int32_t tisp_lsc_mirror_flip(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3,
     uint32_t cols_padded;
     uint32_t row;
     uint32_t row_base = 0;
+    unsigned long flags;
     int ret;
 
     (void)a0;
@@ -52617,17 +52629,24 @@ int32_t tisp_lsc_mirror_flip(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3,
         return -EINVAL;
     if (system_reg_read(0xcU) & BIT(6))
         return 0;
+    /* The row buffer must exist before the LUT lock is taken. */
+    if (!tmp_space) {
+        tmp_space = (uintptr_t)private_vmalloc(0x190U);
+        if (!tmp_space)
+            return -ENOMEM;
+    }
 
+    spin_lock_irqsave(&regtrace_t23_lsc_lut_lock, flags);
     if ((uint32_t)last_status_flip_en != a3) {
         ret = tisp_lsc_upside_down_lut(a_lut, rows, cols_padded);
         if (ret)
-            return ret;
+            goto out_unlock;
         ret = tisp_lsc_upside_down_lut(t_lut, rows, cols_padded);
         if (ret)
-            return ret;
+            goto out_unlock;
         ret = tisp_lsc_upside_down_lut(d_lut, rows, cols_padded);
         if (ret)
-            return ret;
+            goto out_unlock;
     }
 
     if ((uint32_t)last_status_mirror_en != arg4) {
@@ -52675,10 +52694,14 @@ int32_t tisp_lsc_mirror_flip(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3,
         }
     }
 
-    regtrace_t23_source_lsc_update_pending = true;
-    ret = tisp_lsc_write_lut_datas();
     last_status_mirror_en = arg4;
     last_status_flip_en = a3;
+    regtrace_t23_source_lsc_update_pending = true;
+    spin_unlock_irqrestore(&regtrace_t23_lsc_lut_lock, flags);
+    return tisp_lsc_write_lut_datas();
+
+out_unlock:
+    spin_unlock_irqrestore(&regtrace_t23_lsc_lut_lock, flags);
     return ret;
 
 #if 0 /* Retain the generated body below as recovery provenance. */
@@ -101490,6 +101513,9 @@ void cleanup_module(void)
     regtrace_unregister_real_platforms();
     cancel_work_sync(&regtrace_t23_source_ae_hlil_work_item);
     cancel_work_sync(&regtrace_t23_source_awb_hlil_work_item);
+    /* LSC flip row buffer (tisp_lsc_deinit() only runs on core deinit). */
+    vfree((void *)tmp_space);
+    tmp_space = 0;
     regtrace_t23_source_parameter_banks_free();
     regtrace_t23_core_dma_free();
     regtrace_unregister_framechans();
