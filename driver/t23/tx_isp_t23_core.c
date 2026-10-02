@@ -10816,9 +10816,17 @@ static void regtrace_t23_stream_irq_gate(int enable,
     regtrace_t23_set_irq_enabled("vic", regtrace_t23_vic_sd,
                                  &regtrace_t23_vic_irq_enabled,
                                  enable, reason, channel);
-    regtrace_t23_set_irq_enabled("ivdc", regtrace_t23_ivdc_sd,
-                                 &regtrace_t23_ivdc_irq_enabled,
-                                 enable, reason, channel);
+    /*
+     * IVDC (IRQ 46) only has work in the ISP->VPU direct mode: the stock
+     * driver unmasks IVDC interrupts from ivdc_pad_event_handle() (direct
+     * mode) and never enables the line otherwise.  Leave it disabled with
+     * direct_mode=0; a disable still goes through so a line enabled under
+     * direct mode is turned off again.
+     */
+    if (!enable || direct_mode)
+        regtrace_t23_set_irq_enabled("ivdc", regtrace_t23_ivdc_sd,
+                                     &regtrace_t23_ivdc_irq_enabled,
+                                     enable, reason, channel);
 }
 
 static uint32_t regtrace_t23_get_le32(const unsigned char *p)
@@ -33094,6 +33102,25 @@ static bool regtrace_t23_log_irq_count(u32 count)
     return count <= 8 || !(count & (count - 1));
 }
 
+/*
+ * Interrupts that found nothing pending.  Each of VIC, core and IVDC has a
+ * line of its own (requested without IRQF_SHARED), so IRQ_NONE here means
+ * the line fired with no work in its block: returning it lets the
+ * kernel's spurious-IRQ detection (note_interrupt) disable a stuck line
+ * instead of the CPU spinning in this handler.
+ */
+static u32 regtrace_t23_irq_none_count;
+
+static int32_t regtrace_t23_irq_none(const char *name, int32_t irq)
+{
+    regtrace_t23_irq_none_count++;
+    if (regtrace_t23_log_irq_count(regtrace_t23_irq_none_count))
+        printk(KERN_WARNING
+               "tx_isp_t23_recovered: %s irq=%d nothing pending (unhandled count=%u)\n",
+               name, irq, regtrace_t23_irq_none_count);
+    return IRQ_NONE;
+}
+
 int32_t isp_irq_handle(int32_t irq, void *dev_id)
 {
     unsigned char *sd;
@@ -33128,6 +33155,8 @@ int32_t isp_irq_handle(int32_t irq, void *dev_id)
             wmb();
         if (pending1 && ACCESS_ONCE(regtrace_t23_snapraw_active))
             complete(&regtrace_t23_snapraw_done);
+        if (!pending0 && !pending1)
+            return regtrace_t23_irq_none("VIC", irq);
 
         regtrace_t23_vic_irq_count++;
         if (regtrace_t23_log_irq_count(regtrace_t23_vic_irq_count))
@@ -33140,6 +33169,7 @@ int32_t isp_irq_handle(int32_t irq, void *dev_id)
 
     if (sd == regtrace_t23_core_sd) {
         int channel;
+        int drained_total = 0;
 
         base = (void __iomem *)(uintptr_t)*(u32 *)(sd + 0xb8);
         if (!regtrace_t23_valid_ptr((uintptr_t)base))
@@ -33190,11 +33220,15 @@ int32_t isp_irq_handle(int32_t irq, void *dev_id)
                     drained++;
                     fifo_status = readl(base + fifo_base + 0x13cU);
                 }
+                drained_total += drained;
                 if (regtrace_t23_log_irq_count(regtrace_t23_core_irq_count))
                     printk(KERN_INFO "tx_isp_t23_recovered: core MSCA fifo ch=%d status=0x%x drained=%d\n",
                            channel, fifo_status, drained);
             }
         }
+        /* no status bit and no completed frame: nothing for this line */
+        if (!status0 && !drained_total)
+            return regtrace_t23_irq_none("core", irq);
         return IRQ_HANDLED;
     }
 
@@ -33208,6 +33242,8 @@ int32_t isp_irq_handle(int32_t irq, void *dev_id)
             writel(status0, base + 0x54);
             wmb();
         }
+        if (!status0)
+            return regtrace_t23_irq_none("IVDC", irq);
         regtrace_t23_ivdc_irq_count++;
         if (regtrace_t23_log_irq_count(regtrace_t23_ivdc_irq_count))
             printk(KERN_INFO
