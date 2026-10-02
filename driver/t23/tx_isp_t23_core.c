@@ -9798,6 +9798,8 @@ static uint regtrace_t23_source_sensor_max_it;
 static uint regtrace_t23_source_sensor_max_again;
 static uint regtrace_t23_source_ae_initial_packed;
 static bool regtrace_t23_source_sensor_configured;
+/* The AE has moved off the bootstrap rung; stream restarts resume there. */
+static bool regtrace_t23_ae_hlil_resume;
 static bool regtrace_t23_source_ae_hlil = true;
 static uint regtrace_t23_source_ae_hlil_interval = 32;
 static uint regtrace_t23_source_ae_hlil_target = 60;
@@ -11253,6 +11255,7 @@ static int regtrace_t23_sensor_write_u8(uint16_t reg, uint8_t value)
 }
 
 static int regtrace_t23_source_resolve_sensor_config(void);
+static uint32_t regtrace_t23_ae_hlil_stream_packed(void);
 
 static int regtrace_t23_call_sensor_stream(int enable, const char *reason)
 {
@@ -11289,13 +11292,13 @@ static int regtrace_t23_call_sensor_stream(int enable, const char *reason)
             ret = regtrace_t23_sensor_fps_stream_on(reason);
         if (enable && !ret)
             ret = regtrace_t23_source_resolve_sensor_config();
-        packed = regtrace_t23_source_ae_force_packed ?
-            regtrace_t23_source_ae_force_packed :
-            regtrace_t23_source_ae_initial_packed;
+        packed = regtrace_t23_ae_hlil_stream_packed();
         if (enable && !ret && packed)
             ret = regtrace_t23_call_sensor_exposure(packed,
                 regtrace_t23_source_ae_force_packed ?
                 "source-ae-force-after-stream" :
+                regtrace_t23_ae_hlil_resume ?
+                "source-ae-resume-after-stream" :
                 "source-ae-bootstrap-after-stream");
     }
     printk(KERN_WARNING "tx_isp_t23_recovered: sensor stream %s ret=%d reason=%s\n",
@@ -13877,11 +13880,16 @@ static int regtrace_t23_source_apply_total_gain_value(uint32_t gain_q16,
     return ret;
 }
 
+static uint32_t regtrace_t23_ae_hlil_resume_gain(uint32_t *sensor_again);
+
 static int regtrace_t23_source_apply_total_gain(void)
 {
     uint32_t sensor_again = regtrace_t23_source_ae_force_packed >> 16;
     uint32_t gain_q16 = regtrace_t23_source_total_gain_q16;
 
+    /* a resumed AE rung keeps its gain-driven block strengths */
+    if (!gain_q16)
+        gain_q16 = regtrace_t23_ae_hlil_resume_gain(&sensor_again);
     if (!gain_q16)
         gain_q16 = 0x10000U;
 
