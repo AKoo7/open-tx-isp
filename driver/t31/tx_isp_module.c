@@ -2509,6 +2509,10 @@ int vic_core_s_stream(struct tx_isp_subdev *sd, int enable);
 int frame_channel_open(struct inode *inode, struct file *file);
 int frame_channel_release(struct inode *inode, struct file *file);
 long frame_channel_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
+/* Set under tx_isp_open_mutex for the duration of the last-close teardown;
+ * the teardown takes each buffer_mutex after setting it, which orders it
+ * against the framechan ioctl check made under that buffer_mutex. */
+static bool tx_isp_teardown_in_progress;
 
 static int frame_channel_index_from_devname(const char *name)
 {
@@ -4195,6 +4199,19 @@ long frame_channel_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned 
 
     if (mutex_lock_interruptible(&fcd->buffer_mutex))
         return -ERESTARTSYS;
+    /*
+     * The /dev/tx-isp last-close teardown stops every channel under its
+     * buffer_mutex and then destroys the links and stops the sensor. A
+     * framechan fd that outlives the tx-isp fds must not restart a channel
+     * in between.
+     */
+    if (tx_isp_teardown_in_progress &&
+        (cmd == TX_ISP_FRAME_IOCTL_LEGACY_STREAM_ON ||
+         cmd == TX_ISP_FRAME_IOCTL_LEGACY_QBUF ||
+         cmd == TX_ISP_FRAME_IOCTL_LEGACY_REQBUFS)) {
+        mutex_unlock(&fcd->buffer_mutex);
+        return -EBUSY;
+    }
     ret = frame_channel_ioctl_locked(file, cmd, arg);
     mutex_unlock(&fcd->buffer_mutex);
     return ret;
@@ -6306,7 +6323,9 @@ static int tx_isp_release(struct inode *inode, struct file *file)
         isp->refcnt--;
         if (isp->refcnt == 0) {
             isp->is_open = false;
+            tx_isp_teardown_in_progress = true;
             tx_isp_last_close_teardown(isp);
+            tx_isp_teardown_in_progress = false;
         }
     }
 
