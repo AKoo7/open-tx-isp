@@ -6975,6 +6975,12 @@ static void tx_isp_exit(void)
     /* Tear down netlink channel */
     tisp_netlink_exit();
 
+    /* Nothing uses the tuning parameter blocks any more. */
+    {
+        extern void tisp_free_param_blocks(void);
+        tisp_free_param_blocks();
+    }
+
     pr_info("TX ISP driver removed\n");
 }
 

@@ -2671,6 +2671,21 @@ static void tisp_refresh_daynight_pipeline(void)
 	(void)tx_isp_callback_plan_run(&t31_daynight_refresh_plan, NULL);
 }
 
+/* Module exit: the parameter blocks are allocated once and reused across
+ * stream starts; free them so an rmmod/insmod cycle does not leave
+ * 3-4 x TISP_PARAM_BLOCK_SIZE of vmalloc behind (seen on garage). */
+void tisp_free_param_blocks(void)
+{
+	vfree(tparams_day);
+	vfree(tparams_night);
+	vfree(tparams_active);
+	vfree(tparams_cust);
+	tparams_day = NULL;
+	tparams_night = NULL;
+	tparams_active = NULL;
+	tparams_cust = NULL;
+}
+
 static int tisp_alloc_param_block(void **dst, const char *name)
 {
 	if (!dst)
