@@ -25618,6 +25618,10 @@ int32_t apical_isp_core_ops_s_ctrl(uintptr_t a0, uintptr_t a1, uint32_t a2)
         printk(KERN_INFO
                "tx_isp_t23_recovered: BCSH s_ctrl cmd=0x%x value=%u\n",
                control, value);
+    /* The BCSH controls take 0..255; the OEM truncated larger values. */
+    if ((control == 0x980900 || control == 0x980901 ||
+         control == 0x980902 || control == 0x98091b) && value > 0xffU)
+        return -EINVAL;
     switch (control) {
     case 0x980900:
         tisp_set_brightness(0, (uint8_t)value);
@@ -101769,6 +101773,13 @@ static void regtrace_t23_adr_strength_apply(void)
  * Defog strength (OEM tisp_s_defog_str_internal/defog_itp, linear lists):
  * the five trsy lists of the active bank, capped by main_para[0] <= 31.
  * Applied only while defog runs.
+ *
+ * The OEM WDR branch (defog_wdr_en: the *_wdr trsy lists and
+ * param_defog_main_para_wdr_array) is not ported because no path of this
+ * driver enables WDR: tisp_s_wdr_en/tisp_defog_wdr_en have no caller, the
+ * tx-isp WDR ioctls end in the tx_isp_unlocked_ioctl stub, and the T23
+ * sensor drivers this driver serves (sc2336, sc2336p) have no WDR/DOL
+ * mode or WDR register setting. A WDR port needs a WDR sensor first.
  */
 static uint32_t regtrace_t23_defog_ratio = 0x80U;
 
@@ -102127,7 +102138,10 @@ static long regtrace_t23_tuning_cid(bool get, uint32_t id, uint32_t *value)
             *value = regtrace_t23_ae_get_max_dgain();
             return 0;
         }
-        return regtrace_t23_ae_set_max_dgain(v);
+        mutex_lock(&regtrace_t23_sensor_fps_lock);
+        ret = regtrace_t23_ae_set_max_dgain(v);
+        mutex_unlock(&regtrace_t23_sensor_fps_lock);
+        return ret;
     case REGTRACE_TISP_CTRL_AE_IT_MAX:
         if (get) {
             *value = regtrace_t23_source_sensor_max_it;
