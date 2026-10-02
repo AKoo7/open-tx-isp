@@ -5262,6 +5262,9 @@ static unsigned char __attribute__((aligned(4))) wei20_16_9[128] = {
     0x0d, 0x00, 0x00, 0x00, 0x0d, 0x00, 0x00, 0x00, 0x0d, 0x00, 0x00, 0x00, 0x0d, 0x00, 0x00, 0x00, 
 };
 static uint32_t gain_old;
+/* last gain the sharpen block was interpolated for (OEM: its own static,
+ * not the one tiziano_sdns_init resets) */
+static uint32_t sharpen_gain_old = 0xffffffffU;
 static uint32_t *y_sp_b_sl_stren_0_array_now;
 static uintptr_t y_sp_b_sl_stren_0_intp;
 static uint32_t *y_sp_b_sl_stren_1_array_now;
@@ -70919,15 +70922,15 @@ int32_t tisp_sharpen_intp_reg_refresh(int32_t arg1)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000042480 origin=fragment_seed original=tisp_sharpen_par_refresh */
 int32_t tisp_sharpen_par_refresh(uint32_t arg1, uint32_t arg2, uint32_t arg3)
 {
-	if (gain_old == 0xffffffffU) {
-		gain_old = arg1;
+	if (sharpen_gain_old == 0xffffffffU) {
+		sharpen_gain_old = arg1;
 		tisp_sharpen_all_reg_refresh(arg1);
 	} else {
-		uint32_t diff = arg1 >= gain_old ? arg1 - gain_old :
-						   gain_old - arg1;
+		uint32_t diff = arg1 >= sharpen_gain_old ? arg1 - sharpen_gain_old :
+						   sharpen_gain_old - arg1;
 
 		if (diff >= arg2) {
-			gain_old = arg1;
+			sharpen_gain_old = arg1;
 			tisp_sharpen_intp_reg_refresh(arg1);
 		}
 	}
@@ -70979,7 +70982,7 @@ int32_t tiziano_sharpen_init(void)
     int ret;
 
     tisp_sharpen_wdr_en(sharpen_wdr_en);
-    gain_old = 0xffffffffU;
+    sharpen_gain_old = 0xffffffffU;
     ret = tiziano_sharpen_params_refresh();
     if (ret)
         return ret;
@@ -71000,7 +71003,7 @@ int32_t tiziano_sharpen_dn_params_refresh(void)
 
 	if (ret)
 		return ret;
-	return tisp_sharpen_all_reg_refresh(gain_old);
+	return tisp_sharpen_all_reg_refresh(sharpen_gain_old);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000042b94 origin=fragment_seed original=tisp_sharpen_param_array_get */
