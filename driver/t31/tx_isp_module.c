@@ -6326,9 +6326,17 @@ static const struct file_operations tx_isp_fops = {
 
 
 
+/* OEM isp_core_tuning_deinit (0x8bd0), from tx_isp_core_remove: free the
+ * tuning object.  Its pages (order 3, 32 KB) were never freed, so every
+ * rmmod/insmod cycle lost them.  Nothing reaches it any more: the ISP IRQs,
+ * the fw thread and the day/night work are gone and /dev/isp-m0 is removed
+ * before the core platform device. */
 void isp_core_tuning_deinit(void *core_dev)
 {
-    pr_info("isp_core_tuning_deinit: Destroying ISP tuning interface\n");
+    extern int isp_core_tuning_release(struct tx_isp_dev *dev);
+
+    (void)core_dev;
+    isp_core_tuning_release(ourISPdev);
 }
 
 int sensor_early_init(void *core_dev)
@@ -6814,9 +6822,25 @@ err_free_dev:
 }
 
 extern void tx_isp_t31_wdr_stop(void);
+extern void tisp_param_operate_free(void);
 extern void tisp_deinit_free(void);
 extern void tx_isp_core_daynight_cancel(void);
 void tx_isp_free_irq(struct tx_isp_irq_info *irq_info);
+
+static void tx_isp_put_clk_handle(struct clk **clkp)
+{
+    struct clk **owned = ourISPdev ? ourISPdev->sd.clks : NULL;
+    struct clk *clk = *clkp;
+    unsigned int i;
+
+    *clkp = NULL;
+    if (IS_ERR_OR_NULL(clk))
+        return;
+    for (i = 0; owned && i < ourISPdev->sd.clk_num; i++)
+        if (owned[i] == clk)
+            return;
+    clk_put(clk);
+}
 
 static void tx_isp_exit(void)
 {
@@ -6825,6 +6849,10 @@ static void tx_isp_exit(void)
 
     pr_info("TX ISP driver exiting...\n");
     tx_isp_t31_wdr_stop();
+    /* Tear down the netlink channel before the objects its requests use
+     * (tuning data, ourISPdev) go away, then its message buffers. */
+    tisp_netlink_exit();
+    tisp_param_operate_free();
     tx_isp_v4l2_cleanup();
     tx_isp_sinfo_exit();
     tx_isp_remove_proc_entries();
@@ -6841,10 +6869,15 @@ static void tx_isp_exit(void)
         if (ourISPdev->isp_clk) {
             pr_info("[CLK] Module cleanup: Disabling ISP clock\n");
             clk_disable_unprepare(ourISPdev->isp_clk);
-            clk_put(ourISPdev->isp_clk);
-            ourISPdev->isp_clk = NULL;
-            pr_info("[CLK] Module cleanup: ISP clock disabled and released\n");
+            pr_info("[CLK] Module cleanup: ISP clock disabled\n");
         }
+        /* The vendor clk_get() kzallocs every handle.  cgu_isp/isp/csi come
+         * either from tx_isp_configure_clocks() (own handles, put here) or
+         * alias the isp-m0 subdev's clock array, which the core remove
+         * releases.  cgu_isp and csi were never put. */
+        tx_isp_put_clk_handle(&ourISPdev->cgu_isp);
+        tx_isp_put_clk_handle(&ourISPdev->isp_clk);
+        tx_isp_put_clk_handle(&ourISPdev->csi_clk);
 
         /* Note: CGU_ISP and VIC clocks managed locally, no storage in device struct */
         pr_info("Additional clocks cleaned up\n");
@@ -7000,8 +7033,6 @@ static void tx_isp_exit(void)
     mutex_unlock(&sensor_list_mutex);
 
 
-    /* Tear down netlink channel */
-    tisp_netlink_exit();
 
     /* Nothing uses the tuning parameter blocks any more. */
     {
@@ -9161,7 +9192,7 @@ int isp_subdev_release_clks(struct tx_isp_subdev *sd)
     clk_array = sd->clks;
     if (clk_array) {
         for (i = 0; i < sd->clk_num; i++) {
-            if (clk_array[i])
+            if (!IS_ERR_OR_NULL(clk_array[i]))
                 clk_put(clk_array[i]);
         }
         kfree(clk_array);

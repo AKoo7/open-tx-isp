@@ -105,6 +105,7 @@ void tx_isp_disable_irq(void *arg1);
 int ispcore_core_ops_init(struct tx_isp_subdev *sd, int on);
 void tx_isp_subdev_auto_link(struct platform_device *pdev, struct tx_isp_subdev *sd);
 void tx_isp_module_deinit(struct tx_isp_subdev *sd);
+int isp_subdev_release_clks(struct tx_isp_subdev *sd);
 int vic_core_ops_ioctl(struct tx_isp_subdev *sd, unsigned int cmd, void *arg);
 int vic_event_handler(void *subdev, int event_type, void *data);
 int tx_isp_module_notify_handler(struct tx_isp_module *module, unsigned int cmd, void *arg);
@@ -1027,6 +1028,12 @@ void tx_isp_subdev_deinit(struct tx_isp_subdev *sd)
 
     if (!sd)
         return;
+
+    /* OEM tx_isp_subdev_deinit (0xfc68) starts with isp_subdev_release_clks:
+     * the array isp_subdev_init_clks() allocated and its clk_get() handles
+     * (each a kzalloc on the vendor kernel) leaked for isp-m0 and isp-w01
+     * on every unload. */
+    isp_subdev_release_clks(sd);
 
     /* A sensor going away must not stay attached to the ISP. */
     tx_isp_sensor_subdev_deinit(sd);

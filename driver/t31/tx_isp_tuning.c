@@ -16969,15 +16969,17 @@ int isp_core_tuning_release(struct tx_isp_dev *dev)
     /* Clean up synchronization primitives */
     mutex_destroy(&tuning->mutex);
 
-    /* Free the page-based allocation */
-    if (tuning->allocation_pages) {
-        free_pages(tuning->allocation_pages, tuning->allocation_order);
-        pr_info("isp_core_tuning_release: Released pages at %p (order=%d)\n",
-                (void*)tuning->allocation_pages, tuning->allocation_order);
-    }
-
-    /* Clear the tuning data reference */
+    /* Clear the reference, then free the pages the object itself lives in
+     * (read the bookkeeping first). */
     ourISPdev->tuning_data = NULL;
+    if (tuning->allocation_pages) {
+        unsigned long pages = tuning->allocation_pages;
+        int order = tuning->allocation_order;
+
+        free_pages(pages, order);
+        pr_info("isp_core_tuning_release: Released pages at %p (order=%d)\n",
+                (void *)pages, order);
+    }
 
     return 0;
 }
@@ -31485,6 +31487,21 @@ static void tisp_param_operate_process(const void *data, size_t len)
 
 /* forward declaration to avoid implicit declaration */
 int tisp_code_create_tuning_node(void);
+
+/* Data half of OEM tisp_param_operate_deinit (0x14b44, kfree opmsg); the
+ * netlink socket and the tuning node go in tx_isp_exit.  Both 64 KB
+ * buffers stayed allocated after rmmod.  Call after tisp_netlink_exit(), so
+ * no request can still be using them. */
+void tisp_param_operate_free(void)
+{
+    mutex_lock(&tisp_opmsg_lock);
+    kfree(tisp_opmsg);
+    tisp_opmsg = NULL;
+    kfree(tisp_ipmsg);
+    tisp_ipmsg = NULL;
+    tisp_param_oper_inited = false;
+    mutex_unlock(&tisp_opmsg_lock);
+}
 
 int tisp_param_operate_init(void)
 {

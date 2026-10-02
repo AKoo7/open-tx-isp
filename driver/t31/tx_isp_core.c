@@ -4248,8 +4248,11 @@ int tx_isp_core_probe(struct platform_device *pdev)
                 current_channel = (struct tx_isp_frame_channel *)((char*)current_channel + 0xc4);
             }
 
-            /* SAFE: Channel array is stored in the allocated memory, not as a struct member */
-            /* The channels[] array in tx_isp_dev is used directly, channel_array is just working memory */
+            /* The channels[] array in tx_isp_dev is used directly; nothing
+             * keeps a pointer into channel_array (OEM core+0x150, kfreed by
+             * tx_isp_core_remove).  It leaked 1 KB per module load. */
+            kfree(channel_array);
+            channel_array = NULL;
             tx_isp_core_bind_event_dispatch_tables(isp_dev);
 
             /* DEFERRED: Tuning initialization moved AFTER memory mappings */
@@ -4364,8 +4367,6 @@ int tx_isp_core_probe(struct platform_device *pdev)
                 }
 
                 return 0;
-
-            kfree(channel_array);
         } else {
             isp_printf(2, "Failed to init output channels!\n");
         }
@@ -4407,6 +4408,9 @@ int tx_isp_core_remove(struct platform_device *pdev)
 
         platform_set_drvdata(pdev, NULL);
         isp_core_tuning_deinit(core_dev);
+        /* OEM tx_isp_core_remove: tx_isp_subdev_deinit of the core subdev
+         * (its cgu_isp/isp clock handles and mem region). */
+        tx_isp_subdev_deinit(&isp_dev->sd);
 
         pr_info("tx_isp_core_remove: kfree subdev_list=%p (ourISPdev kept)\n",
                 isp_dev->subdev_list);
