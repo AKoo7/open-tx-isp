@@ -421,6 +421,7 @@ static int tx_isp_sinfo_show(struct seq_file *m, void *unused)
 				   tx_isp_sinfo_s32_at(
 					   wiring, wiring_rst_gpio_offset));
 		else if (tx_isp_sinfo_config.read_module_param_int &&
+			 slot->owner &&
 			 !tx_isp_sinfo_config.read_module_param_int(
 				 slot->owner, "reset_gpio", &gpio))
 			seq_printf(m, "%d\n", gpio);
@@ -433,6 +434,7 @@ static int tx_isp_sinfo_show(struct seq_file *m, void *unused)
 				   tx_isp_sinfo_s32_at(
 					   wiring, wiring_pwdn_gpio_offset));
 		else if (tx_isp_sinfo_config.read_module_param_int &&
+			 slot->owner &&
 			 !tx_isp_sinfo_config.read_module_param_int(
 				 slot->owner, "pwdn_gpio", &gpio))
 			seq_printf(m, "%d\n", gpio);
@@ -881,6 +883,7 @@ int tx_isp_sinfo_sensor_bind(void *subdev, struct module *owner)
 			 * move the sensor to a new sensorN index.
 			 */
 			if (slot->used && !slot->drv && !slot->subdev &&
+			    (!slot->owner || slot->owner == owner) &&
 			    orphan < 0)
 				orphan = i;
 			if (slot->used && slot->owner == owner)
@@ -902,6 +905,9 @@ int tx_isp_sinfo_sensor_bind(void *subdev, struct module *owner)
 				slot->default_i2c_addr =
 					tx_isp_sinfo_slots[source].
 					default_i2c_addr;
+			} else if (source < 0) {
+				slot->drv = NULL;
+				slot->default_i2c_addr = 0;
 			}
 			i = orphan;
 		} else if (target >= 0) {
@@ -954,6 +960,13 @@ void tx_isp_sinfo_sensor_unbind(void *subdev, struct module *owner)
 			pr_info("tx-isp-sinfo: sensor_unbind slot=%d subdev=%p owner=%p\n",
 				i, subdev, owner);
 			tx_isp_sinfo_slots[i].subdev = NULL;
+			/*
+			 * A slot without a driver is now an orphan whose owner
+			 * module is being unloaded; drop the owner so neither a
+			 * proc reader nor a later bind dereferences it.
+			 */
+			if (!tx_isp_sinfo_slots[i].drv)
+				tx_isp_sinfo_slots[i].owner = NULL;
 			tx_isp_sinfo_slot_sync_compat(i);
 			unbound++;
 			tx_isp_sinfo_stats.sensor_unbind_slots++;
