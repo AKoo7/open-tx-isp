@@ -6920,6 +6920,10 @@ static void tx_isp_exit(void)
         cancel_work_sync(&sensor_expo_work);
 
         tisp_deinit_free();
+        {
+            extern void tisp_release_stats_pages(void);
+            tisp_release_stats_pages();
+        }
 
         /* Clean up sensor if present */
         if (ourISPdev->sensor) {

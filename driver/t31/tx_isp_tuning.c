@@ -2482,6 +2482,7 @@ static int tisp_adr_build_lut_payload(uint32_t *out_words, int out_cap)
 }
 
 /* Global parameter arrays */
+static void tisp_free_stats_pages(void);
 static void *tparams_day = NULL;
 static void *tparams_night = NULL;
 static void *tparams_cust = NULL;
@@ -7474,6 +7475,11 @@ int tisp_init(void *sensor_info_arg, char *param_name)
 
     /* Binary Ninja OEM ORDER: Allocate ALL DMA buffers FIRST, then init sub-modules */
     pr_info("*** tisp_init: ALLOCATING ISP PROCESSING BUFFERS ***\n");
+
+    /* A second tisp_init without tisp_deinit in between (stream state
+     * that skipped the deinit) overwrote the previous pages: release them
+     * first instead of leaking ~128 KB per init. */
+    tisp_free_stats_pages();
 
     /* OEM uses __get_free_pages(0x1040d0, 3) which includes __GFP_ZERO.
      * AE0: order 3 = 8 pages = 32KB (0x8000), we use 0x6000 of it.
@@ -36741,6 +36747,13 @@ EXPORT_SYMBOL(tisp_gib_param_array_set);
  * and nothing reads a page after it is freed. tisp_init reprograms the
  * stats address registers with fresh pages.
  */
+/* Module exit: release the statistics DMA pages whatever state the last
+ * stream left the core in (the deinit path only runs for some states). */
+void tisp_release_stats_pages(void)
+{
+    tisp_free_stats_pages();
+}
+
 static void tisp_free_stats_pages(void)
 {
     unsigned long ae0 = data_b2f3c, ae1 = data_b2f54, awb = data_a2f5c;
