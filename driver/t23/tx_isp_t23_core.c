@@ -15657,32 +15657,26 @@ static int regtrace_t23_program_msca_format(
     return 0;
 }
 
-static int regtrace_t23_program_msca_qbuf(int channel,
-                                          uint32_t phys,
-                                          uint32_t length)
+/*
+ * Check a buffer against the channel format and compute its NV12 plane
+ * addresses for the MSCA address FIFOs. No register access.
+ */
+static int regtrace_t23_build_msca_qbuf(int channel,
+                                        uint32_t phys,
+                                        uint32_t length,
+                                        struct tx_isp_nv12_buffer *buffer)
 {
-    struct tx_isp_nv12_buffer buffer;
     int ret;
 
-    if (!regtrace_t23_direct_msca_qbuf)
-        return 0;
     if (channel < 0 || channel >= 3 || !phys)
         return -EINVAL;
 
     ret = tx_isp_nv12_buffer_build(regtrace_t23_frame_width(channel),
                                    regtrace_t23_frame_height(channel),
-                                   1, 16, phys, length, &buffer);
-    if (ret) {
+                                   1, 16, phys, length, buffer);
+    if (ret)
         printk(KERN_ERR "tx_isp_t23_recovered: reject MSCA qbuf ch=%d y=0x%x len=0x%x ret=%d\n",
                channel, phys, length, ret);
-        return ret;
-    }
-
-    ret = tisp_msca_addr_fifo_write((char)channel, buffer.y_dma,
-                                    buffer.uv_dma);
-    if (regtrace_t23_log_framechan_payloads)
-        printk(KERN_WARNING "tx_isp_t23_recovered: direct MSCA qbuf ch=%d y=0x%x uv=0x%x len=0x%x ret=%d\n",
-               channel, buffer.y_dma, buffer.uv_dma, length, ret);
     return ret;
 }
 
@@ -15738,22 +15732,38 @@ static void regtrace_framechan_forget_qbufs_locked(int channel)
 
 static int regtrace_framechan_record_qbuf(int channel, const uint32_t *words)
 {
+    struct tx_isp_nv12_buffer buffer;
     unsigned long flags;
     uint32_t userptr;
+    bool program;
     int slot = -1;
     int i;
-    int ret;
+    int ret = 0;
 
     if (channel < 0 || channel >= REGTRACE_FRAMECHAN_COUNT || !words)
         return -EINVAL;
 
     userptr = words[TX_ISP_FRAME_WORD_DMA];
+    program = regtrace_t23_direct_msca_qbuf;
+    if (program) {
+        ret = regtrace_t23_build_msca_qbuf(
+            channel, userptr, words[TX_ISP_FRAME_WORD_LENGTH], &buffer);
+        if (ret)
+            return ret;
+    }
 
     /*
      * Record the buffer as queued before it reaches the MSCA address FIFO,
      * so that its completion cannot arrive first and be lost. A buffer
      * queued again keeps its slot; a new one takes a free slot, so a
      * queued buffer is never overwritten while there is room.
+     *
+     * The Y and UV addresses go into two FIFOs that the MSCA pops as a
+     * pair. Like the OEM ispcore_pad_event_handle() QBUF, which writes
+     * both under the channel spinlock, write them in the same critical
+     * section: two threads queueing at once (libimp releases frames from
+     * the encoder and the pooling threads) could otherwise interleave
+     * their writes and pair one buffer's Y plane with another's UV plane.
      */
     spin_lock_irqsave(&regtrace_framechan_done_lock, flags);
     for (i = 0; i < REGTRACE_FRAMECHAN_QBUF_SLOTS; i++) {
@@ -15778,15 +15788,18 @@ static int regtrace_framechan_record_qbuf(int channel, const uint32_t *words)
     regtrace_framechan_qbuf_queued[channel][slot] = true;
     regtrace_framechan_qbuf_last[channel] = slot;
     regtrace_framechan_qbuf_count[channel]++;
+    if (program) {
+        ret = tisp_msca_addr_fifo_write((char)channel, buffer.y_dma,
+                                        buffer.uv_dma);
+        if (ret)
+            regtrace_framechan_qbuf_queued[channel][slot] = false;
+    }
     spin_unlock_irqrestore(&regtrace_framechan_done_lock, flags);
 
-    ret = regtrace_t23_program_msca_qbuf(
-        channel, userptr, words[TX_ISP_FRAME_WORD_LENGTH]);
-    if (ret) {
-        spin_lock_irqsave(&regtrace_framechan_done_lock, flags);
-        regtrace_framechan_qbuf_queued[channel][slot] = false;
-        spin_unlock_irqrestore(&regtrace_framechan_done_lock, flags);
-    }
+    if (program && regtrace_t23_log_framechan_payloads)
+        printk(KERN_WARNING "tx_isp_t23_recovered: direct MSCA qbuf ch=%d y=0x%x uv=0x%x len=0x%x ret=%d\n",
+               channel, buffer.y_dma, buffer.uv_dma,
+               words[TX_ISP_FRAME_WORD_LENGTH], ret);
     return ret;
 }
 
@@ -16076,6 +16089,44 @@ static int regtrace_t23_tisp_prestart(const char *reason)
     return ret;
 }
 
+/*
+ * Drop the completions left in a stopped channel's MSCA done FIFO. The OEM
+ * core ISR pops that FIFO whatever the stream state; ours only pops the
+ * channels whose MSCA bit is set, which STREAMOFF clears. A frame the MSCA
+ * finished after that stayed in the FIFO, and at the next STREAMON its
+ * address matched the same buffer queued again by the new stream: DQBUF
+ * handed userspace a buffer the MSCA had not written yet (its real
+ * completion then showed up as "unmatched MSCA completion"). Called before
+ * the channel is marked streaming, with interrupts off since the core ISR
+ * pops the done FIFOs of the other, streaming channels.
+ */
+static unsigned int regtrace_framechan_drop_stale_done(int channel)
+{
+    unsigned long flags;
+    uint32_t fifo_base;
+    unsigned int dropped = 0;
+
+    if (!regtrace_t23_source_frame_done || channel < 0 || channel >= 3 ||
+        !regtrace_t23_core_sd || !regtrace_t23_core_clks_enabled)
+        return 0;
+    if (regtrace_t23_msca_ch_en & (1U << channel))
+        return 0;
+
+    fifo_base = ((uint32_t)channel + 0xd0U) << 8;
+    local_irq_save(flags);
+    while (dropped < REGTRACE_FRAMECHAN_DONE_SLOTS &&
+           !(system_reg_read(fifo_base + 0x13cU) & 1U)) {
+        (void)system_reg_read(fifo_base + 0x138U);
+        (void)system_reg_read(fifo_base + 0x158U);
+        dropped++;
+    }
+    local_irq_restore(flags);
+    if (dropped)
+        printk(KERN_INFO "tx_isp_t23_recovered: framechan%d dropped %u stale MSCA completions before stream on\n",
+               channel, dropped);
+    return dropped;
+}
+
 static int regtrace_framechan_stream_on(struct file *file, int channel)
 {
     int ret;
@@ -16088,6 +16139,8 @@ static int regtrace_framechan_stream_on(struct file *file, int channel)
         return ret;
     }
     if (channel >= 0 && channel < REGTRACE_FRAMECHAN_COUNT) {
+        if (!regtrace_framechan_streaming[channel])
+            regtrace_framechan_drop_stale_done(channel);
         regtrace_framechan_stream_mask |= 1U << channel;
         regtrace_framechan_stream_owner[channel] = file;
     }
