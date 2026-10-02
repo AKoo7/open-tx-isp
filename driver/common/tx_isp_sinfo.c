@@ -787,7 +787,13 @@ int tx_isp_sinfo_get_driver(unsigned int index, char *name,
 }
 EXPORT_SYMBOL(tx_isp_sinfo_get_driver);
 
-void tx_isp_sinfo_driver_del(struct i2c_driver *drv)
+/*
+ * Remove every slot that belongs to @drv, or (with @mod) to the module @mod:
+ * its owner, or the owner of its i2c_driver.  The proc dirs are removed
+ * after tx_isp_sinfo_lock is dropped (a concurrent show() holds the PDE and
+ * waits for that lock); the cleared slot makes such a reader print nothing.
+ */
+static int tx_isp_sinfo_del_slots(struct i2c_driver *drv, struct module *mod)
 {
 	int i;
 	int removed = 0;
@@ -795,48 +801,84 @@ void tx_isp_sinfo_driver_del(struct i2c_driver *drv)
 	char dirnames[TX_ISP_SINFO_MAX_SENSORS][16];
 	bool had_dir[TX_ISP_SINFO_MAX_SENSORS];
 
-	if (!drv || !tx_isp_sinfo_slots)
-		return;
-
-	if (tx_isp_sinfo_config.driver_removing)
-		tx_isp_sinfo_config.driver_removing(drv);
 	mutex_lock(&tx_isp_sinfo_publish_lock);
 	mutex_lock(&tx_isp_sinfo_lock);
-	tx_isp_sinfo_stats.driver_del_calls++;
+	if (!tx_isp_sinfo_slots) {
+		mutex_unlock(&tx_isp_sinfo_lock);
+		mutex_unlock(&tx_isp_sinfo_publish_lock);
+		return 0;
+	}
+	if (drv)
+		tx_isp_sinfo_stats.driver_del_calls++;
 	root = tx_isp_sinfo_root;
 	for (i = 0; i < TX_ISP_SINFO_MAX_SENSORS; ++i) {
 		struct tx_isp_sinfo_slot *slot = &tx_isp_sinfo_slots[i];
+		bool match;
 
 		had_dir[i] = false;
-		if (slot->used && slot->drv == drv) {
-			pr_info("tx-isp-sinfo: driver_del slot=%d drv=%p owner=%p subdev=%p\n",
-				i, drv, slot->owner, slot->subdev);
-			/*
-			 * Only detach the proc dir here; it is removed below
-			 * after tx_isp_sinfo_lock is dropped (a concurrent
-			 * show() holds the PDE and waits for that lock).  The
-			 * cleared slot makes such a reader print nothing.
-			 */
-			if (slot->dir) {
-				memcpy(dirnames[i], slot->dirname,
-				       sizeof(dirnames[i]));
-				had_dir[i] = true;
-			}
-			memset(slot, 0, sizeof(*slot));
-			tx_isp_sinfo_slot_sync_compat(i);
-			removed++;
-			tx_isp_sinfo_stats.driver_del_slots++;
+		if (!slot->used)
+			continue;
+		if (drv)
+			match = slot->drv == drv;
+		else
+			match = slot->owner == mod ||
+				(slot->drv && slot->drv->driver.owner == mod);
+		if (!match)
+			continue;
+		pr_info("tx-isp-sinfo: %s slot=%d drv=%p owner=%p subdev=%p\n",
+			drv ? "driver_del" : "module_going", i, slot->drv,
+			slot->owner, slot->subdev);
+		if (slot->dir) {
+			memcpy(dirnames[i], slot->dirname,
+			       sizeof(dirnames[i]));
+			had_dir[i] = true;
 		}
+		memset(slot, 0, sizeof(*slot));
+		tx_isp_sinfo_slot_sync_compat(i);
+		removed++;
+		tx_isp_sinfo_stats.driver_del_slots++;
 	}
 	mutex_unlock(&tx_isp_sinfo_lock);
 	for (i = 0; i < TX_ISP_SINFO_MAX_SENSORS; ++i)
 		if (had_dir[i] && root)
 			remove_proc_subtree(dirnames[i], root);
 	mutex_unlock(&tx_isp_sinfo_publish_lock);
-	if (!removed)
+	return removed;
+}
+
+void tx_isp_sinfo_driver_del(struct i2c_driver *drv)
+{
+	if (!drv || !tx_isp_sinfo_slots)
+		return;
+
+	if (tx_isp_sinfo_config.driver_removing)
+		tx_isp_sinfo_config.driver_removing(drv);
+	if (!tx_isp_sinfo_del_slots(drv, NULL))
 		pr_info("tx-isp-sinfo: driver_del unmatched drv=%p\n", drv);
 }
 EXPORT_SYMBOL(tx_isp_sinfo_driver_del);
+
+/*
+ * Safety net for sensor modules that publish their driver with
+ * tx_isp_sinfo_driver_add() but unregister it with a plain i2c_del_driver()
+ * (the T20 SDK sensors): without a driver_del the slot kept drv/owner
+ * pointers into the freed module text and data, and a /proc/jz/sensor read
+ * after the rmmod oopsed on drv->driver.name.  GOING is notified after the
+ * module's exit() and before its memory is freed.
+ */
+static int tx_isp_sinfo_module_notify(struct notifier_block *nb,
+				      unsigned long action, void *data)
+{
+	(void)nb;
+	if (action == MODULE_STATE_GOING && data)
+		tx_isp_sinfo_del_slots(NULL, data);
+	return NOTIFY_DONE;
+}
+
+static struct notifier_block tx_isp_sinfo_module_nb = {
+	.notifier_call = tx_isp_sinfo_module_notify,
+};
+static bool tx_isp_sinfo_module_nb_registered;
 
 int tx_isp_sinfo_sensor_bind(void *subdev, struct module *owner)
 {
@@ -1029,6 +1071,10 @@ int tx_isp_sinfo_init(void)
 		    &tx_isp_sinfo_count_fops);
 	proc_create("events", 0444, tx_isp_sinfo_root,
 		    &tx_isp_sinfo_events_fops);
+	if (!register_module_notifier(&tx_isp_sinfo_module_nb))
+		tx_isp_sinfo_module_nb_registered = true;
+	else
+		pr_warn("tx-isp-sinfo: module notifier not registered\n");
 	pr_info("tx-isp-sinfo: initialized max_sensors=%u\n",
 		TX_ISP_SINFO_MAX_SENSORS);
 	return 0;
@@ -1042,6 +1088,10 @@ void tx_isp_sinfo_exit(void)
 	struct proc_dir_entry *jz_root = NULL;
 #endif
 
+	if (tx_isp_sinfo_module_nb_registered) {
+		unregister_module_notifier(&tx_isp_sinfo_module_nb);
+		tx_isp_sinfo_module_nb_registered = false;
+	}
 	mutex_lock(&tx_isp_sinfo_lock);
 	if (tx_isp_sinfo_heap_slots) {
 		root = tx_isp_sinfo_root;
