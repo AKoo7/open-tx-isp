@@ -7750,7 +7750,7 @@ int32_t ispcore_core_ops_init(uintptr_t a0, uint32_t a1);
 int32_t ispcore_slake_module(void *arg1);
 int tx_isp_core_probe(struct platform_device *pdev);
 int32_t system_irq_func_set(unsigned int index, t21_irq_callback_t callback);
-int32_t init_module(void);
+int32_t __init init_module(void);
 void cleanup_module(void);
 int tx_isp_vic_remove(struct platform_device *pdev);
 int tx_isp_vin_remove(struct platform_device *pdev);
@@ -7759,7 +7759,7 @@ int tx_isp_remove(struct platform_device *pdev);
 int tx_isp_core_remove(struct platform_device *pdev);
 
 /* WHOLE_DRIVER_RELOCATED_DATA_PATCHES */
-static void regtrace_patch_relocated_data(void)
+static void __init regtrace_patch_relocated_data(void)
 {
     /* Recover the platform binding graph from the stock module's .data. */
     tx_isp_driver.probe = tx_isp_probe;
@@ -38241,7 +38241,7 @@ static struct console t21_ramlog_console = {
 	.index = -1,
 };
 
-static void t21_ramlog_start(void)
+static void __init t21_ramlog_start(void)
 {
 	size_t bytes = PAGE_SIZE << T21_RAMLOG_ORDER;
 	unsigned long phys;
@@ -38291,7 +38291,7 @@ static void t21_ramlog_stop(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000034540 origin=model_output original=init_module */
-int32_t init_module(void)
+int32_t __init init_module(void)
 {
 	int32_t result;
 
