@@ -60,9 +60,7 @@
 #endif
 #include <asm/uaccess.h>
 
-#ifdef TX_ISP_T21_SHARED_SINFO
 #include "../include/tx_isp/tx_isp_sinfo.h"
-#endif
 
 #include "tx_isp_t21_v4l2.h"
 
@@ -7078,14 +7076,6 @@ void private_getrawmonotonic(struct timespec *ts);
 int32_t sinfo_open(uint32_t a0, uint32_t a1);
 int sinfo_count_open(struct inode *inode, struct file *file);
 int sinfo_count_show(struct seq_file *seq);
-#ifndef TX_ISP_T21_SHARED_SINFO
-int32_t tx_isp_sinfo_driver_del(uint32_t a0);
-void tx_isp_sinfo_sensor_unbind(int32_t sensor_id);
-int tx_isp_sinfo_driver_add(void *arg1, int16_t arg2, int32_t arg3);
-int32_t tx_isp_sinfo_sensor_bind(uint32_t sensor, uint32_t sensor_id);
-int32_t tx_isp_sinfo_init(void);
-void* tx_isp_sinfo_exit(void);
-#endif
 int32_t sinfo_slot_publish(uintptr_t a0, uint32_t a1);
 int sinfo_show(void *arg1);
 int32_t tx_isp_release_device(void);
@@ -9310,296 +9300,6 @@ void private_getrawmonotonic(struct timespec *ts)
     getrawmonotonic(ts);
 }
 
-
-#ifndef TX_ISP_T21_SHARED_SINFO
-/* WHOLE_DRIVER_CANDIDATE fn_000000000000078c origin=fragment_seed original=tx_isp_sinfo_driver_del */
-int32_t tx_isp_sinfo_driver_del(uint32_t a0)
-{
-    uint32_t local_14 = 0;
-    uint32_t local_18 = 0;
-    uint32_t local_1c = 0;
-    uint32_t local_20 = 0;
-    uint32_t local_24 = 0;
-    uint32_t a1 = 0;
-    uint32_t ra = 0;
-    uintptr_t s0 = 0;
-    uint32_t s1 = 0;
-    uint32_t s2 = 0;
-    uint32_t s3 = 0;
-    uint32_t t9 = 0;
-    uintptr_t *v0 = 0;
-
-    /* fragment 0: Prologue */
-    /* function prologue: stack frame and callee-saved register setup */
-
-    /* fragment 1: CallSetup */
-    s3 = a0;
-    mutex_lock((void *)(uintptr_t)&isp_clk); /* jalr target resolved by relocation */
-
-    /* fragment 2: Arithmetic */
-    s2 = s0 + 640;
-
-tx_isp_sinfo_driver_del0x3c:
-    /* fragment 3: MemoryAccess */
-    v0 = *(uint8_t *)((char *)s0 + 0);
-
-    /* fragment 4: Branch */
-    if (v0 == 0) { goto tx_isp_sinfo_driver_del0x88; }
-
-    /* fragment 5: MemoryAccess */
-    v0 = *(uint32_t *)((char *)s0 + 4);
-
-    /* fragment 6: Branch */
-    if (v0 != s3) { goto tx_isp_sinfo_driver_del0x88; }
-
-    /* fragment 7: MemoryAccess */
-    v0 = *(uint32_t *)((char *)s0 + 20);
-
-    /* fragment 8: Branch */
-    int _bc_v0_8 = v0 == 0;
-    v0 = (uintptr_t *)&sinfo_root;
-    if (_bc_v0_8) { goto tx_isp_sinfo_driver_del0x78; }
-
-    /* fragment 9: CallSetup */
-    v0 = (uintptr_t *)remove_proc_subtree((const char *)(int32_t *)(s0 + 24), (void *)(uintptr_t)(*(uint32_t *)((char *)((char *)&sinfo_root)))); /* jalr target resolved by relocation */
-
-    /* fragment 10: MemoryAccess */
-    *(uint32_t *)((char *)s0 + 20) = 0;
-
-tx_isp_sinfo_driver_del0x78:
-    /* fragment 11: MemoryAccess */
-    *(uint8_t *)((char *)s0 + 0) = 0;
-    *(uint32_t *)((char *)s0 + 4) = 0;
-    *(uint32_t *)((char *)s0 + 8) = 0;
-    *(uint32_t *)((char *)s0 + 16) = 0;
-
-tx_isp_sinfo_driver_del0x88:
-    /* fragment 12: Arithmetic */
-    s0 = s0 + 160;
-
-    /* fragment 13: Branch */
-    if (s0 != s2) { goto tx_isp_sinfo_driver_del0x3c; }
-
-    /* fragment 14: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    /* fragment 15: Arithmetic */
-    a0 = s1 + 16;
-    t9 = (uintptr_t)&mutex_unlock;
-
-    /* fragment 16: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    /* fragment 17: Arithmetic */
-    t9 = t9;
-
-    /* fragment 18: IndirectTailCall */
-    return ((int32_t (*)())mutex_unlock)((void *)(uintptr_t)a0);
-
-    return 0;
-}
-#endif /* !TX_ISP_T21_SHARED_SINFO */
-
-/* WHOLE_DRIVER_CANDIDATE fn_0000000000000844 origin=model_output original=tx_isp_sinfo_sensor_unbind */
-#ifndef TX_ISP_T21_SHARED_SINFO
-void tx_isp_sinfo_sensor_unbind(int32_t sensor_id)
-{
-    int i = 0;
-    if (sensor_id == 0)
-        return;
-
-    mutex_lock(&spin_lock);
-
-    for (char *i = (char *)&sinfo_show; i != (char *)&sinfo_show + 0x600; i += 0xa0) {
-        if (*i != 0 && *(int32_t *)(i + 0x10) == sensor_id)
-            *(int32_t *)((char *)((char *)&sinfo_slots + 0xc)) = 0;
-    }
-
-    mutex_unlock(&spin_lock);
-}
-#endif /* !TX_ISP_T21_SHARED_SINFO */
-
-/* WHOLE_DRIVER_CANDIDATE fn_00000000000009b8 origin=model_output original=tx_isp_sinfo_driver_add */
-#ifndef TX_ISP_T21_SHARED_SINFO
-int tx_isp_sinfo_driver_add(void *arg1, int16_t arg2, int32_t arg3)
-{
-    uint8_t *slot_ptr;
-    int i;
-
-    if (!arg1 || !sinfo_show)
-        return -22;
-
-    mutex_lock(&spin_lock);
-
-    slot_ptr = (uint8_t *)&sinfo_show;
-    i = 0;
-
-    while (i < 4) {
-        if (*slot_ptr == 0) {
-            *(uint8_t *)((uintptr_t)slot_ptr + i * 0xa0) = 1;
-            *(int16_t *)((uintptr_t)slot_ptr + i * 0xa0 + 0xc) = arg2;
-            *(uint32_t *)((uintptr_t)slot_ptr + i * 0xa0 + 4) = (uint32_t)(uintptr_t)arg1;
-            *(int32_t *)((uintptr_t)slot_ptr + i * 0xa0 + 8) = arg3;
-            *(int32_t *)((uintptr_t)slot_ptr + i * 0xa0 + 0x10) = 0;
-            sinfo_slot_publish((uintptr_t)slot_ptr + i * 0xa0, i);
-            break;
-        }
-        slot_ptr = (void *)(uintptr_t)((uintptr_t)slot_ptr + (0xa0));
-        i++;
-    }
-
-    mutex_unlock(&spin_lock);
-
-    if (i < 4)
-        return 0;
-
-    printk("sinfo: no free slot for %d\n", *(int32_t *)((char *)arg1 + 0x24));
-    return -28;
-}
-#endif /* !TX_ISP_T21_SHARED_SINFO */
-
-/* WHOLE_DRIVER_CANDIDATE fn_0000000000000acc origin=model_output original=tx_isp_sinfo_sensor_bind */
-#ifndef TX_ISP_T21_SHARED_SINFO
-int32_t tx_isp_sinfo_sensor_bind(uint32_t sensor, uint32_t sensor_id)
-{
-    uint8_t *slots;
-    uint32_t i;
-    uint32_t j;
-    uint32_t k;
-    uint32_t found;
-    uint32_t dev_ptr;
-    uint16_t val;
-    int32_t ret;
-
-    ret = 0;
-    if (sensor == 0) {
-        ret = -22;
-        goto out;
-    }
-
-    mutex_lock((void *)&sinfo_lock);
-
-    slots = (uint8_t *)&sinfo_slots;
-
-    for (i = 0; i < 4; i++) {
-        if (slots[i * 0xa0] == 0 || sensor_id != *(uint32_t *)((uintptr_t)slots + i * 0xa0 + 8))
-            continue;
-        if (*(uint32_t *)((uintptr_t)slots + i * 0xa0 + 16) == 0) {
-            *(uint32_t *)((uintptr_t)slots + i * 0xa0 + 16) = sensor;
-            mutex_unlock((void *)&sinfo_lock);
-            ret = 0;
-            goto out;
-        }
-    }
-
-    for (j = 0; j < 4; j++) {
-        if (slots[j * 0xa0] != 0)
-            continue;
-
-        found = 0;
-        dev_ptr = 0;
-
-        for (k = 0; k < 4; k++) {
-            if (slots[k * 0xa0] == 0)
-                continue;
-            if (sensor_id != *(uint32_t *)((uintptr_t)slots + k * 0xa0 + 8))
-                continue;
-            found = 1;
-            dev_ptr = *(uint32_t *)((uintptr_t)slots + k * 0xa0 + 4);
-            break;
-        }
-
-        ((void **)(uintptr_t)slots)[j * 0xa0] = 1;
-
-        if (found) {
-            *(uint32_t *)((uintptr_t)slots + j * 0xa0 + 4) = dev_ptr;
-            *(uint32_t *)((uintptr_t)slots + j * 0xa0 + 8) = sensor_id;
-            val = 0;
-            if (dev_ptr)
-                val = *(uint16_t *)((uintptr_t)slots + k * 0xa0 + 12);
-            *(uint16_t *)((uintptr_t)slots + j * 0xa0 + 12) = val;
-            *(uint32_t *)((uintptr_t)slots + j * 0xa0 + 16) = sensor;
-            sinfo_slot_publish((uintptr_t)((uintptr_t)slots + j * 0xa0), j);
-        } else {
-            *(uint32_t *)((uintptr_t)slots + j * 0xa0 + 4) = 0;
-            *(uint32_t *)((uintptr_t)slots + j * 0xa0 + 8) = sensor_id;
-            *(uint16_t *)((uintptr_t)slots + j * 0xa0 + 12) = 0;
-            *(uint32_t *)((uintptr_t)slots + j * 0xa0 + 16) = sensor;
-            sinfo_slot_publish((uintptr_t)((uintptr_t)slots + j * 0xa0), j);
-        }
-        break;
-    }
-
-    mutex_unlock((void *)&sinfo_lock);
-    ret = 0;
-
-out:
-    return ret;
-}
-#endif /* !TX_ISP_T21_SHARED_SINFO */
-
-/* WHOLE_DRIVER_CANDIDATE fn_0000000000000e74 origin=fragment_seed original=tx_isp_sinfo_init */
-#ifndef TX_ISP_T21_SHARED_SINFO
-int32_t tx_isp_sinfo_init(void)
-{
-	sinfo_root = (uintptr_t)proc_mkdir(LC8, NULL);
-	if (!sinfo_root) {
-		printk(LC9);
-		return 0;
-	}
-
-	proc_create_data(LC10, 0444, (struct proc_dir_entry *)sinfo_root,
-			 &sinfo_count_fops, NULL);
-	return 0;
-}
-#endif /* !TX_ISP_T21_SHARED_SINFO */
-
-/* WHOLE_DRIVER_CANDIDATE fn_0000000000000ef4 origin=fragment_seed original=tx_isp_sinfo_exit */
-#ifndef TX_ISP_T21_SHARED_SINFO
-void* tx_isp_sinfo_exit(void)
-{
-    uint32_t local_10 = 0;
-    uint32_t local_14 = 0;
-    uint32_t *a0 = 0;
-    uint32_t a1 = 0;
-    uint32_t a2 = 0;
-    uint32_t ra = 0;
-    uintptr_t s0 = 0;
-    uintptr_t *v0 = 0;
-
-    /* fragment 0: Prologue */
-    /* function prologue: stack frame and callee-saved register setup */
-
-    /* fragment 1: CallSetup */
-    mutex_lock((void *)(uintptr_t)&isp_clk); /* jalr target resolved by relocation */
-
-    /* fragment 2: CallSetup */
-    v0 = (uintptr_t *)memset((void *)(int32_t *)&sinfo_root, 0, 640); /* jalr target resolved by relocation */
-
-    /* fragment 3: CallSetup */
-    mutex_unlock((void *)(uintptr_t)&isp_clk); /* jalr target resolved by relocation */
-
-    /* fragment 4: MemoryAccess */
-    v0 = *(uint32_t *)((char *)((char *)&sinfo_root));
-
-    /* fragment 5: Branch */
-    int _bc_v0_5 = v0 == 0;
-    v0 = (uintptr_t *)&remove_proc_subtree;
-    if (_bc_v0_5) { goto tx_isp_sinfo_exit0x74; }
-
-    /* fragment 6: CallSetup */
-    v0 = (uintptr_t *)remove_proc_subtree((const char *)(int32_t *)&LC8, (void *)(uintptr_t)0); /* jalr target resolved by relocation */
-
-    /* fragment 7: MemoryAccess */
-    *(uint32_t *)((char *)((char *)&sinfo_root)) = 0;
-
-tx_isp_sinfo_exit0x74:
-    /* fragment 8: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    return (void*)v0;
-}
-#endif /* !TX_ISP_T21_SHARED_SINFO */
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000000f90 origin=model_output original=vic_core_ops_ioctl */
 int vic_core_ops_ioctl(void *file, unsigned int cmd, void *arg)
@@ -12566,14 +12266,12 @@ int private_i2c_transfer(struct i2c_adapter *adap, struct i2c_msg *msgs, int num
 
 void private_i2c_del_driver(struct i2c_driver *driver)
 {
-#ifdef TX_ISP_T21_SHARED_SINFO
 	/* The sensor module published this driver to /proc/jz/sensor through
 	 * tx_isp_sinfo_driver_add() at insmod.  Drop the slot before the module
 	 * text goes away; otherwise the registry keeps a dangling drv/owner and
 	 * the next /proc/jz/sensor read or sensor re-insmod dereferences freed
 	 * module memory.  T31 does the same in its private_i2c_del_driver(). */
 	tx_isp_sinfo_driver_del(driver);
-#endif
 	i2c_del_driver(driver);
 }
 
