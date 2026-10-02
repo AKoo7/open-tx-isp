@@ -679,6 +679,8 @@ MODULE_PARM_DESC(isp_clk, "isp core clock");
 /* Temporary bring-up aid: identify the last completed FSM before a
  * recovered handler stalls the non-preemptible T20 kernel. */
 static int t20_trace_events;
+/* OEM AWB progress counters, printed with the T20AWB cmos trace line */
+static unsigned int t20_awb_ev[20], t20_awb_irq4, t20_awb_switch[12];
 module_param(t20_trace_events, int, 0644);
 MODULE_PARM_DESC(t20_trace_events, "trace T20 firmware event dispatch");
 static unsigned int t20_fsm_irq_allow_mask = 0xff;
@@ -10689,12 +10691,22 @@ uint32_t cmos_fsm_process_interrupt(int32_t *arg1, char arg2)
 			static unsigned int wb_calls, wb_prints;
 
 			if (wb_calls++ % 64 == 0 && wb_prints++ < 40)
-				printk(KERN_INFO "T20AWB cmos wb=%03x/%03x/%03x/%03x mode=%u\n",
+			{
+				int32_t *awb = (int32_t *)((char *)sensor + 0x748);
+
+				printk(KERN_INFO "T20AWB cmos wb=%03x/%03x/%03x/%03x mode=%u awb state=%d req=%08x pend=%08x irq4=%u ev4=%u ev11=%u ev15=%u ev16=%u sw4=%u sw7=%u sw8=%u sw11=%u sensor state=%d\n",
 				       APICAL_READ_32(0x300) & 0xfff,
 				       APICAL_READ_32(0x304) & 0xfff,
 				       APICAL_READ_32(0x308) & 0xfff,
 				       APICAL_READ_32(0x30c) & 0xfff,
-				       *(uint8_t *)((char *)sensor + 0x1524));
+				       *(uint8_t *)((char *)sensor + 0x1524),
+				       awb[1], awb[2], awb[3], t20_awb_irq4,
+				       t20_awb_ev[4], t20_awb_ev[11], t20_awb_ev[15],
+				       t20_awb_ev[16], t20_awb_switch[4],
+				       t20_awb_switch[7], t20_awb_switch[8],
+				       t20_awb_switch[11],
+				       *(int32_t *)((char *)sensor + 0xc + 4));
+			}
 		}
 
 		if (sensor_mode == 1 || sensor_mode == 3) {
@@ -15689,6 +15701,8 @@ int32_t AWB_fsm_switch_state(int32_t *arg1, int32_t arg2)
 		return cur_state;
 
 	((void **)arg1)[1] = arg2;
+	if ((uint32_t)arg2 < 12)
+		t20_awb_switch[arg2]++;
 
 	switch (arg2) {
 	case 0:
@@ -15747,6 +15761,9 @@ int32_t AWB_fsm_process_state(int32_t *arg1)
 int32_t AWB_fsm_process_event(int32_t *arg1, int32_t arg2)
 {
 	int32_t result;
+
+	if ((uint32_t)arg2 < 20)
+		t20_awb_ev[arg2]++;
 
 	if (arg2 == 0xb) {
 		result = 0;
@@ -19913,6 +19930,7 @@ int32_t AWB_fsm_process_interrupt(int32_t *arg1, char arg2)
 
 	if ((arg2 & 0xff) != 4)
 		return 4;
+	t20_awb_irq4++;
 	if (t20_simple_awb) {
 		tx_isp_t20_simple_awb_update(arg1);
 		return AWB_request_interrupt(arg1, 1 << 4);
