@@ -22322,58 +22322,54 @@ int32_t awb_update(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002e604 origin=model_output original=awb_normalise */
+/*
+ * As libt20-firmware 3.12.0 awb_mesh_NBP_func.c.o awb_normalise (0x2734).
+ * The recovered version shadowed the global stab with a local pointer
+ * (&stab + 0xc pointed into the stack), took the gain offsets 0x31/0x32
+ * relative to that instead of to stab and did byte offsets in int32_t
+ * units, so the manual AWB flag (stab.global_manual_awb, +12) was never
+ * seen: MANUAL and the presets 2..8 left the auto gains in place.
+ *
+ * arg1 is the AWB fsm: u16 sensor/static gains at +0x770..+0x776, the AWB
+ * R/B gains (Q8, u16) at +0x18/+0x1a, the output gains (log2 Q16) at
+ * +0x760..+0x76c. In manual mode stab.global_awb_red/blue_gain (+49/+50,
+ * Q7) replace the AWB result; otherwise the AWB result is reported there.
+ */
 int32_t *awb_normalise(int32_t *arg1)
 {
-	int32_t *stab;
-	int32_t v0, v1, v2, v3, v4;
-	int32_t s4;
-	int32_t s5;
-	int32_t s6;
-	int32_t *s3;
-	int32_t s4_2;
-	int32_t *i;
-	int32_t *result;
+	uint8_t *fsm = (uint8_t *)arg1;
+	int32_t gain[4];
+	int32_t lowest;
+	int32_t offset;
+	int i;
 
-	v0 = log2_fixed_to_fixed(*(uint16_t *)(arg1 + 0x770), 8, 0x10);
-	v1 = log2_fixed_to_fixed(*(uint16_t *)(arg1 + 0x772), 8, 0x10);
-	v2 = log2_fixed_to_fixed(*(uint16_t *)(arg1 + 0x774), 8, 0x10);
-	v3 = log2_fixed_to_fixed(*(uint16_t *)(arg1 + 0x776), 8, 0x10);
-	s5 = v0;
-	s4 = v1;
-	s3 = v2;
-	s6 = v3;
-	stab = (int32_t *)((char *)&stab + 0xc);
+	for (i = 0; i < 4; i++)
+		gain[i] = log2_fixed_to_fixed(*(uint16_t *)(fsm + 0x770 + 2 * i),
+					      8, 0x10);
 
-	if (*(uint8_t *)stab == 0) {
-		v4 = log2_fixed_to_fixed(*(uint16_t *)(arg1 + 0x18), 8, 0x10);
-		v0 = log2_fixed_to_fixed(*(uint16_t *)(arg1 + 0x1a), 8, 0x10);
-		*(uint8_t *)((uintptr_t)stab + 0x31) = *(uint16_t *)(arg1 + 0x18) >> 1;
-		*(uint8_t *)((uintptr_t)stab + 0x32) = *(uint16_t *)(arg1 + 0x1a) >> 1;
+	if (stab[12] != 0) {
+		gain[0] += log2_fixed_to_fixed(stab[49], 7, 0x10);
+		gain[3] += log2_fixed_to_fixed(stab[50], 7, 0x10);
+		*(uint16_t *)(fsm + 0x18) = (uint16_t)(stab[49] << 1);
+		*(uint16_t *)(fsm + 0x1a) = (uint16_t)(stab[50] << 1);
 	} else {
-		v4 = log2_fixed_to_fixed(*(uint8_t *)(stab + 0x31), 7, 0x10);
-		v0 = log2_fixed_to_fixed(*(uint8_t *)(stab + 0x32), 7, 0x10);
-		*(uint16_t *)(arg1 + 0x18) = *(uint8_t *)((uintptr_t)stab + 0x31) << 1;
-		*(uint16_t *)(arg1 + 0x1a) = *(uint8_t *)((uintptr_t)stab + 0x32) << 1;
+		gain[0] += log2_fixed_to_fixed(*(uint16_t *)(fsm + 0x18), 8, 0x10);
+		gain[3] += log2_fixed_to_fixed(*(uint16_t *)(fsm + 0x1a), 8, 0x10);
+		stab[49] = (uint8_t)(*(uint16_t *)(fsm + 0x18) >> 1);
+		stab[50] = (uint8_t)(*(uint16_t *)(fsm + 0x1a) >> 1);
 	}
 
-	v1 = v4 + s5;
-	v2 = v0 + s6;
-
-	if (v1 < v2)
-		v2 = v1;
-	if (s4 >= v2)
-		s4 = v2;
-	if (s3 < s4)
-		s4 = s3;
-
-	s4_2 = 0xc0000 - s4 - log2_fixed_to_fixed(0x1000 - *(uint16_t *)(*(int32_t *)arg1 + 0xe6), 0, 0x10);
-
-	for (i = 0; (uintptr_t)i != 0x10; i += 4) {
-		result = (uintptr_t)arg1 + (uintptr_t)i;
-		*(int32_t *)(arg1 + (uintptr_t)i + 0x760) = *(int32_t *)(arg1 + (uintptr_t)i) + s4_2;
-	}
-
-	return result;
+	lowest = gain[0] < gain[3] ? gain[0] : gain[3];
+	if (gain[1] < lowest)
+		lowest = gain[1];
+	if (gain[2] < lowest)
+		lowest = gain[2];
+	offset = 0xc0000 - lowest -
+		 log2_fixed_to_fixed(0x1000 - *(uint16_t *)(*(uint8_t **)fsm + 0xe6),
+				     0, 0x10);
+	for (i = 0; i < 4; i++)
+		*(int32_t *)(fsm + 0x760 + 4 * i) = gain[i] + offset;
+	return (int32_t *)(fsm + 0x760);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002e7e0 origin=model_output original=dynamic_dpc_strength_calculate */
