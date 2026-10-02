@@ -738,9 +738,9 @@ static int32_t *num_all_ptr = &num_all;
 
 /* WHOLE_DRIVER_SUPPORT_DECLARATIONS */
 static uint32_t slock;
-static unsigned char data_7eaf4[16384];
-static unsigned char data_7eb94[16384];
-static unsigned char data_7ec34[16384];
+static unsigned char data_7eaf4[4];	/* address-only anchor (sinfo_count_show); was 16 KB */
+static unsigned char data_7eb94[4];	/* address-only anchor (sinfo_count_show); was 16 KB */
+static unsigned char data_7ec34[4];	/* address-only anchor (sinfo_count_show); was 16 KB */
 static uintptr_t sinfo_root;
 static const char LC1[] = "BGGR";
 #ifndef REGTRACE_KERNEL_TREE_BUILD
@@ -1217,7 +1217,13 @@ static const char LC7[] = "GBRI";
 static uint32_t isp_fifostatus[16];
 static uint32_t isp_lastaddr[16];
 static uintptr_t isp_err3;
-static unsigned char data_2000[16384];
+static u8 *t21_vin_subdev;
+/* I2C clients the ISP created for sensors whose driver went away while they
+ * were registered (see t21_vin_forget_sensor()); reaped outside the remove()
+ * callback, before the next registration and at ISP unload. */
+#define T21_STALE_SENSOR_CLIENTS 4
+static struct i2c_client *t21_stale_sensor_client[T21_STALE_SENSOR_CLIENTS];
+static void t21_vin_reap_stale_sensors(void);
 static struct file_operations isp_framesource_fops;
 static unsigned char __attribute__((aligned(4))) fs_subdev_ops[20] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -4150,15 +4156,6 @@ static unsigned char ae_hist_array[1024];
 static unsigned char ae_hist_ir_array[1024];
 static unsigned char tisp_ae_hist[1068];
 static unsigned char tisp_ae_hist_last[1068];
-static volatile uintptr_t data_95330;
-static volatile uintptr_t data_95334;
-static volatile uintptr_t data_95338;
-static volatile uintptr_t data_9533c;
-static volatile uintptr_t data_95340;
-static volatile unsigned char data_95344[16384];
-static volatile unsigned char data_95348[16384];
-static volatile unsigned char data_9534c[16384];
-static volatile unsigned char data_95350[16384];
 static inline uint32_t tisp_ae_abs_diff(uint32_t a, uint32_t b)
 {
 	uint32_t d = a - b;
@@ -6972,7 +6969,7 @@ static unsigned char sinfo_slots[652];
 static unsigned char vic_cmd_buf[44];
 static unsigned char video_input_cmd_buf[128];
 static uintptr_t tmp;
-static unsigned char sub_6cd0_global[16384];
+static unsigned char sub_6cd0_global[4];	/* address-only anchor (sub_6cd0, no caller); was 16 KB */
 static unsigned char lastaddr[20];
 static unsigned char g_sensor_integration[16384];
 static uintptr_t (*cb)();
@@ -7945,6 +7942,13 @@ static void regtrace_patch_relocated_data(void)
     *(const void **)((char *)fs_internal_ops + 0x4) = (const void *)&fs_slake_module;
     *(const void **)((char *)fs_subdev_ops + 0x10) = (const void *)&fs_internal_ops;
     BUILD_BUG_ON(offsetof(struct file_operations, poll) != 0x1c);
+    /* Pin the module while a /dev/framechanN or an isp-w0x proc node is
+     * open (stock leaves .owner NULL: rmmod succeeds with a framechan fd
+     * still open and the later close runs freed module text). */
+    BUILD_BUG_ON(offsetof(struct file_operations, owner) != 0);
+    *(struct module **)fs_channel_ops = THIS_MODULE;
+    isp_vic_frd_fops.owner = THIS_MODULE;
+    isp_framesource_fops.owner = THIS_MODULE;
     *(const void **)((char *)fs_channel_ops + 0x1c) = (const void *)&frame_channel_poll;
     *(const void **)((char *)fs_channel_ops + 0x20) = (const void *)&frame_channel_unlocked_ioctl;
     *(const void **)((char *)fs_channel_ops + 0x2c) = (const void *)&frame_channel_open;
@@ -9303,7 +9307,10 @@ void *private_kmalloc(size_t size, gfp_t flags)
     void *p;
 
     t21_free_watch_check("kmalloc");
-    p = kmalloc(size, flags);
+    /* Always zeroed: the stock tuning getters kmalloc a bounce buffer, fill
+     * it field by field and copy it to user space whole; any field a getter
+     * skips would otherwise leak stale kernel heap. */
+    p = kmalloc(size, flags | __GFP_ZERO);
     t21_free_watch_note_alloc(p, __builtin_return_address(0));
     return p;
 }
@@ -11715,6 +11722,7 @@ int tx_isp_vin_probe(struct platform_device *pdev)
 
 	*(uint32_t *)((char *)vin + 0xd8) = (uint32_t)(unsigned long)vin;
 	private_platform_set_drvdata(pdev, vin);
+	t21_vin_subdev = vin;
 	*(uint32_t *)((char *)vin + 0x34) = (uint32_t)(unsigned long)&video_input_cmd_fops;
 	*(uint32_t *)((char *)vin + 0xf4) = 1;
 
@@ -12101,6 +12109,14 @@ int32_t video_input_cmd_open(uint32_t a0, uint32_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000002ef4 origin=model_output original=video_input_cmd_set */
+/* struct tx_isp_dbg_register of the T21 SDK (o32 layout: reg at +8). */
+struct t21_dbg_register {
+	char *name;
+	unsigned int size;
+	unsigned long long reg;
+	unsigned long long val;
+};
+
 int video_input_cmd_set(void *arg1, int arg2, int arg3)
 {
     int i = 0;
@@ -12126,7 +12142,12 @@ int video_input_cmd_set(void *arg1, int arg2, int arg3)
     if (s2_1 == 0 || (unsigned long)s2_1 >= 0xfffff001UL)
         return -ENOTTY;
 
-    if ((unsigned int)arg3 >= 0x81) {
+    /* Bound the write (stock trusted it) and always NUL-terminate: a
+     * 128-byte write used to fill the static buffer without a terminator
+     * and the parsers below ran off its end. */
+    if (arg3 <= 0 || arg3 > 4096)
+        return -EINVAL;
+    if ((unsigned int)arg3 >= 0x80) {
         s0_1 = kmalloc(arg3 + 1, GFP_KERNEL);
         if (s0_1 == NULL)
             return -ENOMEM;
@@ -12136,33 +12157,39 @@ int video_input_cmd_set(void *arg1, int arg2, int arg3)
     }
 
     if (copy_from_user(s0_1, (void *)arg2, arg3) != 0) {
-        if ((unsigned int)arg3 >= 0x81)
+        if ((unsigned int)arg3 >= 0x80)
             kfree(s0_1);
-        return -EINVAL;
+        return -EFAULT;
     }
+    s0_1[arg3] = 0;
 
     if (video_input_strncmp(s0_1, "r sen_reg", 9) == 0) {
         unsigned long reg;
-        void *var_a8;
-        int var_9c;
+        struct t21_dbg_register dbg;
         void *ops;
         int (*read_fn)(void *, void *);
         int val;
 
         reg = simple_strtoull(s0_1 + 0xa, NULL, 0);
-        var_a8 = (char *)s2_1 + 0x8c;
-        var_9c = 0;
+        /* Stock (0x2750..0x27a4): {name = sd->chip.name, reg, val} on the
+         * stack and sd->ops->core->g_register.  The recovered body called
+         * ops+0xc (the sensor-ops table pointer) and never set reg. */
+        memset(&dbg, 0, sizeof(dbg));
+        dbg.name = (char *)s2_1 + 0x8c;
+        dbg.reg = reg;
         ops = *(void **)((char *)s2_1 + 0xc4);
+        if (ops != NULL)
+            ops = *(void **)ops;
         if (ops != NULL) {
             read_fn = *(void (**)(void *, void *))((char *)ops + 0xc);
             if (read_fn == NULL) {
                 ((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t))printk)((uintptr_t)(KERN_ERR "##### err %s.%d\n"), (uintptr_t)("video_input_cmd_set"), (uintptr_t)(__LINE__));
                 val = 0;
-            } else if (read_fn(s2_1, &var_a8) != 0) {
+            } else if (read_fn(s2_1, &dbg) != 0) {
                 ((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t))printk)((uintptr_t)(KERN_ERR "##### err %s.%d\n"), (uintptr_t)("video_input_cmd_set"), (uintptr_t)(__LINE__));
                 val = 0;
             } else {
-                val = *(int *)((char *)&var_a8 + 0);
+                val = (int)dbg.val;
             }
         } else {
             ((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t))printk)((uintptr_t)(KERN_ERR "##### err %s.%d\n"), (uintptr_t)("video_input_cmd_set"), (uintptr_t)(__LINE__));
@@ -12170,7 +12197,7 @@ int video_input_cmd_set(void *arg1, int arg2, int arg3)
         }
         ((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))seq_printf)((uintptr_t)(seq), (uintptr_t)("isp: sensor reg read 0x%x(0x%x)\n"), (uintptr_t)((unsigned int)reg), (uintptr_t)((unsigned int)val));
         sprintf(video_input_cmd_buf, "0x%x\n", (unsigned int)val);
-        s3_1 = ((unsigned int)arg3 < 0x81) ? 1 : 0;
+        s3_1 = ((unsigned int)arg3 < 0x80) ? 1 : 0;
         goto out;
     }
 
@@ -12178,126 +12205,58 @@ int video_input_cmd_set(void *arg1, int arg2, int arg3)
         char *end;
         unsigned long reg;
         unsigned long val;
-        void *var_a8;
+        struct t21_dbg_register dbg;
         void *ops;
         int (*write_fn)(void *, void *);
         const char *status;
 
         end = NULL;
         reg = simple_strtoull(s0_1 + 0xa, &end, 0);
-        val = simple_strtoull(end + 1, NULL, 0);
+        val = (end && *end) ? simple_strtoull(end + 1, NULL, 0) : 0;
         ((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))seq_printf)((uintptr_t)(seq), (uintptr_t)("isp: sensor reg write 0x%x(0x%x)\n"), (uintptr_t)((unsigned int)reg), (uintptr_t)((unsigned int)val));
-        var_a8 = (char *)s2_1 + 0x8c;
+        /* Stock (0x2890..0x28cc): {name, reg, val} and core->s_register. */
+        memset(&dbg, 0, sizeof(dbg));
+        dbg.name = (char *)s2_1 + 0x8c;
+        dbg.reg = reg;
+        dbg.val = val;
         ops = *(void **)((char *)s2_1 + 0xc4);
+        if (ops != NULL)
+            ops = *(void **)ops;
         if (ops == NULL) {
             status = "failed";
         } else {
             write_fn = *(void (**)(void *, void *))((char *)ops + 0x10);
             if (write_fn == NULL) {
                 status = "failed";
-            } else if (write_fn(s2_1, &var_a8) != 0) {
+            } else if (write_fn(s2_1, &dbg) != 0) {
                 status = "failed";
             } else {
                 status = "ok";
             }
         }
-        s3_1 = ((unsigned int)arg3 < 0x81) ? 1 : 0;
+        s3_1 = ((unsigned int)arg3 < 0x80) ? 1 : 0;
         sprintf(video_input_cmd_buf, "%s\n", status);
         goto out;
     }
 
     if (video_input_strncmp(s0_1, "mscaler", 7) == 0) {
-        char *buf;
-        char *end;
-        char *p;
-        char *tok[8];
-        unsigned long vals[8];
-        int i;
-        unsigned long ch;
-        void *chan;
-        void *chan_obj;
-        int (*set_crop)(void *, void *);
-        int *var_68;
-        int *var_54;
-        int *var_50;
-        int var_48;
-        int var_44;
-        int var_40;
-        int var_3c;
-
-        buf = kmalloc(arg3 + 1, GFP_KERNEL);
-        if (buf == NULL)
-            return -ENOMEM;
-        memset(buf, 0, arg3 + 1);
-        if (copy_from_user(buf, (char *)arg2 + 8, arg3) != 0) {
-            kfree(buf);
-            return -EINVAL;
-        }
-
-        p = buf;
-        for (i = 0; i < 8; i++) {
-            end = strstr(p, ",");
-            if (end == NULL)
-                break;
-            *end = 0;
-            ((void **)tok)[i] = p;
-            p = end + 1;
-        }
-        end = strstr(buf, ",");
-        ch = simple_strtoul(buf, &end, 0);
-        for (i = 0; i < 8; i++) {
-            ((void **)vals)[i] = simple_strtoul(tok[i], &end, 0);
-        }
-
-        if (ch != 0)
-            chan = (void *)0x1;
-        else
-            chan = (void *)0x0;
-
-        if (chan == NULL) {
-            set_crop = NULL;
-        } else if ((unsigned long)chan < 0xfffff001UL) {
-            chan_obj = *(void **)chan;
-            if (chan_obj == NULL) {
-                set_crop = NULL;
-            } else if ((unsigned long)chan_obj < 0xfffff001UL) {
-                set_crop = *(int (**)(void *, void *))((char *)chan_obj + 0xd4);
-            } else {
-                set_crop = NULL;
-            }
-        } else {
-            set_crop = NULL;
-        }
-
-        tisp_channel_stop_save();
-        var_68 = *(int *)((char *)((char *)&sinfo_slots + 0x120));
-        var_54 = *(int *)((char *)((char *)&sinfo_slots + 0x124));
-        var_50 = *(int *)((char *)((char *)&sinfo_slots + 0x128));
-        if (var_68 == 0) {
-            var_48 = 0;
-            var_44 = 0;
-            var_40 = var_54;
-            var_3c = var_50;
-        } else {
-            var_48 = *(int *)((char *)((char *)&sinfo_slots + 0x12c));
-            var_44 = *(int *)((char *)((char *)&sinfo_slots + 0x130));
-            var_40 = *(int *)((char *)((char *)&sinfo_slots + 0x134));
-            var_3c = *(int *)((char *)((char *)&sinfo_slots + 0x138));
-        }
-        tisp_channel_attr_set_crop_scaler((unsigned char)ch, &var_54);
-        s3_1 = ((unsigned int)arg3 < 0x81) ? 1 : 0;
-        tisp_channel_start_restore();
-        kfree(buf);
-        goto out;
+        /* The recovered "mscaler" body dereferenced the constant (void *)1,
+         * parsed uninitialised token pointers and programmed the scaler from
+         * unrelated BSS (with a possible divide by zero).  Refuse it rather
+         * than oops; the frame-source crop/scaler ioctls remain available. */
+        sprintf(video_input_cmd_buf, "failed\n");
+        if ((unsigned int)arg3 >= 0x80)
+            kfree(s0_1);
+        return -EINVAL;
     }
 
     sprintf(video_input_cmd_buf, "null", 0);
-    s3_1 = ((unsigned int)arg3 < 0x81) ? 1 : 0;
+    s3_1 = ((unsigned int)arg3 < 0x80) ? 1 : 0;
 
 out:
     if (s3_1 != 0)
         return arg3;
-    if ((unsigned int)arg3 >= 0x81)
+    if ((unsigned int)arg3 >= 0x80)
         kfree(s0_1);
     return arg3;
 }
@@ -12536,6 +12495,7 @@ int32_t subdev_sensor_ops_ioctl(void *file, int32_t cmd, void *arg)
 			void *subdev = NULL;
 			void *board_info;
 
+			t21_vin_reap_stale_sensors();
 			if (type == 1) {
 				int32_t adapter_nr = *(int32_t *)((char *)arg + 0x3c);
 				struct i2c_adapter *adap = private_i2c_get_adapter(adapter_nr);
@@ -12562,7 +12522,11 @@ int32_t subdev_sensor_ops_ioctl(void *file, int32_t cmd, void *arg)
 				((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))isp_printf)((uintptr_t)(1), (uintptr_t)("%s[%d] the type of sensor SBUS hasn't been defined.\n"), (uintptr_t)("subdev_sensor_ops_register_sensor"), (uintptr_t)(101));
 				return -22;
 			}
-			board_info = (void *)0x27397530;
+			/* SBUS type 2 has no subdevice behind it here; the recovered
+			 * body then copied the record to a fixed bogus address. */
+			isp_printf(1, "%s[%d] sensor SBUS type 2 is not supported.\n",
+				   "subdev_sensor_ops_register_sensor", 101);
+			return -EINVAL;
 register_sensor:
 			memcpy((char *)board_info + 0xec, arg, 0x50);
 			if (subdev) {
@@ -12604,7 +12568,10 @@ register_sensor:
 				struct i2c_adapter *adap2 = *(struct i2c_adapter **)((char *)i2c_client + 0x18);
 				if (adap2)
 					private_i2c_put_adapter(adap2);
+				/* The sensor's i2c remove() deinits and frees the
+				 * subdevice; touching it afterwards is a use-after-free. */
 				private_i2c_unregister_device((struct i2c_client *)i2c_client);
+				return -22;
 			}
 			tx_isp_subdev_deinit((uintptr_t)subdev);
 			return -22;
@@ -12639,7 +12606,9 @@ register_sensor:
 					break;
 				node = *(void **)((char *)node + 0xe4) - 0xe4;
 			}
-			if (!node) {
+			if (!node || (char *)node + 0xe4 == end) {
+				/* No sensor of that name: the walk ended on the list
+				 * head, which must not be unlinked as a sensor. */
 				private_mutex_unlock((struct mutex *)((char *)file + 0xe8));
 				return 0;
 			}
@@ -13816,7 +13785,8 @@ int32_t apical_isp_gamma_g_attr_isra_63(uintptr_t a0)
 	}
 	for (i = 0; i < 129; i++)
 		out[i] = (uint16_t)gamma[i];
-	private_copy_to_user(*(void **)((char *)a0 + 4), out, sizeof(out));
+	if (private_copy_to_user(*(void **)((char *)a0 + 4), out, sizeof(out)))
+		return -EFAULT;
 	return 0;	/* OEM returns the tisp_g_Gamma result */
 }
 
@@ -13980,8 +13950,12 @@ int32_t apical_isp_af_hist_g_attr_isra_73(void *arg1)
 		uint8_t  f11;
 	} buf;
 
+	/* 22 bytes of fields in a 24-byte record: clear the tail padding so
+	 * no kernel stack reaches user space. */
+	memset(&buf, 0, sizeof(buf));
 	tisp_g_af_attr(&buf);
-	private_copy_to_user(*(uint32_t *)((char *)arg1 + 4), &buf, 24);
+	if (private_copy_to_user(*(uint32_t *)((char *)arg1 + 4), &buf, 24))
+		return -EFAULT;
 	return 0;
 }
 
@@ -14044,9 +14018,11 @@ static long isp_core_tunning_unlocked_ioctl(struct file *file, unsigned int cmd,
 	int32_t buf[3];
 	void *ops;
 
-	ops = *(void **)((char *)file + 0x70);
-	ops = *(void **)((char *)ops + 0xc8);
-	ops = *(void **)((char *)ops + 0x19c);
+	/* Same file->private_data->core->tuning walk as open/release, but
+	 * checked: the raw chain oopsed on a node whose core has no tuning. */
+	ops = t21_tuning_state_from_file(file);
+	if (!ops)
+		return -ENODEV;
 	pr_debug("tx-isp-t21: tuning ioctl enter cmd=%#x arg=%#lx state=%d pid=%d\n",
 		cmd, arg, *(int32_t *)((char *)ops + 0x40c4), current->pid);
 
@@ -14206,7 +14182,15 @@ int private_i2c_transfer(struct i2c_adapter *adap, struct i2c_msg *msgs, int num
 
 void private_i2c_del_driver(struct i2c_driver *driver)
 {
-    i2c_del_driver(driver);
+#ifdef TX_ISP_T21_SHARED_SINFO
+	/* The sensor module published this driver to /proc/jz/sensor through
+	 * tx_isp_sinfo_driver_add() at insmod.  Drop the slot before the module
+	 * text goes away; otherwise the registry keeps a dangling drv/owner and
+	 * the next /proc/jz/sensor read or sensor re-insmod dereferences freed
+	 * module memory.  T31 does the same in its private_i2c_del_driver(). */
+	tx_isp_sinfo_driver_del(driver);
+#endif
+	i2c_del_driver(driver);
 }
 
 
@@ -16455,7 +16439,10 @@ int tx_isp_fs_probe(struct platform_device *pdev)
 		memset(channel + 0x24, 0, 0x210);
 		*(u32 *)(channel + 0x3c) = 2;
 		*(u32 *)(channel + 0x34) = 0x80;
-		*(void **)(channel + 0x38) = &data_2000;
+		/* Stock stores the constant 0x2000 here (li a0,8192; sw a0,56(s0)
+		 * at 0x7c38); the decompiler had turned it into the address of a
+		 * 16 KB placeholder array.  Nothing reads the field. */
+		*(u32 *)(channel + 0x38) = 0x2000;
 		*(u8 **)(channel + 0x210) = channel + 0x210;
 		*(u8 **)(channel + 0x214) = channel + 0x210;
 		*(u32 *)(channel + 0x24) = 1;
@@ -17653,10 +17640,18 @@ int32_t tx_isp_unregister_platforms(void *arg0)
 			*(struct platform_device **)(platforms + i * 8);
 		void **driver = *(void ***)(platforms + i * 8 + 4);
 
-		if (driver && driver[1])
+		/* tx_isp_probe() registers a child only when it found its driver
+		 * table (and NULLs the device slot when the registration failed);
+		 * a slot with a device but no driver was never registered, and
+		 * platform_device_unregister() on it would oops. */
+		if (!driver)
+			continue;
+		if (driver[1])
 			((int (*)(struct platform_device *))driver[1])(pdev);
 		if (pdev)
 			private_platform_device_unregister(pdev);
+		*(void **)(platforms + i * 8) = NULL;
+		*(void **)(platforms + i * 8 + 4) = NULL;
 	}
 	return 0;
 }
@@ -19457,6 +19452,91 @@ int32_t tx_isp_module_init(void *arg1, void *arg2)
     return 0;
 }
 
+/*
+ * A sensor module calls tx_isp_subdev_deinit() from its i2c remove().  When
+ * that happens while the sensor is still on the VIN's registered list (the
+ * sensor module was rmmod'ed, or its I2C client unregistered, before the ISP
+ * released it), stock leaves the freed sensor on the list and as the active
+ * input: the next enum/set-input/stream ioctl or the VIN slake on close walks
+ * freed memory.  Unlink it here (same list poison as the stock release path)
+ * and drop it as the active input.
+ */
+static void t21_vin_forget_sensor(u8 *subdev)
+{
+	u8 *vin = t21_vin_subdev;
+	void *host;
+	void *head;
+	void **node;
+
+	if (!vin || subdev == vin)
+		return;
+	host = *(void **)(subdev + 0xd8);
+	head = vin + 0xdc;
+	private_mutex_lock((struct mutex *)(vin + 0xe8));
+	for (node = *(void ***)head; node && (void *)node != head;
+	     node = (void **)*node) {
+		u8 *entry = (u8 *)node - 0xe4;
+		void **prev;
+
+		if (entry != subdev && entry != host)
+			continue;
+		prev = (void **)node[1];
+		*(void **)((u8 *)node[0] + 4) = prev;
+		*prev = node[0];
+		node[0] = (void *)0x100100;
+		node[1] = (void *)0x200200;
+		if (*(u8 **)(vin + 0xe4) == entry) {
+			*(void **)(vin + 0xe4) = NULL;
+			if (*(u32 *)(vin + 0xf4) > 2)
+				*(u32 *)(vin + 0xf4) = 2;
+		}
+		/* Registered over I2C (type 1): the client stays on the adapter
+		 * (and keeps its address busy) until the ISP unregisters it. */
+		if (*(u32 *)(entry + 0x10c) == 1) {
+			struct i2c_client *client =
+				*(struct i2c_client **)(subdev + 0xd4);
+			u32 k;
+
+			for (k = 0; client && k < T21_STALE_SENSOR_CLIENTS; k++) {
+				if (!t21_stale_sensor_client[k]) {
+					t21_stale_sensor_client[k] = client;
+					break;
+				}
+			}
+		}
+		isp_printf(1, "sensor subdev %p removed while registered; unlinked from vin\n",
+			   subdev);
+		break;
+	}
+	private_mutex_unlock((struct mutex *)(vin + 0xe8));
+}
+
+static void t21_vin_reap_stale_sensors(void)
+{
+	struct i2c_client *stale[T21_STALE_SENSOR_CLIENTS];
+	u8 *vin = t21_vin_subdev;
+	u32 k;
+
+	if (!vin)
+		return;
+	private_mutex_lock((struct mutex *)(vin + 0xe8));
+	for (k = 0; k < T21_STALE_SENSOR_CLIENTS; k++) {
+		stale[k] = t21_stale_sensor_client[k];
+		t21_stale_sensor_client[k] = NULL;
+	}
+	private_mutex_unlock((struct mutex *)(vin + 0xe8));
+	for (k = 0; k < T21_STALE_SENSOR_CLIENTS; k++) {
+		struct i2c_adapter *adap;
+
+		if (!stale[k])
+			continue;
+		adap = stale[k]->adapter;
+		private_i2c_unregister_device(stale[k]);
+		if (adap)
+			private_i2c_put_adapter(adap);
+	}
+}
+
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b534 origin=fragment_seed original=tx_isp_module_deinit */
 int32_t tx_isp_module_deinit(uint32_t a0)
 {
@@ -19593,6 +19673,8 @@ int32_t tx_isp_subdev_deinit(uintptr_t a0)
 
 	if (!subdev)
 		return 0;
+
+	t21_vin_forget_sensor(subdev);
 
 	if (*(u32 *)(subdev + 0x30))
 		private_misc_deregister((struct miscdevice *)(subdev + 0xc));
@@ -21402,6 +21484,9 @@ tisp_ev_update0x84:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000e194 origin=model_output original=tisp_deinit */
+/* true once the ISP was reset after the last tisp_init(): no stats DMA. */
+static bool t21_tisp_stats_quiesced = true;
+
 int32_t tisp_deinit(void)
 {
 	int32_t ret;
@@ -21420,7 +21505,17 @@ int32_t tisp_deinit(void)
 	}
 
 
-	/* The statistics buffers stay allocated (see t21_tisp_stats). */
+	/* The statistics buffers stay allocated (see t21_tisp_stats): the ISP
+	 * keeps their DMA addresses (0x72c.., 0x83c.., 0xe28.., 0x1464..,
+	 * 0x9a8..) and writes AE/AWB/AF/ADR statistics there whenever it sees
+	 * frames, until the next tisp_init() reprograms them.  Put the block
+	 * through the same soft reset ispcore_core_ops_init() does before
+	 * tisp_init(), so no stale DMA can reach the buffers once
+	 * t21_tisp_stats_free() returns them at module exit (after an rmmod the
+	 * slab hands that memory to the next instance, e.g. its 0x40d0-byte
+	 * tuning state, whose event pointer then got overwritten by AE
+	 * histogram data). */
+	t21_tisp_stats_quiesced = private_reset_tx_isp_module(0) == 0;
 	info->ae_buffer = NULL;
 	info->awb_buffer = NULL;
 	info->af_buffer = NULL;
@@ -21749,6 +21844,12 @@ static void t21_tisp_stats_free(void)
 {
 	unsigned int i;
 
+	if (!t21_tisp_stats_quiesced) {
+		/* The hardware may still DMA into them: leaking ~88 KB is
+		 * better than letting statistics land in reused memory. */
+		pr_warn("tx-isp-t21: ISP not quiesced, keeping statistics buffers\n");
+		return;
+	}
 	for (i = 0; i < ARRAY_SIZE(t21_tisp_stats); i++) {
 		private_kfree(t21_tisp_stats[i]);
 		t21_tisp_stats[i] = NULL;
@@ -21928,6 +22029,7 @@ int32_t tisp_init(int32_t *arg1)
 	system_reg_write(0xc, t21_top_bypass_fix(loop_acc));
 	system_reg_write(0x1c, 0x200000);
 
+	t21_tisp_stats_quiesced = false;
 	buf1 = t21_tisp_stats_buffer(0);
 	pr_debug("tx-isp-t21: tisp buf1=%p irq_disabled=%d pid=%d\n",
 		buf1, irqs_disabled(), current->pid);
@@ -42032,22 +42134,6 @@ int32_t tisp_ae_get_hist(uint32_t *arg1, uint32_t arg2, uint32_t arg3)
 	memcpy(&previous[256], &hist_state[256], 5 * sizeof(u32));
 	private_spin_unlock_irqrestore(&t21_ae_hist_lock, flags);
 
-	/* Preserve the legacy BSS layout until the remaining offset-based
-	 * recovery is removed; these wrongly-sized placeholders are otherwise
-	 * optimized away and would move later anchor objects. */
-	(void)*(volatile u32 *)&data_95330;
-	(void)*(volatile u32 *)&data_95334;
-	(void)*(volatile u32 *)&data_95338;
-	(void)*(volatile u32 *)&data_9533c;
-	(void)*(volatile u32 *)&data_95340;
-	(void)*(volatile u32 *)&data_95344[0];
-	(void)*(volatile u32 *)&data_95344[sizeof(data_95344) - sizeof(u32)];
-	(void)*(volatile u32 *)&data_95348[0];
-	(void)*(volatile u32 *)&data_95348[sizeof(data_95348) - sizeof(u32)];
-	(void)*(volatile u32 *)&data_9534c[0];
-	(void)*(volatile u32 *)&data_9534c[sizeof(data_9534c) - sizeof(u32)];
-	(void)*(volatile u32 *)&data_95350[0];
-	(void)*(volatile u32 *)&data_95350[sizeof(data_95350) - sizeof(u32)];
 	return 0;
 }
 
@@ -50680,6 +50766,13 @@ int32_t ispcore_slake_module(void *arg1)
 	tuning = *(void **)(core + 0x19c);
 	T21_STOP_TRACE("core slake: tuning %p event fn=%p", tuning,
 		       *(void **)((u8 *)tuning + 0x40cc));
+	/* The slot is only ever isp_core_tuning_event (isp_core_tuning_init);
+	 * a corrupted slot must not become an indirect jump. */
+	if (*(void **)((u8 *)tuning + 0x40cc) != (void *)isp_core_tuning_event) {
+		pr_err("tx-isp-t21: tuning event slot corrupted (%p), restoring\n",
+		       *(void **)((u8 *)tuning + 0x40cc));
+		*(void **)((u8 *)tuning + 0x40cc) = (void *)isp_core_tuning_event;
+	}
 	((void (*)(void *, u32, u32))
 	 *(void **)((u8 *)tuning + 0x40cc))(tuning, 0x4000001, 0);
 	T21_STOP_TRACE("core slake: tuning event done");
@@ -51280,6 +51373,10 @@ int tx_isp_vin_remove(struct platform_device *pdev)
 	if (!vin || (uintptr_t)vin >= (uintptr_t)-4095)
 		vin = NULL;
 	private_platform_set_drvdata(pdev, NULL);
+	if (vin && vin == t21_vin_subdev) {
+		t21_vin_reap_stale_sensors();
+		t21_vin_subdev = NULL;
+	}
 	tx_isp_subdev_deinit((uintptr_t)vin);
 	private_kfree(vin);
 	return 0;
