@@ -2620,12 +2620,17 @@ static ssize_t isp_gamma_put(struct file *file, const char __user *buffer, size_
 	char *pe;
 	char *bufe;
 
-	char *buf = kzalloc((count+1), GFP_KERNEL);
+	char *buf;
+
+	/* Every command fits a page; do not let a write size the allocation. */
+	if (count > PAGE_SIZE)
+		return -EINVAL;
+	buf = kzalloc((count+1), GFP_KERNEL);
 	if (!buf)
 		return -ENOMEM;
 	if (copy_from_user(buf, buffer, count)) {
 		kfree(buf);
-		return EFAULT;
+		return -EFAULT;
 	}
 	printk("%s\n", buf);
 
@@ -2708,12 +2713,17 @@ static ssize_t isp_de_hilight_strength_set(struct file *file, const char __user 
 	struct tx_isp_core_device *core = m->private;
 	struct v4l2_control ctrl;
 
-	char *buf = kzalloc((count+1), GFP_KERNEL);
+	char *buf;
+
+	/* Every command fits a page; do not let a write size the allocation. */
+	if (count > PAGE_SIZE)
+		return -EINVAL;
+	buf = kzalloc((count+1), GFP_KERNEL);
 	if (!buf)
 		return -ENOMEM;
 	if (copy_from_user(buf, buffer, count)) {
 		kfree(buf);
-		return EFAULT;
+		return -EFAULT;
 	}
 	v = simple_strtoull(buf, NULL, 0);
 	ctrl.id = IMAGE_TUNING_CID_HILIGHT_DEPRESS_STRENGTH;
@@ -2853,12 +2863,17 @@ static ssize_t isp_cmd_set(struct file *file, const char __user *buffer, size_t 
 	struct seq_file *m = file->private_data;
 	struct tx_isp_core_device *core = m->private;
 
-	char *buf = kzalloc((count+1), GFP_KERNEL);
+	char *buf;
+
+	/* Every command fits a page; do not let a write size the allocation. */
+	if (count > PAGE_SIZE)
+		return -EINVAL;
+	buf = kzalloc((count+1), GFP_KERNEL);
 	if (!buf)
 		return -ENOMEM;
 	if (copy_from_user(buf, buffer, count)) {
 		kfree(buf);
-		return EFAULT;
+		return -EFAULT;
 	}
 	//printk("##### %s\n", buf);
 #ifdef CONFIG_VIDEO_ADV_DEBUG
@@ -3030,15 +3045,16 @@ int register_tx_isp_core_device(struct platform_device *pdev, struct v4l2_device
 	/* creat the node of printing isp info */
 	proc = jz_proc_mkdir("isp");
 	if (!proc) {
+		/* Without the directory the entries would land in /proc itself
+		 * and never be removed again. */
 		v4l2_err(v4l2_dev, "create dev_attr_isp_info failed!\n");
-		printk("################## %s %d ############################\n",__func__,__LINE__);
+	} else {
+		proc_create_data("isp_info", S_IRUGO, proc, &isp_info_proc_fops, (void *)core_dev);
+		proc_create_data("isp-m0", S_IRUGO, proc, &isp_m0_proc_fops, (void *)core_dev);
+		proc_create_data("isp_gamma", S_IRUGO, proc, &isp_gamma_proc_fops, (void *)core_dev);
+		proc_create_data("isp_de_hilight", S_IRUGO, proc, &isp_de_hilight_fops, (void *)core_dev);
+		proc_create_data("cmd", S_IRUGO, proc, &isp_cmd_fops, (void *)core_dev);
 	}
-	proc_create_data("isp_info", S_IRUGO, proc, &isp_info_proc_fops, (void *)core_dev);
-	proc_create_data("isp-m0", S_IRUGO, proc, &isp_m0_proc_fops, (void *)core_dev);
-	proc_create_data("isp_gamma", S_IRUGO, proc, &isp_gamma_proc_fops, (void *)core_dev);
-	proc_create_data("isp_de_hilight", S_IRUGO, proc, &isp_de_hilight_fops, (void *)core_dev);
-
-	proc_create_data("cmd", S_IRUGO, proc, &isp_cmd_fops, (void *)core_dev);
 
 	core_dev->proc = proc;
 	return ISP_SUCCESS;
@@ -3066,6 +3082,11 @@ void release_tx_isp_core_device(struct v4l2_subdev *sd)
 {
 	struct tx_isp_core_device *core = v4l2_get_subdevdata(sd);
 
+	/* proc readers dereference core and its registers: remove them first. */
+	if (core->proc) {
+		proc_remove(core->proc);
+		core->proc = NULL;
+	}
 	cancel_work_sync(&core->daynight_work);
 	tx_isp_image_tuning_device_release(core->tun);
 	isp_core_frame_channel_deinit(core);
@@ -3078,7 +3099,5 @@ void release_tx_isp_core_device(struct v4l2_subdev *sd)
 
 	iounmap(core->base);
 	release_mem_region(core->res->start,core->res->end - core->res->start + 1);
-	if (core->proc)
-		proc_remove(core->proc);
 	kfree(core);
 }

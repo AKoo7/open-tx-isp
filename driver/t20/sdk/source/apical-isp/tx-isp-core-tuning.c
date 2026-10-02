@@ -70,7 +70,8 @@ static int apical_isp_wb_s_control(struct tx_isp_core_device *core, struct v4l2_
 		status = apical_command(api.type, api.id, api.value, api.dir, &reason);
 		break;
 	case IMAGE_TUNING_CID_AWB_ATTR:
-		copy_from_user(attr, (const void __user *)control->value, sizeof(*attr));
+		if (copy_from_user(attr, (const void __user *)control->value, sizeof(*attr)))
+			return -EFAULT;
 		/* sets the lowest color temperature that the AWB algorithm can select */
 		api.id = AWB_RANGE_LOW_ID;
 		api.value = attr->low_color_temp / 100;
@@ -93,7 +94,8 @@ static int apical_isp_wb_s_control(struct tx_isp_core_device *core, struct v4l2_
 #endif
 			break;
 	case IMAGE_TUNING_CID_MWB_ATTR:
-		copy_from_user(mattr, (const void __user *)control->value, sizeof(*mattr));
+		if (copy_from_user(mattr, (const void __user *)control->value, sizeof(*mattr)))
+			return -EFAULT;
 		if(wb_mode->cur.val == V4L2_WHITE_BALANCE_MANUAL){
 			api.id = AWB_RGAIN_ID;
 			api.value = mattr->red_gain;
@@ -172,7 +174,8 @@ static int apical_isp_ae_s_control(struct tx_isp_core_device *core, struct v4l2_
 		}
 		break;
 	case IMAGE_TUNING_CID_AE_ATTR:
-		copy_from_user(attr, (const void __user *)control->value, sizeof(*attr));
+		if (copy_from_user(attr, (const void __user *)control->value, sizeof(*attr)))
+			return -EFAULT;
 		api.id = AE_ROI_ID;
 		api.value = attr->zone_sel.val;
 		status = apical_command(api.type, api.id, api.value, api.dir, &reason);
@@ -203,17 +206,19 @@ static int apical_isp_ae_g_attr(struct tx_isp_core_device *core, struct v4l2_con
 	api.id = AE_GAIN_ID;
 	api.value = -1;
 	status = apical_command(api.type, api.id, api.value, api.dir, &reason);
-	attr->gain = api.value;
+	attr->gain = reason;
 	/* get exposure compensation */
 	api.id = AE_COMPENSATION_ID;
 	api.value = -1;
 	status = apical_command(api.type, api.id, api.value, api.dir, &reason);
-	attr->comp = api.value;
+	attr->comp = reason;
 	/* get exposure ROI */
 	api.id = AE_ROI_ID;
+	api.value = -1;
 	status = apical_command(api.type, api.id, api.value, api.dir, &reason);
-	attr->zone_sel.val = api.value;
-	copy_to_user((void __user *)control->value, (const void *)attr, sizeof(*attr));
+	attr->zone_sel.val = reason;
+	if (copy_to_user((void __user *)control->value, (const void *)attr, sizeof(*attr)))
+		return -EFAULT;
 #if 0
 	/* config the weight of every zone  */
 	for(i = 0; i < WEIGHT_ZONE_NUM; i++)
@@ -232,7 +237,8 @@ static inline int apical_isp_g_totalgain(struct tx_isp_core_device *core, struct
 
 	total_gain = math_exp2(total_gain, 5, 8);
 
-	copy_to_user((void __user *)control->value, (const void *)&total_gain, sizeof(unsigned int));
+	if (copy_to_user((void __user *)control->value, (const void *)&total_gain, sizeof(unsigned int)))
+		return -EFAULT;
 	return ISP_SUCCESS;
 }
 
@@ -261,7 +267,8 @@ static int apical_isp_af_s_control(struct tx_isp_core_device *core, struct v4l2_
 			status = apical_command(api.type, api.id, api.value, api.dir, &reason);
 			break;
 		case IMAGE_TUNING_CID_AF_ATTR:
-			copy_from_user(attr, (const void __user *)control->value, sizeof(*attr));
+			if (copy_from_user(attr, (const void __user *)control->value, sizeof(*attr)))
+				return -EFAULT;
 			api.id = AF_RANGE_LOW_ID;
 			api.value = attr->af_low_range;
 			status = apical_command(api.type, api.id, api.value, api.dir, &reason);
@@ -379,7 +386,8 @@ static int apical_isp_sinter_dns_s_attr(struct tx_isp_core_device *core, struct 
 	int reason = 0;
 	int ret = ISP_SUCCESS;
 
-	copy_from_user(attr, (const void __user*)control->value, sizeof(*attr));
+	if (copy_from_user(attr, (const void __user*)control->value, sizeof(*attr)))
+		return -EFAULT;
 
 	api.type = TALGORITHMS;
 	api.dir = COMMAND_SET;
@@ -528,7 +536,8 @@ static int apical_isp_temper_dns_s_attr(struct tx_isp_core_device *core, struct 
 	int reason = 0;
 	int ret = ISP_SUCCESS;
 
-	copy_from_user(attr, (const void __user*)control->value, sizeof(*attr));
+	if (copy_from_user(attr, (const void __user*)control->value, sizeof(*attr)))
+		return -EFAULT;
 	if(temper->val == ISPCORE_TEMPER_MODE_MANUAL){
 		api.type = TALGORITHMS;
 		api.dir = COMMAND_SET;
@@ -568,8 +577,9 @@ static int apical_isp_temper_dns_g_attr(struct tx_isp_core_device *core, struct 
 			printk("##[%s %d] failed to temper set command(status = %d)\n", __func__, __LINE__,status);
 			ret = -ISP_ERROR;
 		}else{
-			attr->manual_strength = api.value;
-			copy_to_user((void __user*)control->value, (const void *)attr, sizeof(*attr));
+			attr->manual_strength = reason;
+			if (copy_to_user((void __user*)control->value, (const void *)attr, sizeof(*attr)))
+				return -EFAULT;
 		}
 	}
 	return ret;
@@ -674,7 +684,8 @@ static inline int apical_isp_drc_s_attr(struct tx_isp_core_device *core, struct 
 	unsigned char status = ISP_SUCCESS;
 	int reason = 0;
 
-	copy_from_user(attr, (const void __user *)control->value, sizeof(*attr));
+	if (copy_from_user(attr, (const void __user *)control->value, sizeof(*attr)))
+		return -EFAULT;
 	api.type = TALGORITHMS;
 	api.dir = COMMAND_SET;
 	api.id = IRIDIX_STRENGTH_ID;
@@ -701,7 +712,8 @@ static inline int apical_isp_drc_g_attr(struct tx_isp_core_device *core, struct 
 	attr->slope_min = apical_isp_iridix_slope_min_read();
 	attr->black_level = apical_isp_iridix_black_level_read();
 	attr->white_level = apical_isp_iridix_white_level_read();
-	copy_to_user((void __user*)control->value, (const void *)attr, sizeof(*attr));
+	if (copy_to_user((void __user*)control->value, (const void *)attr, sizeof(*attr)))
+		return -EFAULT;
 
 	return 0;
 }
@@ -725,7 +737,8 @@ static inline int apical_isp_noise_profile_s_attr(struct tx_isp_core_device *cor
 	image_tuning_vdrv_t *tuning = video_get_drvdata(video);
 	struct isp_core_noise_profile_attr *attr = &tuning->ctrls.np_attr;
 
-	copy_from_user(attr, (const void __user *)control->value, sizeof(*attr));
+	if (copy_from_user(attr, (const void __user *)control->value, sizeof(*attr)))
+		return -EFAULT;
 	return ISP_SUCCESS;
 }
 static inline int apical_isp_wdr_s_control(struct tx_isp_core_device *core, struct v4l2_control *control)
@@ -778,7 +791,8 @@ static inline int apical_isp_wdr_s_attr(struct tx_isp_core_device *core, struct 
 	image_tuning_vdrv_t *tuning = video_get_drvdata(video);
 	struct isp_core_wdr_attr *attr = &tuning->ctrls.wdr_attr;
 
-	copy_from_user(attr, (const void __user *)control->value, sizeof(*attr));
+	if (copy_from_user(attr, (const void __user *)control->value, sizeof(*attr)))
+		return -EFAULT;
 	apical_isp_frame_stitch_short_thresh_write(attr->short_thresh);
 	apical_isp_frame_stitch_long_thresh_write(attr->long_thresh);
 	apical_isp_frame_stitch_exposure_ratio_write(attr->exp_ratio);
@@ -959,7 +973,8 @@ static int apical_isp_lens_shad_s_attr(struct tx_isp_core_device *core, struct v
 	struct isp_core_shading_attr *attr = &tuning->ctrls.shad_attr;
 	int i, base;
 
-	copy_from_user(attr, (const void __user *)control->value, sizeof(*attr));
+	if (copy_from_user(attr, (const void __user *)control->value, sizeof(*attr)))
+		return -EFAULT;
 	apical_isp_mesh_shading_mesh_alpha_mode_write(attr->mesh_mode);
 	apical_isp_mesh_shading_mesh_scale_write(attr->mesh_scale);
 	apical_isp_mesh_shading_mesh_page_r_write(attr->r_page);
@@ -999,7 +1014,8 @@ static inline int apical_isp_ge_s_attr(struct tx_isp_core_device *core, struct v
 	image_tuning_vdrv_t *tuning = video_get_drvdata(video);
 	struct isp_core_green_eq_attr *attr = &tuning->ctrls.ge_attr;
 
-	copy_from_user(attr, (const void __user *)control->value, sizeof(*attr));
+	if (copy_from_user(attr, (const void __user *)control->value, sizeof(*attr)))
+		return -EFAULT;
 	if(attr->mode){
 		apical_isp_raw_frontend_ge_strength_write(attr->strength);
 		apical_isp_raw_frontend_ge_threshold_write(attr->threshold);
@@ -1037,7 +1053,8 @@ static int apical_isp_dynamic_dp_s_attr(struct tx_isp_core_device *core, struct 
 	image_tuning_vdrv_t *tuning = video_get_drvdata(video);
 	struct isp_core_dynamic_defect_pixel_attr *attr = &tuning->ctrls.ddp_attr;
 
-	copy_from_user(attr, (const void __user *)control->value, sizeof(*attr));
+	if (copy_from_user(attr, (const void __user *)control->value, sizeof(*attr)))
+		return -EFAULT;
 	if(attr->mode){
 		apical_isp_raw_frontend_dark_disable_write(attr->dark_pixels);
 		apical_isp_raw_frontend_bright_disable_write(attr->bright_pixels);
@@ -1068,7 +1085,8 @@ static int apical_isp_static_dp_s_attr(struct tx_isp_core_device *core, struct v
 	image_tuning_vdrv_t *tuning = video_get_drvdata(video);
 	struct isp_core_static_defect_pixel_attr *attr = &tuning->ctrls.sdp_attr;
 
-	copy_from_user(attr, (const void __user *)control->value, sizeof(*attr));
+	if (copy_from_user(attr, (const void __user *)control->value, sizeof(*attr)))
+		return -EFAULT;
 
 	return ISP_SUCCESS;
 }
@@ -1235,7 +1253,8 @@ static inline int apical_isp_day_or_night_g_ctrl(struct tx_isp_core_device *core
 	image_tuning_vdrv_t *tuning = video_get_drvdata(video);
 	struct image_tuning_ctrls *ctrls = &(tuning->ctrls);
 	unsigned int  dn= ctrls->daynight;
-	copy_to_user((void __user *)control->value, (const void *)&dn, sizeof(unsigned int));
+	if (copy_to_user((void __user *)control->value, (const void *)&dn, sizeof(unsigned int)))
+		return -EFAULT;
 
 	return ISP_SUCCESS;
 }
@@ -1753,7 +1772,11 @@ static inline int apical_isp_day_or_night_s_ctrl(struct tx_isp_core_device *core
 	int ret = ISP_SUCCESS;
 
 	ISP_CORE_MODE_DN_E dn;
-	copy_from_user(&dn, (const void __user *)control->value, sizeof(ISP_CORE_MODE_DN_E));
+	if (copy_from_user(&dn, (const void __user *)control->value, sizeof(ISP_CORE_MODE_DN_E)))
+		return -EFAULT;
+	/* dn indexes param->isp_param[] in every table/AWB handler. */
+	if ((unsigned int)dn >= ISP_CORE_RUNING_MODE_BUTT)
+		return -EINVAL;
 	if(!param){
 		v4l2_err(tuning->video->v4l2_dev,"Can't get the parameters of isp tuning!\n");
 		return -ISP_ERROR;
@@ -2035,7 +2058,8 @@ static inline int apical_isp_fps_s_control(struct tx_isp_core_device *core, stru
 	unsigned char status = 0;
 	int reason = 0;
 	unsigned int fps = 0;
-	copy_from_user(&fps, (const void __user *)control->value, sizeof(unsigned int));
+	if (copy_from_user(&fps, (const void __user *)control->value, sizeof(unsigned int)))
+		return -EFAULT;
 	if(fps != core->vin.fps){
 		ioctl.dir = TX_ISP_PRIVATE_IOCTL_SET;
 		ioctl.cmd = TX_ISP_PRIVATE_IOCTL_SENSOR_FPS;
@@ -2057,7 +2081,8 @@ static inline int apical_isp_fps_g_control(struct tx_isp_core_device *core, stru
 //	struct video_device *video = core->tun;
 //	image_tuning_vdrv_t *tuning = video_get_drvdata(video);
 	unsigned int fps = core->vin.fps;
-	copy_to_user((void __user *)control->value, (const void *)&fps, sizeof(unsigned int));
+	if (copy_to_user((void __user *)control->value, (const void *)&fps, sizeof(unsigned int)))
+		return -EFAULT;
 
 	return ISP_SUCCESS;
 }
@@ -2069,7 +2094,8 @@ static inline int apical_isp_fc_s_attr(struct tx_isp_core_device *core, struct v
 	struct isp_core_false_color_attr *attr = &tuning->ctrls.fc_attr;
 
 	return ISP_SUCCESS;
-	copy_from_user(attr, (const void __user *)control->value, sizeof(*attr));
+	if (copy_from_user(attr, (const void __user *)control->value, sizeof(*attr)))
+		return -EFAULT;
 	apical_isp_demosaic_fc_slope_write(attr->strength);
 	apical_isp_demosaic_fc_alias_slope_write(attr->alias_strength);
 	apical_isp_demosaic_fc_alias_thresh_write(attr->alias_thresh);
@@ -2118,7 +2144,8 @@ static inline int apical_isp_sharp_s_attr(struct tx_isp_core_device *core, struc
 	image_tuning_vdrv_t *tuning = video_get_drvdata(video);
 	struct isp_core_sharpness_attr *attr = &tuning->ctrls.sharp_attr;
 
-	copy_from_user(attr, (const void __user *)control->value, sizeof(*attr));
+	if (copy_from_user(attr, (const void __user *)control->value, sizeof(*attr)))
+		return -EFAULT;
 #if 1
 	apical_isp_fr_sharpen_strength_write(attr->target_sharp);
 	apical_isp_ds1_sharpen_strength_write(attr->target_sharp);
@@ -2149,7 +2176,8 @@ static inline int apical_isp_demosaic_s_attr(struct tx_isp_core_device *core, st
 	image_tuning_vdrv_t *tuning = video_get_drvdata(video);
 	struct isp_core_demosaic_attr *attr = &tuning->ctrls.demo_attr;
 
-	copy_from_user(attr, (const void __user *)control->value, sizeof(*attr));
+	if (copy_from_user(attr, (const void __user *)control->value, sizeof(*attr)))
+		return -EFAULT;
 	apical_isp_demosaic_vh_slope_write(attr->vh_slope);
 	apical_isp_demosaic_aa_slope_write(attr->aa_slope);
 	apical_isp_demosaic_va_slope_write(attr->va_slope);
@@ -2218,10 +2246,13 @@ static int apical_isp_gamma_g_attr(struct tx_isp_core_device *core, struct v4l2_
 	struct isp_core_gamma_attr attr;
 	int i = 0;
 
+	memset(&attr, 0, sizeof(attr));
+
 	for (i = 0; i < 129; i++) {
 		attr.gamma[i] = APICAL_READ_32(0x10400+4*i);
 	}
-	copy_to_user((void __user*)control->value, (const void *)&attr, sizeof(attr));
+	if (copy_to_user((void __user*)control->value, (const void *)&attr, sizeof(attr)))
+		return -EFAULT;
 	return ret;
 }
 
@@ -2230,7 +2261,8 @@ static int apical_isp_stab_g_attr(struct tx_isp_core_device *core, struct v4l2_c
 	struct isp_core_stab_attr stab_attr;
 	memset(&stab_attr, 0, sizeof(stab_attr));
 	memcpy(&stab_attr.stab, &stab, sizeof(stab));
-	copy_to_user((void __user*)control->value, &stab_attr, sizeof(stab_attr));
+	if (copy_to_user((void __user*)control->value, &stab_attr, sizeof(stab_attr)))
+		return -EFAULT;
 	return 0;
 }
 
@@ -2238,7 +2270,8 @@ static int apical_isp_stab_g_attr(struct tx_isp_core_device *core, struct v4l2_c
 static int apical_isp_stab_s_attr(struct tx_isp_core_device *core, struct v4l2_control *control)
 {
 	struct isp_core_stab_attr stab_attr;
-	copy_from_user(&stab_attr, (const void __user*)control->value, sizeof(stab_attr));
+	if (copy_from_user(&stab_attr, (const void __user*)control->value, sizeof(stab_attr)))
+		return -EFAULT;
 	SYSTEM_TAB_ITEM(global_freeze_firmware);
 	SYSTEM_TAB_ITEM(global_manual_exposure);
 	SYSTEM_TAB_ITEM(global_manual_exposure_ratio);
@@ -2304,7 +2337,8 @@ static int apical_isp_gamma_s_attr(struct tx_isp_core_device *core, struct v4l2_
 		if (ret != ISP_SUCCESS)
 			goto err_get_def_gamma;
 	} else {
-		copy_from_user(&attr, (const void __user*)control->value, sizeof(attr));
+		if (copy_from_user(&attr, (const void __user*)control->value, sizeof(attr)))
+			return -EFAULT;
 	}
 	apical_api_calibration(CALIBRATION_GAMMA_LINEAR, COMMAND_SET, attr.gamma, sizeof(attr.gamma), &ret);
 	if (ret != ISP_SUCCESS)
@@ -2321,7 +2355,8 @@ static int apical_isp_ae_weight_s_attr(struct tx_isp_core_device *core, struct v
 	struct isp_core_weight_attr attr;
 	unsigned int row,col;
 
-	copy_from_user(&attr, (const void __user*)control->value, sizeof(attr));
+	if (copy_from_user(&attr, (const void __user*)control->value, sizeof(attr)))
+		return -EFAULT;
 
 	for (row = 0; row < 15; row++){
 		for (col = 0; col < 15; col++){
@@ -2337,13 +2372,16 @@ static int apical_isp_ae_weight_g_attr(struct tx_isp_core_device *core, struct v
 	struct isp_core_weight_attr attr;
 	unsigned int row,col;
 
+	memset(&attr, 0, sizeof(attr));
+
 	for (row = 0; row < 15; row++){
 		for (col = 0; col < 15; col++){
 			attr.weight[row][col] = apical_isp_zones_aexp_weight_read(row,col);
 		}
 	}
 
-	copy_to_user((void __user*)control->value, &attr, sizeof(attr));
+	if (copy_to_user((void __user*)control->value, &attr, sizeof(attr)))
+		return -EFAULT;
 
 	return 0;
 }
@@ -2351,6 +2389,8 @@ static int apical_isp_ae_weight_g_attr(struct tx_isp_core_device *core, struct v
 static int apical_isp_ae_hist_g_attr(struct tx_isp_core_device *core, struct v4l2_control *control)
 {
 	struct isp_core_ae_sta_info info;
+
+	memset(&info, 0, sizeof(info));
 
 	info.ae_histhresh[0] = apical_isp_metering_hist_thresh_0_1_read();
 	info.ae_histhresh[1] = apical_isp_metering_hist_thresh_1_2_read();
@@ -2366,7 +2406,8 @@ static int apical_isp_ae_hist_g_attr(struct tx_isp_core_device *core, struct v4l
 	info.ae_stat_nodeh = apical_isp_metering_aexp_nodes_used_horiz_read();
 	info.ae_stat_nodev = apical_isp_metering_aexp_nodes_used_vert_read();
 
-	copy_to_user((void __user*)control->value, &info, sizeof(info));
+	if (copy_to_user((void __user*)control->value, &info, sizeof(info)))
+		return -EFAULT;
 	return 0;
 }
 
@@ -2374,7 +2415,8 @@ static int apical_isp_ae_hist_s_attr(struct tx_isp_core_device *core, struct v4l
 {
 	struct isp_core_ae_sta_info info;
 
-	copy_from_user(&info, (const void __user*)control->value, sizeof(info));
+	if (copy_from_user(&info, (const void __user*)control->value, sizeof(info)))
+		return -EFAULT;
 
 	apical_isp_metering_hist_thresh_0_1_write(info.ae_histhresh[0]);
 	apical_isp_metering_hist_thresh_1_2_write(info.ae_histhresh[1]);
@@ -2390,6 +2432,8 @@ static int apical_isp_ae_hist_s_attr(struct tx_isp_core_device *core, struct v4l
 static int apical_isp_awb_hist_g_attr(struct tx_isp_core_device *core, struct v4l2_control *control)
 {
 	struct isp_core_awb_sta_info info;
+
+	memset(&info, 0, sizeof(info));
 
 	info.awb_stat.r_gain = apical_isp_metering_awb_rg_read();
 	info.awb_stat.b_gain = apical_isp_metering_awb_bg_read();
@@ -2409,7 +2453,8 @@ static int apical_isp_awb_hist_g_attr(struct tx_isp_core_device *core, struct v4
 	/* info.cb_ref_high = apical_isp_metering_cb_ref_high_awb_read(); */
 	/* info.cb_ref_low = apical_isp_metering_cb_ref_low_awb_read(); */
 
-	copy_to_user((void __user*)control->value, &info, sizeof(info));
+	if (copy_to_user((void __user*)control->value, &info, sizeof(info)))
+		return -EFAULT;
 
 	return 0;
 }
@@ -2417,7 +2462,8 @@ static int apical_isp_awb_hist_g_attr(struct tx_isp_core_device *core, struct v4
 static int apical_isp_awb_hist_s_attr(struct tx_isp_core_device *core, struct v4l2_control *control)
 {
 	struct isp_core_awb_sta_info info;
-	copy_from_user(&info, (const void __user*)control->value, sizeof(info));
+	if (copy_from_user(&info, (const void __user*)control->value, sizeof(info)))
+		return -EFAULT;
 
 	apical_isp_metering_awb_stats_mode_write(info.awb_stats_mode?1:0);
 	apical_isp_metering_white_level_awb_write(info.awb_whitelevel);
@@ -2439,6 +2485,8 @@ static int apical_isp_awb_hist_s_attr(struct tx_isp_core_device *core, struct v4
 static int apical_isp_af_hist_g_attr(struct tx_isp_core_device *core, struct v4l2_control *control)
 {
 	struct isp_core_af_sta_info info;
+
+	memset(&info, 0, sizeof(info));
 
 	info.af_stat.af_metrics = apical_isp_metering_af_metrics_read();
 	info.af_stat.af_metrics_alt = apical_isp_metering_af_metrics_alt_read();
@@ -2462,7 +2510,8 @@ static int apical_isp_af_hist_g_attr(struct tx_isp_core_device *core, struct v4l
 	info.af_scale_top = apical_isp_metering_scale_top_read();
 	info.af_scale_bottom = apical_isp_metering_scale_bottom_read();
 
-	copy_to_user((void __user*)control->value, &info, sizeof(info));
+	if (copy_to_user((void __user*)control->value, &info, sizeof(info)))
+		return -EFAULT;
 
 	return 0;
 }
@@ -2470,7 +2519,8 @@ static int apical_isp_af_hist_g_attr(struct tx_isp_core_device *core, struct v4l
 static int apical_isp_af_hist_s_attr(struct tx_isp_core_device *core, struct v4l2_control *control)
 {
 	struct isp_core_af_sta_info info;
-	copy_from_user(&info, (const void __user*)control->value, sizeof(info));
+	if (copy_from_user(&info, (const void __user*)control->value, sizeof(info)))
+		return -EFAULT;
 
 	apical_isp_metering_af_metrics_shift_write(info.af_metrics_shift);
 	apical_isp_metering_af_threshold_write_write(info.af_thresh);
@@ -2494,7 +2544,8 @@ static int apical_isp_awb_weight_s_attr(struct tx_isp_core_device *core, struct 
 	struct isp_core_weight_attr attr;
 	unsigned int row,col;
 
-	copy_from_user(&attr, (const void __user*)control->value, sizeof(attr));
+	if (copy_from_user(&attr, (const void __user*)control->value, sizeof(attr)))
+		return -EFAULT;
 
 	for (row = 0; row < 15; row++){
 		for (col = 0; col < 15; col++){
@@ -2510,13 +2561,16 @@ static int apical_isp_awb_weight_g_attr(struct tx_isp_core_device *core, struct 
 	struct isp_core_weight_attr attr;
 	unsigned int row,col;
 
+	memset(&attr, 0, sizeof(attr));
+
 	for (row = 0; row < 15; row++){
 		for (col = 0; col < 15; col++){
 			attr.weight[row][col] = apical_isp_zones_awb_weight_read(row,col);
 		}
 	}
 
-	copy_to_user((void __user*)control->value, &attr, sizeof(attr));
+	if (copy_to_user((void __user*)control->value, &attr, sizeof(attr)))
+		return -EFAULT;
 
 	return 0;
 }
@@ -2535,7 +2589,7 @@ static int apical_isp_ae_comp_s_ctrl(struct tx_isp_core_device *core, struct v4l
 	status = apical_command(api.type, api.id, api.value, api.dir, &reason);
 	if (status != ISP_SUCCESS) {
 		printk("err: %s,%d apical_command err \n", __func__, __LINE__);
-		return -1;
+		return -EIO;
 	}
 
 	return 0;
@@ -2554,7 +2608,7 @@ static int apical_isp_ae_comp_g_ctrl(struct tx_isp_core_device *core, struct v4l
 	status = apical_command(api.type, api.id, api.value, api.dir, &reason);
 	if (status != ISP_SUCCESS) {
 		printk("err: %s,%d apical_command err \n", __func__, __LINE__);
-		return -1;
+		return -EIO;
 	}
 	control->value = reason;
 
@@ -2572,7 +2626,8 @@ static int apical_isp_expr_s_ctrl(struct tx_isp_core_device *core, struct v4l2_c
 	unsigned char status = 0;
 	int reason = 0;
 
-	copy_from_user(&expr_attr, (const void __user*)control->value, sizeof(expr_attr));
+	if (copy_from_user(&expr_attr, (const void __user*)control->value, sizeof(expr_attr)))
+		return -EFAULT;
 
 	if (expr_attr.s_attr.mode == ISP_CORE_EXPR_MODE_AUTO) {
 		mode = 0;
@@ -2614,8 +2669,9 @@ static int apical_isp_expr_s_ctrl(struct tx_isp_core_device *core, struct v4l2_c
 
 err_set_integration_time:
 err_set_expr_mode:
+	return -EIO;
 err_one_line_expr_in_us:
-	return -1;
+	return -EINVAL;
 }
 
 static int apical_isp_expr_g_ctrl(struct tx_isp_core_device *core, struct v4l2_control *control)
@@ -2628,6 +2684,8 @@ static int apical_isp_expr_g_ctrl(struct tx_isp_core_device *core, struct v4l2_c
 
 	unsigned char status = 0;
 	int reason = 0;
+
+	memset(&expr_attr, 0, sizeof(expr_attr));
 
 	api.type = TSYSTEM;
 	api.dir = COMMAND_GET;
@@ -2657,13 +2715,14 @@ static int apical_isp_expr_g_ctrl(struct tx_isp_core_device *core, struct v4l2_c
 	expr_attr.g_attr.integration_time_max = attr->max_integration_time;
 	expr_attr.g_attr.one_line_expr_in_us = attr->one_line_expr_in_us;
 
-	copy_to_user((void __user*)control->value, &expr_attr, sizeof(expr_attr));
+	if (copy_to_user((void __user*)control->value, &expr_attr, sizeof(expr_attr)))
+		return -EFAULT;
 
 	return 0;
 
 err_get_integration_time:
 err_get_expr_mode:
-	return 0;
+	return -EIO;
 }
 
 static int apical_isp_ae_g_roi(struct tx_isp_core_device *core, struct v4l2_control *control)
@@ -2680,7 +2739,7 @@ static int apical_isp_ae_g_roi(struct tx_isp_core_device *core, struct v4l2_cont
 	control->value = reason;
 	if (status != ISP_SUCCESS) {
 		printk("err: %s,%d apical_command err \n", __func__, __LINE__);
-		return -1;
+		return -EIO;
 	}
 	return 0;
 }
@@ -2698,7 +2757,7 @@ static int apical_isp_ae_s_roi(struct tx_isp_core_device *core, struct v4l2_cont
 	status = apical_command(api.type, api.id, api.value, api.dir, &reason);
 	if (status != ISP_SUCCESS) {
 		printk("err: %s,%d apical_command err \n", __func__, __LINE__);
-		return -1;
+		return -EIO;
 	}
 	return 0;
 }
@@ -2787,7 +2846,8 @@ static int apical_isp_wb_s_ctrl(struct tx_isp_core_device *core, struct v4l2_con
 	unsigned char status = 0;
 	int reason = 0;
 
-	copy_from_user(&wb_attr, (const void __user*)control->value, sizeof(wb_attr));
+	if (copy_from_user(&wb_attr, (const void __user*)control->value, sizeof(wb_attr)))
+		return -EFAULT;
 
 	apical_mode = isp_wb_mode_to_apical(wb_attr.mode);
 	if (-1 == apical_mode) {
@@ -2833,8 +2893,9 @@ static int apical_isp_wb_s_ctrl(struct tx_isp_core_device *core, struct v4l2_con
 err_set_wb_bgain:
 err_set_wb_rgain:
 err_set_wb_mode:
+	return -EIO;
 err_mode:
-	return -1;
+	return -EINVAL;
 }
 
 static int apical_isp_wb_statis_g_ctrl(struct tx_isp_core_device *core, struct v4l2_control *control)
@@ -2851,7 +2912,8 @@ static int apical_isp_rgb_coefft_wb_s_ctrl(struct tx_isp_core_device *core, stru
 {
 	struct isp_core_rgb_coefft_wb_attr rgb_coefft_wb_attr;
 
-	copy_from_user(&rgb_coefft_wb_attr, (const void __user*)control->value, sizeof(rgb_coefft_wb_attr));
+	if (copy_from_user(&rgb_coefft_wb_attr, (const void __user*)control->value, sizeof(rgb_coefft_wb_attr)))
+		return -EFAULT;
 	apical_isp_matrix_rgb_coefft_wb_r_write(rgb_coefft_wb_attr.rgb_coefft_wb_r);
 	apical_isp_matrix_rgb_coefft_wb_g_write(rgb_coefft_wb_attr.rgb_coefft_wb_g);
 	apical_isp_matrix_rgb_coefft_wb_b_write(rgb_coefft_wb_attr.rgb_coefft_wb_b);
@@ -2863,10 +2925,13 @@ static int apical_isp_rgb_coefft_wb_g_ctrl(struct tx_isp_core_device *core, stru
 {
 	struct isp_core_rgb_coefft_wb_attr rgb_coefft_wb_attr;
 
+	memset(&rgb_coefft_wb_attr, 0, sizeof(rgb_coefft_wb_attr));
+
 	rgb_coefft_wb_attr.rgb_coefft_wb_r = apical_isp_matrix_rgb_coefft_wb_r_read();
 	rgb_coefft_wb_attr.rgb_coefft_wb_g = apical_isp_matrix_rgb_coefft_wb_g_read();
 	rgb_coefft_wb_attr.rgb_coefft_wb_b = apical_isp_matrix_rgb_coefft_wb_b_read();
-	copy_to_user((void __user*)control->value, &rgb_coefft_wb_attr, sizeof(rgb_coefft_wb_attr));
+	if (copy_to_user((void __user*)control->value, &rgb_coefft_wb_attr, sizeof(rgb_coefft_wb_attr)))
+		return -EFAULT;
 	return 0;
 }
 
@@ -2878,6 +2943,8 @@ static int apical_isp_wb_g_ctrl(struct tx_isp_core_device *core, struct v4l2_con
 	unsigned char status = 0;
 	int reason = 0;
 	int isp_mode = 0;
+
+	memset(&wb_attr, 0, sizeof(wb_attr));
 
 	api.type = TALGORITHMS;
 	api.dir = COMMAND_GET;
@@ -2918,14 +2985,15 @@ static int apical_isp_wb_g_ctrl(struct tx_isp_core_device *core, struct v4l2_con
 		}
 		wb_attr.bgain = reason;
 	}
-	copy_to_user((void __user*)control->value, &wb_attr, sizeof(wb_attr));
+	if (copy_to_user((void __user*)control->value, &wb_attr, sizeof(wb_attr)))
+		return -EFAULT;
 
 	return 0;
 
 err_get_wb_bgain:
 err_get_wb_rgain:
 err_get_wb_mode:
-	return -1;
+	return -EIO;
 }
 
 static int apical_isp_max_again_s_ctrl(struct tx_isp_core_device *core, struct v4l2_control *control)
@@ -3038,13 +3106,13 @@ static int apical_isp_hi_light_depress_s_ctrl(struct tx_isp_core_device *core, s
 
 	if(wdr->val == ISPCORE_MODULE_ENABLE){
 		printk("err: wdr enabled\n");
-		return -1;
+		return -EBUSY;
 	}
 
 	dn = ctrls->daynight;
 	if (NULL == param) {
 		printk("err: param == NULL\n");
-		return -1;
+		return -ENODEV;
 	}
 	table = param->isp_param[dn].calibrations;
 
@@ -3056,7 +3124,7 @@ static int apical_isp_hi_light_depress_s_ctrl(struct tx_isp_core_device *core, s
 	data = kzalloc(size, GFP_KERNEL);
 	if(!data){
 		printk("err: Failed to allocate isp table mem\n");
-		return -1;
+		return -ENOMEM;
 	}
 	memcpy(data, table[_CALIBRATION_AE_BALANCED_LINEAR]->ptr, size);
 	if (1 == width) {
@@ -3071,14 +3139,14 @@ static int apical_isp_hi_light_depress_s_ctrl(struct tx_isp_core_device *core, s
 	} else {
 		printk("err: %s(%d),format error !\n", __func__, __LINE__);
 		kfree(data);
-		return -1;
+		return -EINVAL;
 	}
 
 	status = apical_api_calibration(CALIBRATION_AE_BALANCED_LINEAR, COMMAND_SET, data, size, &ret);
 	if (0 != ret) {
 		kfree(data);
 		printk("err: %s,%d, status = %d, ret = %d\n", __func__, __LINE__, status, ret);
-		return -1;
+		return -EIO;
 	}
 	kfree(data);
 
@@ -3106,13 +3174,13 @@ static int apical_isp_hi_light_depress_g_ctrl(struct tx_isp_core_device *core, s
 
 	if(wdr->val == ISPCORE_MODULE_ENABLE){
 		printk("err: wdr enabled\n");
-		return -1;
+		return -EBUSY;
 	}
 
 	dn = ctrls->daynight;
 	if (NULL == param) {
 		printk("err: param == NULL\n");
-		return -1;
+		return -ENODEV;
 	}
 	table = param->isp_param[dn].calibrations;
 
@@ -3124,7 +3192,7 @@ static int apical_isp_hi_light_depress_g_ctrl(struct tx_isp_core_device *core, s
 	data = kzalloc(size, GFP_KERNEL);
 	if(!data){
 		printk("err: Failed to allocate isp table mem\n");
-		return -1;
+		return -ENOMEM;
 	}
 
 	status = apical_api_calibration(CALIBRATION_AE_BALANCED_LINEAR, COMMAND_GET, data, size, &ret);
@@ -3143,7 +3211,7 @@ static int apical_isp_hi_light_depress_g_ctrl(struct tx_isp_core_device *core, s
 	} else {
 		printk("err: %s(%d),format error !\n", __func__, __LINE__);
 		kfree(data);
-		return -1;
+		return -EINVAL;
 	}
 	kfree(data);
 
@@ -3159,136 +3227,127 @@ struct isp_table_info {
 	void *ptr;
 };
 
+/*
+ * Calibration LUTs are a few KiB at most; cap the user-supplied geometry well
+ * above that so a bogus rows*cols*width never sizes a kmalloc.  The firmware
+ * still requires the exact table size.
+ */
+#define ISP_TABLE_MAX_BYTES	(64 * 1024)
+
+static int apical_isp_table_size(unsigned int rows, unsigned int cols,
+				 unsigned int width, unsigned int *size)
+{
+	unsigned long long bytes = (unsigned long long)rows * cols * width;
+
+	if (!bytes || bytes > ISP_TABLE_MAX_BYTES)
+		return -EINVAL;
+	*size = (unsigned int)bytes;
+	return 0;
+}
+
+static LookupTable **apical_isp_table_current(struct tx_isp_core_device *core)
+{
+	TXispPrivParamManage *param = core->param;
+	image_tuning_vdrv_t *tuning = video_get_drvdata(core->tun);
+	ISP_CORE_MODE_DN_E dn = tuning->ctrls.daynight;
+
+	if (!param || dn >= ISP_CORE_RUNING_MODE_BUTT)
+		return NULL;
+	return param->isp_param[dn].calibrations;
+}
+
 static int apical_isp_table_g_attr(struct tx_isp_core_device *core, struct v4l2_control *control)
 {
-	struct video_device *video = core->tun;
-	TXispPrivParamManage *param = core->param;
-	image_tuning_vdrv_t *tuning = video_get_drvdata(video);
-	struct image_tuning_ctrls *ctrls = &(tuning->ctrls);
-
-	int ret = ISP_SUCCESS;
-	unsigned int status = 0;
-	LookupTable** table = NULL;
-	ISP_CORE_MODE_DN_E dn;
-
-	unsigned int rows = 0;
-	unsigned int cols = 0;
-	unsigned int width = 0;
-	unsigned int size = 0;
-	unsigned int id = 0;
-	unsigned int tid = 0;
+	LookupTable **table = apical_isp_table_current(core);
+	LookupTable *t;
 	struct isp_table_info tinfo;
-	void *data = 0;
+	unsigned int size = 0;
+	unsigned int tid;
+	int ret = ISP_SUCCESS;
+	void *data;
 
-	dn = ctrls->daynight;
-	if (NULL == param) {
-		goto err_isp_param;
-	}
-	table = param->isp_param[dn].calibrations;
-	copy_from_user(&tinfo, (const void __user*)control->value, sizeof(tinfo));
-	id = tinfo.id;
+	if (!table)
+		return -ENODEV;
+	if (copy_from_user(&tinfo, (const void __user*)control->value, sizeof(tinfo)))
+		return -EFAULT;
 
-	switch(id) {
+	switch(tinfo.id) {
 	case CALIBRATION_TEMPER_STRENGTH:
-		rows = table[_CALIBRATION_TEMPER_STRENGTH]->rows;
-		cols = table[_CALIBRATION_TEMPER_STRENGTH]->cols;
-		width = table[_CALIBRATION_TEMPER_STRENGTH]->width;
 		tid = _CALIBRATION_TEMPER_STRENGTH;
 		break;
 	case CALIBRATION_SINTER_STRENGTH_LINEAR:
-		rows = table[_CALIBRATION_SINTER_STRENGTH_LINEAR]->rows;
-		cols = table[_CALIBRATION_SINTER_STRENGTH_LINEAR]->cols;
-		width = table[_CALIBRATION_SINTER_STRENGTH_LINEAR]->width;
 		tid = _CALIBRATION_SINTER_STRENGTH_LINEAR;
 		break;
 	case CALIBRATION_DP_SLOPE_LINEAR:
-		rows = table[_CALIBRATION_DP_SLOPE_LINEAR]->rows;
-		cols = table[_CALIBRATION_DP_SLOPE_LINEAR]->cols;
-		width = table[_CALIBRATION_DP_SLOPE_LINEAR]->width;
 		tid = _CALIBRATION_DP_SLOPE_LINEAR;
 		break;
 	default:
-		printk("%s,%d, err id: %d\n", __func__, __LINE__, id);
-		ret = -EPERM;
-		break;
+		return -EINVAL;
 	}
-	tinfo.rows = rows;
-	tinfo.cols = cols;
-	tinfo.width = width;
-	size = rows*cols*width;
+	t = table[tid];
+	if (!t || !t->ptr)
+		return -ENODEV;
+	tinfo.rows = t->rows;
+	tinfo.cols = t->cols;
+	tinfo.width = t->width;
+	if (apical_isp_table_size(t->rows, t->cols, t->width, &size))
+		return -EINVAL;
 
-	copy_to_user((void __user*)control->value, &tinfo, sizeof(tinfo));
-	if (NULL != tinfo.ptr) {
-		if (0 == tinfo.tsource) {
-			data = kzalloc(size, GFP_KERNEL);
-			if(!data){
-				printk("Failed to allocate isp table mem\n");
-				return -1;
-			}
-			status = apical_api_calibration(id, COMMAND_GET, tinfo.ptr, size, &ret);
-			if (0 != ret)
-				printk("%s,%d, status = %d, ret = %d\n", __func__, __LINE__, status, ret);
-			copy_to_user((void __user*)tinfo.ptr, data, size);
-			kfree(data);
-		} else {
-			copy_to_user((void __user*)tinfo.ptr, table[tid]->ptr, size);
-		}
+	if (copy_to_user((void __user*)control->value, &tinfo, sizeof(tinfo)))
+		return -EFAULT;
+	if (NULL == tinfo.ptr)
+		return 0;
+
+	if (0 != tinfo.tsource) {
+		if (copy_to_user((void __user*)tinfo.ptr, t->ptr, size))
+			return -EFAULT;
+		return 0;
 	}
-	return 0;
-err_isp_param:
-	return -1;
+
+	/*
+	 * Live firmware copy.  The SDK passed the user pointer straight to the
+	 * firmware memcpy (a kernel write through an unchecked user address)
+	 * and then overwrote the result with the zeroed bounce buffer.
+	 */
+	data = kzalloc(size, GFP_KERNEL);
+	if (!data)
+		return -ENOMEM;
+	apical_api_calibration(tinfo.id, COMMAND_GET, data, size, &ret);
+	if (ret != 0)
+		ret = -EINVAL;
+	else if (copy_to_user((void __user*)tinfo.ptr, data, size))
+		ret = -EFAULT;
+	kfree(data);
+	return ret;
 }
 
 static int apical_isp_table_s_attr(struct tx_isp_core_device *core, struct v4l2_control *control)
 {
-	struct video_device *video = core->tun;
-	TXispPrivParamManage *param = core->param;
-	image_tuning_vdrv_t *tuning = video_get_drvdata(video);
-	struct image_tuning_ctrls *ctrls = &(tuning->ctrls);
-
-	int ret = ISP_SUCCESS;
-	unsigned int status = 0;
-	LookupTable** table = NULL;
-	ISP_CORE_MODE_DN_E dn;
-
-	unsigned int rows = 0;
-	unsigned int cols = 0;
-	unsigned int width = 0;
-	unsigned int size = 0;
-	unsigned int id = 0;
 	struct isp_table_info tinfo;
-	void *data = 0;
+	unsigned int size = 0;
+	int ret = ISP_SUCCESS;
+	void *data;
 
-	if (NULL == param) {
-		goto err_isp_param;
-	}
-	dn = ctrls->daynight;
-	table = param->isp_param[dn].calibrations;
-	copy_from_user(&tinfo, (const void __user*)control->value, sizeof(tinfo));
+	if (!apical_isp_table_current(core))
+		return -ENODEV;
+	if (copy_from_user(&tinfo, (const void __user*)control->value, sizeof(tinfo)))
+		return -EFAULT;
+	if (NULL == tinfo.ptr)
+		return -EINVAL;
+	if (apical_isp_table_size(tinfo.rows, tinfo.cols, tinfo.width, &size))
+		return -EINVAL;
 
-	id = tinfo.id;
-	rows = tinfo.rows;
-	cols = tinfo.cols;
-	width = tinfo.width;
-	size = rows*cols*width;
-
-	if (NULL != tinfo.ptr) {
-		data = kzalloc(size, GFP_KERNEL);
-		if(!data){
-			printk("Failed to allocate isp table mem\n");
-			return -1;
-		}
-		copy_from_user(data, (const void __user*)tinfo.ptr, size);
-		status = apical_api_calibration(id, COMMAND_SET, data, size, &ret);
-		if (0 != ret)
-			printk("%s,%d, status = %d, ret = %d\n", __func__, __LINE__, status, ret);
+	data = kmalloc(size, GFP_KERNEL);
+	if (!data)
+		return -ENOMEM;
+	if (copy_from_user(data, (const void __user*)tinfo.ptr, size)) {
 		kfree(data);
-	} else {
-		printk("%s,%d, param err\n", __func__, __LINE__);
+		return -EFAULT;
 	}
-	return 0;
-err_isp_param:
-	return -1;
+	/* The firmware rejects unknown ids and any size but the table's own. */
+	apical_api_calibration(tinfo.id, COMMAND_SET, data, size, &ret);
+	kfree(data);
+	return ret ? -EINVAL : 0;
 }
 
 struct isp_frame_done_info {
@@ -3328,13 +3387,17 @@ static int apical_isp_wait_frame_done(struct tx_isp_core_device *core, struct v4
 	uint64_t cnt = 0;
 	struct isp_frame_done_info info;
 
-	copy_from_user(&info, (const void __user*)control->value, sizeof(info));
+	if (copy_from_user(&info, (const void __user*)control->value, sizeof(info)))
+		return -EFAULT;
 	timeout = info.timeout;
+	if (timeout < 0)
+		return -EINVAL;
 
 	ret = isp_frame_done_wait(timeout, &cnt);
 	info.cnt = cnt;
 
-	copy_to_user((void __user*)control->value, &info, sizeof(info));
+	if (copy_to_user((void __user*)control->value, &info, sizeof(info)))
+		return -EFAULT;
 	return ret;
 
 }
@@ -3346,6 +3409,8 @@ static int apical_isp_ev_g_attr(struct tx_isp_core_device *core, struct v4l2_con
 
 	unsigned char status = 0;
 	int reason = 0;
+
+	memset(&ev_attr, 0, sizeof(ev_attr));
 
 
 	api.type = TSYSTEM;
@@ -3407,7 +3472,8 @@ static int apical_isp_ev_g_attr(struct tx_isp_core_device *core, struct v4l2_con
 	ev_attr.gain_log2 = reason;
 
 
-	copy_to_user((void __user*)control->value, &ev_attr, sizeof(ev_attr));
+	if (copy_to_user((void __user*)control->value, &ev_attr, sizeof(ev_attr)))
+		return -EFAULT;
 
 	return 0;
 
@@ -3417,7 +3483,7 @@ err_get_expr:
 err_get_ev:
 err_get_ev_log2:
 err_get_gain_log2:
-	return -1;
+	return -EIO;
 }
 
 
@@ -4432,6 +4498,9 @@ struct video_device *tx_isp_image_tuning_device_register(struct v4l2_subdev *par
 	set_bit(V4L2_FL_USE_FH_PRIO, &(vfd->flags)); // add lately
 
 	tuning->video = vfd;
+	/* The node is live once registered: open() must find its state. */
+	video_set_drvdata(vfd, tuning);
+	atomic_set(&tuning->state, TX_ISP_STATE_STOP);
 
 	ret = video_register_device(vfd, VFL_TYPE_GRABBER, -1);
 	if (ret < 0) {
@@ -4439,9 +4508,6 @@ struct video_device *tx_isp_image_tuning_device_register(struct v4l2_subdev *par
 		goto failed_register;
 	}
 
-	video_set_drvdata(vfd, tuning);
-
-	atomic_set(&tuning->state, TX_ISP_STATE_STOP);
 	return vfd;
 
 failed_register:
@@ -4454,6 +4520,18 @@ failed_video_alloc:
 }
 void tx_isp_image_tuning_device_release(struct video_device *vfd)
 {
-	v4l2_ctrl_handler_free(vfd->ctrl_handler);
+	image_tuning_vdrv_t *tuning;
+
+	if (!vfd)
+		return;
+	tuning = video_get_drvdata(vfd);
+	/*
+	 * Unregister first so no new ioctl can reach the handler, then free the
+	 * controls and the driver state the SDK leaked on every rmmod.  The
+	 * module cannot be unloaded while the node is open (fops owner), so
+	 * nothing else references tuning here.
+	 */
 	video_unregister_device(vfd);
+	v4l2_ctrl_handler_free(&tuning->ctrls.handler);
+	kfree(tuning);
 }
