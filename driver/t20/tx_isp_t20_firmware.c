@@ -16068,108 +16068,38 @@ int32_t noise_reduction_fsm_process_state(void *arg1)
     return noise_reduction_fsm_switch_state(arg1, 0);
 }
 
-/* WHOLE_DRIVER_CANDIDATE fn_0000000000028a40 origin=fragment_seed original=noise_reduction_fsm_process_event */
+/* WHOLE_DRIVER_CANDIDATE fn_0000000000028a40 origin=model_output original=noise_reduction_fsm_process_event */
+/*
+ * libt20-firmware 3.12.0 noise_reduction_fsm.c.o 0xf0. The machine
+ * translation had lost its conditional branches: every event but 15 ran
+ * the frame-end update, event 16 never initialised the FSM and
+ * switch_state was called without its state argument.
+ */
 int32_t noise_reduction_fsm_process_event(uintptr_t a0, uint32_t a1)
 {
-    uint32_t *local_10 = 0;
-    uint32_t local_14 = 0;
-    uint32_t ra = 0;
-    uintptr_t *s0 = 0;
-    uintptr_t v0 = 0;
-    uint32_t v1 = 0;
+	int32_t *fsm = (int32_t *)a0;
 
-    /* fragment 0: Prologue */
-    /* function prologue: stack frame and callee-saved register setup */
-
-    /* fragment 1: Arithmetic */
-    v0 = 15;
-
-    /* fragment 2: StackAccess */
-    local_10 = s0;
-    local_14 = ra;
-
-    /* fragment 3: Branch */
-    s0 = a0;
-    if (a1 == v0) { goto noise_reduction_fsm_process_event0x38; }
-
-    /* fragment 4: Arithmetic */
-    v0 = 16;
-
-    /* fragment 5: Unknown */
-    /* unmatched fragment 5 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 28a5c:	50a20015 	beql	a1,v0,28ab4 <noise_reduction_fsm_process_event+0x74> */
-
-    /* fragment 6: MemoryAccess */
-    v1 = *(uint32_t *)((char *)a0 + 4);
-    v0 = 11;
-
-    /* fragment 7: Unknown */
-    /* unmatched fragment 7 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 28a68:	54a2001f 	bnel	a1,v0,28ae8 <noise_reduction_fsm_process_event+0xa8> */
-
-    /* fragment 8: Arithmetic */
-    v0 = 0;
-
-    /* fragment 9: Branch */
-    a1 = *(uint32_t *)((char *)(a0) + 4);
-    goto noise_reduction_fsm_process_event0x50;
-
-noise_reduction_fsm_process_event0x38:
-    /* fragment 10: MemoryAccess */
-    a0 = *(uint32_t *)((char *)a0 + 4);
-    v1 = 1;
-
-    /* fragment 11: Branch */
-    v0 = 0;
-    if (a0 != v1) { goto noise_reduction_fsm_process_event0xa8; }
-
-    /* fragment 12: Branch */
-    *(uint32_t *)((char *)s0 + 4) = 0;
-    goto noise_reduction_fsm_process_event0x94;
-
-noise_reduction_fsm_process_event0x50:
-    /* fragment 13: Arithmetic */
-    v1 = 1;
-
-    /* fragment 14: Branch */
-    v0 = 0;
-    if (a1 != v1) { goto noise_reduction_fsm_process_event0xa8; }
-
-    /* fragment 15: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)noise_reduction_update)(a0); /* jalr target resolved by relocation */
-
-    /* fragment 16: Branch */
-    a0 = s0;
-    goto noise_reduction_fsm_process_event0x7c;
-
-    /* fragment 17: Branch */
-    v0 = 0;
-    if (v1 != 0) { goto noise_reduction_fsm_process_event0xa8; }
-
-noise_reduction_fsm_process_event0x7c:
-    /* fragment 18: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)noise_reduction_fsm_switch_state)(a0); /* jalr target resolved by relocation */
-
-    /* fragment 19: Branch */
-    v0 = (uintptr_t)&noise_reduction_fsm_process_state;
-    goto noise_reduction_fsm_process_event0x98;
-
-noise_reduction_fsm_process_event0x94:
-    /* fragment 20: CallSetup */
-    v0 = (uintptr_t)&noise_reduction_fsm_process_state;
-
-noise_reduction_fsm_process_event0x98:
-    /* fragment 21: CallSetup */
-    v0 = (uintptr_t)((uintptr_t (*)(uintptr_t))(uintptr_t)noise_reduction_fsm_process_state)(s0); /* jalr target resolved by relocation */
-
-    /* fragment 22: Arithmetic */
-    v0 = 1;
-
-noise_reduction_fsm_process_event0xa8:
-    /* fragment 23: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    return 0;
+	if (a1 == 15) {
+		/* sensor reconfiguration: back to idle */
+		if (fsm[1] != 1)
+			return 0;
+		fsm[1] = 0;
+	} else if (a1 == 16) {
+		/* sensor running: initialise */
+		if (fsm[1] != 0)
+			return 0;
+		noise_reduction_fsm_switch_state(fsm, 1);
+	} else if (a1 == 11) {
+		/* frame end: update */
+		if (fsm[1] != 1)
+			return 0;
+		noise_reduction_update((struct tx_isp_t20_nr_state *)fsm);
+		noise_reduction_fsm_switch_state(fsm, 1);
+	} else {
+		return 0;
+	}
+	noise_reduction_fsm_process_state(fsm);
+	return 1;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000028b00 origin=fragment_seed original=sharpening_fsm_clear */
@@ -21726,19 +21656,20 @@ int32_t sharpening_update(int32_t *arg1)
 	mod_ptr = (int16_t *)_GET_MOD_ENTRY16_PTR(hdr_idx);
 	rows = _GET_ROWS(0x65);
 	calc_val = calc_modulation_u16((uint16_t)(mod_val & 0xffff), (uintptr_t)mod_ptr, (int32_t)rows);
-	APICAL_WRITE_32(0x504, calc_val | (APICAL_READ_32(0x504) & mask));
+	APICAL_WRITE_32(0x504, (calc_val & 0xff) | (APICAL_READ_32(0x504) & mask));
 
 	hdr_idx = _GET_HDR_TABLE_INDEX(0x6a, *(uint8_t *)((char *)base + 0x1524));
 	mod_ptr = (int16_t *)_GET_MOD_ENTRY16_PTR(hdr_idx);
 	rows = _GET_ROWS(0x6a);
 	calc_val = calc_modulation_u16((uint16_t)(mod_val & 0xffff), (uintptr_t)mod_ptr, (int32_t)rows);
-	APICAL_WRITE_32(0x624, calc_val | (APICAL_READ_32(0x624) & mask));
+	APICAL_WRITE_32(0x624, (calc_val & 0xff) | (APICAL_READ_32(0x624) & mask));
 
 	hdr_idx = _GET_HDR_TABLE_INDEX(0x6f, *(uint8_t *)((char *)base + 0x1524));
 	mod_ptr = (int16_t *)_GET_MOD_ENTRY16_PTR(hdr_idx);
 	rows = _GET_ROWS(0x6f);
 	calc_val = calc_modulation_u16((uint16_t)(mod_val & 0xffff), (uintptr_t)mod_ptr, (int32_t)rows);
-	return APICAL_WRITE_32(0x724, calc_val | (APICAL_READ_32(0x724) & mask));
+	/* firmware 0x9b0/0xa08/0xa5c: the modulation values are masked to 8 bits */
+	return APICAL_WRITE_32(0x724, (calc_val & 0xff) | (APICAL_READ_32(0x724) & mask));
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002fed0 origin=model_output original=write_to_flash_output_port */
