@@ -100,7 +100,7 @@ static inline void tx_isp_rmem_probe(void)
 	}
 	kfree(buf);
 	if (w.state == 1)
-		pr_info("tx-isp: QBUF guard: rmem window 0x%08x+0x%x\n",
+		pr_notice("tx-isp: QBUF guard: rmem window 0x%08x+0x%x\n",
 			w.base, w.size);
 	else
 		pr_warn("tx-isp: QBUF guard inactive: no rmem=SIZE@BASE on the kernel command line\n");
