@@ -18,3 +18,4 @@ ccflags-y += -Wno-error=strict-prototypes
 ccflags-y += -Wno-error=implicit-function-declaration
 ccflags-y += -Wno-error=int-conversion
 ccflags-y += -Wno-error=incompatible-pointer-types
+ccflags-y += $(call cc-option,-Wa$(comma)-mno-pdr)

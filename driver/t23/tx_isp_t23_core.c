@@ -975,8 +975,14 @@ static uintptr_t (*tispinfo)();
 #define T23_IQ_STANDARD_SIZE (T23_IQ_HEADER_SIZE + 2U * T23_TPARAMS_BANK_SIZE)
 #define T23_IQ_CUSTOM_SIZE (T23_IQ_HEADER_SIZE + T23_TPARAMS_BANK_SIZE)
 #define T23_TPARAMS_HLDC_OFFSET 0x14b2cU
-/* The OEM object includes metadata followed by one full active tuning bank. */
-static unsigned char __attribute__((aligned(4))) tparams[T23_TPARAMS_OBJECT_SIZE] = {
+/*
+ * The OEM object includes metadata followed by one full active tuning bank.
+ * The recovery materialized only its first 16 KiB, the rest is zero: keep
+ * that prefix in init data and copy it in regtrace_patch_relocated_data()
+ * (first thing init_module does), so the 150 KB zero tail lives in .bss.
+ * Same RAM image, smaller .ko.
+ */
+static const unsigned char tparams_prefix_init[0x4000] __initconst = {
     0x54, 0x49, 0x53, 0x50, 0x5f, 0x50, 0x41, 0x52, 0x41, 0x4d, 0x5f, 0x54, 0x4f, 0x50, 0x5f, 0x42, 
     0x59, 0x50, 0x41, 0x53, 0x53, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
@@ -2002,6 +2008,7 @@ static unsigned char __attribute__((aligned(4))) tparams[T23_TPARAMS_OBJECT_SIZE
     0x52, 0x52, 0x41, 0x59, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
     0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
 };
+static unsigned char __attribute__((aligned(4))) tparams[T23_TPARAMS_OBJECT_SIZE];
 static unsigned char tparamsP[8];
 static uintptr_t (*data_abca0)();
 static uintptr_t (*data_abca8)();
@@ -18510,6 +18517,7 @@ fail:
 /* WHOLE_DRIVER_RELOCATED_DATA_PATCHES */
 static void regtrace_patch_relocated_data(void)
 {
+    memcpy(tparams, tparams_prefix_init, sizeof(tparams_prefix_init));
     *(const void **)((char *)isp_drivers + 0x0) = (const void *)&tx_isp_vin_driver;
     *(const void **)((char *)isp_drivers + 0x4) = (const void *)&tx_isp_csi_driver;
     *(const void **)((char *)isp_drivers + 0x8) = (const void *)&tx_isp_vic_driver;
