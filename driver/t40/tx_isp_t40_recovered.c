@@ -189721,13 +189721,13 @@ ispcore_pad_event_handle0xa40:
     if (v1 != v0) { goto ispcore_pad_event_handle0xa90; }
 
     /* fragment 280: CallSetup */
-    v0 = (uintptr_t *)&_raw_spin_unlock_irqrestore;
     a0 = s4;
-    v0 = v0;
 
 ispcore_pad_event_handle0xa80:
     /* fragment 281: CallSetup */
-   _raw_spin_unlock_irqrestore(a0, a1);
+    /* OEM: _raw_spin_unlock_irqrestore(lock, flags); through the macro,
+     * which also builds against UP and inlined-spinlock kernels */
+    raw_spin_unlock_irqrestore((raw_spinlock_t *)(uintptr_t)a0, a1);
 
     /* fragment 282: Branch */
     goto ispcore_pad_event_handle0x28c;

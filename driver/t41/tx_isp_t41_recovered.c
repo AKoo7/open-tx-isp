@@ -6411,7 +6411,14 @@ int32_t __private_spin_lock_irqsave(uint32_t a0, uintptr_t a1)
 
     /* fragment 1: CallSetup */
     local_1c = a1;
-    v0 = (unsigned int *)_raw_spin_lock_irqsave((void *)(uintptr_t)a0); /* jalr target resolved by relocation */
+    /* OEM: _raw_spin_lock_irqsave(lock) returns the flags.  Through the
+     * macro, which also builds against UP and inlined-spinlock kernels. */
+    {
+        unsigned long flags;
+
+        raw_spin_lock_irqsave((raw_spinlock_t *)(uintptr_t)a0, flags);
+        v0 = (unsigned int *)flags;
+    }
 
     /* fragment 2: StackAccess */
     a1 = local_1c;
