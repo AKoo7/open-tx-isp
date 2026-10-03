@@ -171,7 +171,8 @@ static int t41_native_awb_deinit(unsigned int channel)
     ((uint32_t *)(void *)tpm_cb_storage)[3]=0;
     ((uint32_t *)(void *)tpm_cb_storage)[4]=0;
     ((uint32_t *)(void *)tpm_cb_storage)[5]=0;
-    if (s) { private_kfree(s->dma); vfree(s); }
+    /* Review2 M3: stop the AWB statistics DMA before its ring is freed. */
+    if (s) { system_reg_write(0x1804c,0); private_kfree(s->dma); vfree(s); }
     t41_native_awb_error=-ENODEV;
     mutex_unlock(&t41_native_awb_lock);
     return 0;

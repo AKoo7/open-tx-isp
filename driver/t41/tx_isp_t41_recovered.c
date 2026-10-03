@@ -38,6 +38,8 @@
 #include "tx_isp_t41_adr.h"
 #include "tx_isp_t41_subdev.h"
 #include "tx_isp_t41_v4l2.h"
+#include <linux/ratelimit.h>
+#include "../include/tx_isp/tx_isp_guard.h"
 #ifdef REGTRACE_KERNEL_TREE_BUILD
 #include <linux/module.h>
 #include <linux/moduleparam.h>
@@ -1867,9 +1869,6 @@ static struct file_operations ivdc_misc_fops;
 static struct file_operations ivdc_proc_fops;
 static uint32_t vb_time;
 static uint32_t ivdc_vb_type;
-static unsigned char data_10000[16384];
-static unsigned char data_3288[16384];
-static unsigned char data_48000[16384];
 static uint32_t ivdc_mem_paddr;
 static uint32_t isp_err3;
 static struct file_operations isp_framesource_fops;
@@ -2100,13 +2099,12 @@ static unsigned char top_info_storage[8] __attribute__((aligned(4)));
 /* CCM's recovered scalar was absent; channel-1 gamma storage is unavailable. */
 #define ccm_info (gamma_info[1])
 static struct file_operations tisp_fops;
-static unsigned char data_1388[16384];
-static uint32_t ev_last;
+static uint32_t ev_last[2];	/* Review2 M4: 64-bit in stock (8 bytes) */
 static unsigned char __attribute__((aligned(4))) tgain_last[16] = {
     0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
 };
-static uint32_t sev_last;
-static uint32_t stgain_last;
+static uint32_t sev_last[2];	/* Review2 M4 */
+static uint32_t stgain_last[2];	/* Review2 M4 */
 static unsigned char tpm_cb_storage[336] __attribute__((aligned(4)));
 #define tpm_cb (*(uint32_t *)(void *)tpm_cb_storage)
 static uint32_t m_bin;
@@ -2128,7 +2126,6 @@ static unsigned char mscaler_storage[2656] __attribute__((aligned(4)));
 #define mscaler (*(uint32_t *)(void *)mscaler_storage)
 static unsigned char data_1ee40[16384];
 static unsigned char data_74b0[16384];
-static unsigned char data_80000[16384];
 static unsigned char day_night_storage[8] __attribute__((aligned(4)));
 #define day_night (*(uint32_t *)(void *)day_night_storage)
 static unsigned char deir_en_storage[8] __attribute__((aligned(4)));
@@ -7101,7 +7098,7 @@ int32_t private_schedule_work(void)
     t9 = t9;
 
     /* fragment 2: IndirectTailCall */
-    return queue_work_on(2, (void *)(uintptr_t)a1, (void *)(uintptr_t)a2);
+    return queue_work((void *)(uintptr_t)a1, (void *)(uintptr_t)a2);  /* Review2 L11 */
 
     return 0;
 }
@@ -12502,6 +12499,8 @@ vic_mdma_irq_function0x4b0:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000004b94 origin=fragment_seed original=isp_vic_interrupt_service_routine */
+static unsigned int t41_vic_err_restarts;
+
 int64_t isp_vic_interrupt_service_routine(uintptr_t a0, uint32_t a1, uint32_t a2)
 {
     uint32_t *local_10 = 0;
@@ -12562,8 +12561,10 @@ int64_t isp_vic_interrupt_service_routine(uintptr_t a0, uint32_t a1, uint32_t a2
         writel(active0, regs + 0x1f0);
         writel(active1, regs + 0x1f4);
         if ((active0 & 0x10) && t41_vic_frame_sync_work > 0) {
-            int queued = queue_work_on(2, system_wq,
-                                       (struct work_struct *)(void *)main_fs_work);
+            /* Review2 L11: stock queue_work_on(2) is WORK_CPU_UNBOUND only
+             * with NR_CPUS=2; queue_work() is that on any kernel. */
+            int queued = queue_work(system_wq,
+                                    (struct work_struct *)(void *)main_fs_work);
 
             if (fs_trace_count < 8)
                 printk(KERN_WARNING
@@ -12586,6 +12587,20 @@ int64_t isp_vic_interrupt_service_routine(uintptr_t a0, uint32_t a1, uint32_t a2
             ++*(uint32_t *)(vic + 0x1d8);
         if (active0 & 0x08)
             ++*(uint32_t *)(vic + 0x1dc);
+        /*
+         * Review2 H2: stock isp_vic_interrupt_service_routine (T41 SDK
+         * 9a2a2b5d, 0x5308): any error bit in 0xfffffe00 (asfifo, hor/ver,
+         * mipi vcomp) prints "reset start" and writes 5 to the VIC control
+         * register (reset + start). Same here, with a rate-limited print.
+         */
+        if (active0 & 0xfffffe00U) {
+            ++t41_vic_err_restarts;
+            printk_ratelimited(KERN_WARNING
+                               "tx_isp_t41_recovered: VIC error %#x, reset start (n=%u)\n",
+                               active0, t41_vic_err_restarts);
+            writel(5, regs + 0x0);
+            wmb();
+        }
         if (trace_count < 8)
             printk(KERN_WARNING
                    "tx_isp_t41_recovered: VIC safe irq irq=%u active=%#x/%#x raw=%#x/%#x frames=%u/%u/%u/%u\n",
@@ -20791,8 +20806,26 @@ static int t41_tuning_hvflip(const struct tx_isp_tuning_t41_control *request)
     return 0;
 }
 
-/* WHOLE_DRIVER_CANDIDATE fn_000000000000c784 origin=fragment_seed original=isp_core_tunning_unlocked_ioctl */
+/*
+ * Review2 M1: stock serialises the tuning node with core_dev->mlock; two
+ * tuning threads (day/night, BCSH, flip) must not interleave on the same
+ * IQ state. Serialise the whole isp-m0 ioctl.
+ */
+static DEFINE_MUTEX(t41_tuning_mutex);
+static int64_t isp_core_tunning_unlocked_ioctl_body(uintptr_t a0, uint32_t a1, uint32_t a2);
+
 int64_t isp_core_tunning_unlocked_ioctl(uintptr_t a0, uint32_t a1, uint32_t a2)
+{
+    int64_t ret;
+
+    mutex_lock(&t41_tuning_mutex);
+    ret = isp_core_tunning_unlocked_ioctl_body(a0, a1, a2);
+    mutex_unlock(&t41_tuning_mutex);
+    return ret;
+}
+
+/* WHOLE_DRIVER_CANDIDATE fn_000000000000c784 origin=fragment_seed original=isp_core_tunning_unlocked_ioctl */
+static int64_t isp_core_tunning_unlocked_ioctl_body(uintptr_t a0, uint32_t a1, uint32_t a2)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_18 = 0;
@@ -26124,13 +26157,13 @@ int ivdc_pad_event_handle(int32_t * arg1, int arg2, void * arg3) {
             *(int32_t *)((char *)*(void **)((uintptr_t)s0_1 + 0x110) + 0x20) = (s1_1 + 0xff) >> 8 << 0x10 | ((s1_1 + 0xff) & 0xffffff00);
             void * v1_10 = *(void **)((char *)s0_1 + 0x110);
             if ((*(int32_t *)((uintptr_t)v1_10 + 0x24) & 0x700) == 0) {
-                *(int32_t *)((char *)v1_10 + 0x24) = (int32_t)&data_3288;
+                *(int32_t *)((char *)v1_10 + 0x24) = (int32_t)0x3288;
                 v1_10 = *(void **)((char *)s0_1 + 0x110);
             }
             *(int32_t *)((char *)v1_10 + 0x60) = 0x100702;
             *(int32_t *)((char *)*(void **)((char *)s0_1 + 0x110) + 0x64) = 7;
             *(int32_t *)((char *)*(void **)((char *)s0_1 + 0x110) + 0x84) = 1;
-            *(int32_t *)((char *)*(void **)((char *)s0_1 + 0x110) + 0x68) = (int32_t)&data_10000;
+            *(int32_t *)((char *)*(void **)((char *)s0_1 + 0x110) + 0x68) = (int32_t)0x10000;
             *(int32_t *)((char *)*(void **)((char *)s0_1 + 0x110) + 0x6c) = TX_ISP_FRAME_EVENT_GET_FORMAT;
             if (ivdc_threshold_line == 0)
                 ivdc_threshold_line = a3_1;
@@ -26241,19 +26274,19 @@ int ivdc_pad_event_handle(int32_t * arg1, int arg2, void * arg3) {
         uint32_t v0_55;
         if (s5_3 >= 0xc01) {
             direct_mode = 2;
-            v0_55 = (uint32_t)&data_48000 / s1_5;
+            v0_55 = 0x48000U / s1_5;
             *(int32_t *)((char *)*(void **)((char *)s0_3 + 0x110) + 0x2c) = 0;
             ivdc_mem_line_2 = ivdc_mem_line;
         } else {
             uint32_t direct_mode_1 = direct_mode;
             if (direct_mode_1 == 2) {
-                v0_55 = (uint32_t)&data_48000 / s1_5;
+                v0_55 = 0x48000U / s1_5;
                 *(int32_t *)((char *)*(void **)((char *)s0_3 + 0x110) + 0x28) = v0_55;
                 *(int32_t *)((char *)*(void **)((char *)s0_3 + 0x110) + 0x2c) = 0;
                ivdc_mem_line_2 = ivdc_mem_line;
             } else if ((int32_t)direct_mode_1 >= 3) {
                 if (direct_mode_1 == 3) {
-                    v0_55 = ((uint32_t)&data_48000 / s1_5) << 0x10;
+                    v0_55 = (0x48000U / s1_5) << 0x10;
                     *(int32_t *)((char *)*(void **)((char *)s0_3 + 0x110) + 0x28) = v0_55;
                     *(int32_t *)((char *)*(void **)((char *)s0_3 + 0x110) + 0x2c) = 0;
                     ivdc_mem_line_2 = ivdc_mem_line;
@@ -26268,12 +26301,12 @@ int ivdc_pad_event_handle(int32_t * arg1, int arg2, void * arg3) {
                 }
             } else {
                 if (direct_mode_1 == 0) {
-                    v0_55 = (uint32_t)&data_48000 / s1_5;
+                    v0_55 = 0x48000U / s1_5;
                     *(int32_t *)((char *)*(void **)((char *)s0_3 + 0x110) + 0x28) = v0_55;
                     *(int32_t *)((char *)*(void **)((char *)s0_3 + 0x110) + 0x2c) = 0;
                     ivdc_mem_line_2 = ivdc_mem_line;
                 } else if (direct_mode_1 == 1) {
-                    v0_55 = ((uint32_t)&data_48000 / s1_5) << 0x10;
+                    v0_55 = (0x48000U / s1_5) << 0x10;
                     *(int32_t *)((char *)*(void **)((char *)s0_3 + 0x110) + 0x28) = v0_55;
                     *(int32_t *)((char *)*(void **)((char *)s0_3 + 0x110) + 0x2c) = 0;
                     ivdc_mem_line_2 = ivdc_mem_line;
@@ -26298,7 +26331,7 @@ int ivdc_pad_event_handle(int32_t * arg1, int arg2, void * arg3) {
         *(int32_t *)((char *)*(void **)((char *)s0_3 + 0x110) + 0x5c) = 0;
         *(int32_t *)((char *)*(void **)((char *)s0_3 + 0x110) + 0x60) = 0x100702;
         *(int32_t *)((char *)*(void **)((char *)s0_3 + 0x110) + 0x64) = 7;
-        *(int32_t *)((char *)*(void **)((char *)s0_3 + 0x110) + 0x68) = (int32_t)&data_10000;
+        *(int32_t *)((char *)*(void **)((char *)s0_3 + 0x110) + 0x68) = (int32_t)0x10000;
         *(int32_t *)((char *)*(void **)((char *)s0_3 + 0x110) + 0x6c) = TX_ISP_FRAME_EVENT_GET_FORMAT;
         *(int32_t *)((char *)*(void **)((char *)s0_3 + 0x110) + 0x70) = 0;
         *(int32_t *)((char *)*(void **)((char *)s0_3 + 0x110) + 0x74) = 0;
@@ -26381,20 +26414,20 @@ int ivdc_pad_event_handle(int32_t * arg1, int arg2, void * arg3) {
         uint32_t v0_56;
         if (s5_4 >= 0xc01) {
             direct_mode = 2;
-            v0_56 = (uint32_t)&data_48000 / s1_6;
+            v0_56 = 0x48000U / s1_6;
             *(int32_t *)((char *)*(void **)((char *)s0_4 + 0x110) + 0x28) = v0_56;
             *(int32_t *)((char *)*(void **)((char *)s0_4 + 0x110) + 0x2c) = 0;
             ivdc_mem_line_4 = ivdc_mem_line;
         } else {
             uint32_t direct_mode_2 = direct_mode;
             if (direct_mode_2 == 2) {
-                v0_56 = (uint32_t)&data_48000 / s1_6;
+                v0_56 = 0x48000U / s1_6;
                 *(int32_t *)((char *)*(void **)((char *)s0_4 + 0x110) + 0x28) = v0_56;
                 *(int32_t *)((char *)*(void **)((char *)s0_4 + 0x110) + 0x2c) = 0;
                 ivdc_mem_line_4 = ivdc_mem_line;
             } else if ((int32_t)direct_mode_2 >= 3) {
                 if (direct_mode_2 == 3) {
-                    v0_56 = ((uint32_t)&data_48000 / s1_6) << 0x10;
+                    v0_56 = (0x48000U / s1_6) << 0x10;
                     *(int32_t *)((char *)*(void **)((char *)s0_4 + 0x110) + 0x28) = v0_56;
                     *(int32_t *)((char *)*(void **)((char *)s0_4 + 0x110) + 0x2c) = 0;
                     ivdc_mem_line_4 = ivdc_mem_line;
@@ -26409,12 +26442,12 @@ int ivdc_pad_event_handle(int32_t * arg1, int arg2, void * arg3) {
                 }
             } else {
                 if (direct_mode_2 == 0) {
-                    v0_56 = (uint32_t)&data_48000 / s1_6;
+                    v0_56 = 0x48000U / s1_6;
                     *(int32_t *)((char *)*(void **)((char *)s0_4 + 0x110) + 0x28) = v0_56;
                     *(int32_t *)((char *)*(void **)((char *)s0_4 + 0x110) + 0x2c) = 0;
                     ivdc_mem_line_4 = ivdc_mem_line;
                 } else if (direct_mode_2 == 1) {
-                    v0_56 = ((uint32_t)&data_48000 / s1_6) << 0x10;
+                    v0_56 = (0x48000U / s1_6) << 0x10;
                     *(int32_t *)((char *)*(void **)((char *)s0_4 + 0x110) + 0x28) = v0_56;
                     *(int32_t *)((char *)*(void **)((char *)s0_4 + 0x110) + 0x2c) = 0;
                     ivdc_mem_line_4 = ivdc_mem_line;
@@ -26429,7 +26462,7 @@ int ivdc_pad_event_handle(int32_t * arg1, int arg2, void * arg3) {
         *(int32_t *)((char *)*(void **)((char *)s0_4 + 0x110) + 0x5c) = 0;
         *(int32_t *)((char *)*(void **)((char *)s0_4 + 0x110) + 0x60) = 0x100702;
         *(int32_t *)((char *)*(void **)((char *)s0_4 + 0x110) + 0x64) = 7;
-        *(int32_t *)((char *)*(void **)((char *)s0_4 + 0x110) + 0x68) = (int32_t)&data_10000;
+        *(int32_t *)((char *)*(void **)((char *)s0_4 + 0x110) + 0x68) = (int32_t)0x10000;
         *(int32_t *)((char *)*(void **)((char *)s0_4 + 0x110) + 0x6c) = TX_ISP_FRAME_EVENT_GET_FORMAT;
         *(int32_t *)((char *)*(void **)((char *)s0_4 + 0x110) + 0x70) = 0;
         *(int32_t *)((char *)*(void **)((char *)s0_4 + 0x110) + 0x74) = 0;
@@ -28399,6 +28432,10 @@ int t41_frame_channel_reqbufs_clean(void *channel, void __user *user_req)
     return 0;
 }
 
+static bool t41_qbuf_guard = true;
+module_param_named(qbuf_guard, t41_qbuf_guard, bool, 0644);
+MODULE_PARM_DESC(qbuf_guard, "Reject framechan QBUF buffers outside rmem (default 1)");
+
 int t41_frame_channel_qbuf_clean(void *channel, void __user *user_buf)
 {
     uint32_t vbuf[TX_ISP_FRAME_WORD_COUNT];
@@ -28508,6 +28545,19 @@ int t41_frame_channel_qbuf_clean(void *channel, void __user *user_buf)
     if (vbuf[TX_ISP_FRAME_WORD_MEMORY] != *(uint32_t *)((char *)channel + 0x48) ||
         vbuf[TX_ISP_FRAME_WORD_LENGTH] != *(uint32_t *)((char *)channel + 0x64) ||
         *(uint32_t *)(buffer + 0x48) != 0)
+        return -EINVAL;
+
+    /*
+     * Review2 M2: user space queues the frame buffer by physical address;
+     * the ISP writes the frame there and the sync below invalidates that
+     * range. Accept only rmem (tx_isp_guard.h), as on T20/T21/T23/T31.
+     */
+    if (tx_isp_qbuf_phys_check(vbuf[TX_ISP_FRAME_WORD_DMA],
+                               vbuf[TX_ISP_FRAME_WORD_LENGTH]) &&
+        tx_isp_qbuf_reject("tx_isp_t41_recovered",
+                           (int)*(uint32_t *)((char *)channel + 0x2dc),
+                           index, vbuf[TX_ISP_FRAME_WORD_DMA],
+                           vbuf[TX_ISP_FRAME_WORD_LENGTH], t41_qbuf_guard))
         return -EINVAL;
 
     *(uint32_t *)(buffer + 0x0c) = vbuf[TX_ISP_FRAME_WORD_FLAGS] & TX_ISP_FRAME_FLAG_RETAIN_MASK;
@@ -43834,7 +43884,7 @@ int32_t Tiziano_Awb_Ct_Detect_GrayWorld_mode(void *arg1, int32_t arg2, void *arg
                 result = 1;
                 *arg5 = 1;
                 int32_t s0_1 = 1 << (s0 & 0x1f);
-                *v0_1 = &data_1388;
+                *v0_1 = (void *)5000;  /* stock li 5000 */
                 *arg4 = s0_1;
                 ((void **)arg4)[1] = s0_1;
             } else {
@@ -43958,7 +44008,7 @@ int32_t Tiziano_Awb_Ct_Detect_GrayWorld_mode(void *arg1, int32_t arg2, void *arg
                     label_1a534:
                     *v1_7 = 1;
                     int32_t s0_2 = 1 << (s0 & 0x1f);
-                    *v0_1 = &data_1388;
+                    *v0_1 = (void *)5000;  /* stock li 5000 */
                     *arg4 = s0_2;
                     ((void **)arg4)[1] = s0_2;
                 }
@@ -76084,6 +76134,11 @@ int tisp_awb_deinit(int arg1) {
     }
 
     info = (uint8_t *)(uintptr_t)awb_info[arg1];
+    /* Review2 M3: stop the AWB statistics DMA before its ring is freed. */
+    if (info && *(uint32_t *)(void *)(info + 20)) {
+        system_reg_write(0x1804c, 0);
+        wmb();
+    }
     if (info) {
         static const unsigned int owned_offsets[] = { 4, 8, 12, 20 };
         unsigned int i;
@@ -85416,7 +85471,7 @@ int tisp_lsc_init(uint32_t arg1, uint32_t *arg2)
     *(uint8_t *)((uintptr_t)v0_2 + 0x6c28) = tmp ^ 1;
     *(uint8_t *)((char *)v0_2 + 0x6c29) = 0xff;
     *(uint8_t *)((char *)v0_2 + 0x6c2a) = 0xff;
-    ((void **)v0_2)[3] = (uint32_t)&data_1388;
+    ((void **)v0_2)[3] = (void *)5000;  /* stock li 5000 */
     ((void **)v0_2)[4] = 5;
     ((void **)v0_2)[5] = 0x10;
     ((void **)v0_2)[7] = 0x100;
@@ -88254,10 +88309,13 @@ int64_t tisp_wdr_degweight_ev(uintptr_t a0, uintptr_t a1, uintptr_t a2, uint32_t
     uintptr_t *v1 = 0;
 
     /* fragment 0: StackAccess */
-    v1 = local_10;
+    /* Review2 M4: stock lw v1,16(sp) / lw v0,12(v1): the fifth argument,
+     * not a global (was local_10 = NULL and &direct_mode + 4). */
+    (void)local_10;
+    v1 = (uintptr_t *)arg4;
     t1 = *(uint16_t *)((char *)a0 + 8);
     t0 = *(uint16_t *)((char *)a0 + 4);
-    v0 = *(uint32_t *)((char *)((char *)&direct_mode + 0x4));
+    v0 = (uintptr_t *)(uintptr_t)*(uint32_t *)((char *)arg4 + 12);
     t2 = *(uint16_t *)((char *)a0 + 6);
     v0 = t1 < v0;
 
@@ -103516,18 +103574,22 @@ int64_t lce_wdr_light_lock(uint32_t a0, uint32_t a1, uint32_t a2, uintptr_t a3, 
     /* function prologue: stack frame and callee-saved register setup */
 
     /* fragment 1: MemoryAccess */
+    /* Review2 M4: stock lw v0,256(sp) is the fifth argument; the u16
+     * fields at +4/+6/+8/+10/+12 were mis-resolved to the module
+     * parameters ivdc_mem_line/direct_mode (.bss+4/+8). */
+    (void)local_100;
     v1 = *(uint32_t *)((char *)a3 + 0);
-    v0 = local_100;
+    v0 = (uintptr_t *)arg4;
     s1 = *(uint32_t *)((char *)a3 + 12);
     local_b8 = v1;
     v1 = *(uint32_t *)((char *)a3 + 4);
-    t7 = *(uint16_t *)((char *)&direct_mode);
-    t8 = *(uint16_t *)((char *)((char *)&ivdc_mem_line + 0x2));
+    t7 = *(uint16_t *)((char *)arg4 + 8);
+    t8 = *(uint16_t *)((char *)arg4 + 6);
     local_bc = v1;
-    t9 = *(uint16_t *)((char *)((char *)&direct_mode + 0x2));
+    t9 = *(uint16_t *)((char *)arg4 + 10);
     v1 = *(uint32_t *)((char *)a3 + 8);
-    s0 = *(uint16_t *)((char *)((char *)&direct_mode + 0x4));
-    s2 = *(uint16_t *)((char *)&ivdc_mem_line);
+    s0 = *(uint16_t *)((char *)arg4 + 12);
+    s2 = *(uint16_t *)((char *)arg4 + 4);
     t3 = 0;
     local_c0 = v1;
     s3 = (uintptr_t)t7 - (uintptr_t)t8;
@@ -119454,7 +119516,7 @@ int32_t subsection(int32_t *arg1, int32_t arg2, int16_t *arg3, int16_t *arg4, in
     int32_t v0 = 2 << (arg7 & 0x1f);
     ((void **)arg1)[8] = 0xfff;
     *arg1 = 0;
-    int32_t v0_3 = subsection_map(&data_1388, (fix_point_div_32(arg7, 0xfff << (arg7 & 0x1f), v0) + 0x200) >> (arg7 & 0x1f), arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9);
+    int32_t v0_3 = subsection_map(5000, (fix_point_div_32(arg7, 0xfff << (arg7 & 0x1f), v0) + 0x200) >> (arg7 & 0x1f), arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9);
         int16_t * var_38 = arg4;
     int16_t *a0_1 = arg4;
     int32_t *v0_4 = 0;
@@ -137931,7 +137993,7 @@ int32_t tisp_hldc_calc_para(uint32_t arg1, uint32_t arg2, uint32_t arg3, uint32_
         }
 
         /* Call fix_point_div_64(0, fix_point_div_64, 0, &data_80000, local_10, local_14) */
-        v0 = fix_point_div_64(0, (uintptr_t)&fix_point_div_64, 0, (uint32_t*)&data_80000, local_10, local_14) - 5;
+        v0 = fix_point_div_64(0, (uintptr_t)&fix_point_div_64, 0, 0x80000U, local_10, local_14) - 5;
 
         if ((int32_t)v0 <= 0) {
             v0 = 1;
@@ -159022,6 +159084,15 @@ ispcore_sensor_ops_release_all_sensor0x84:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000006f0b8 origin=fragment_seed original=ispcore_sensor_ops_ioctl */
+/*
+ * Review2 M7: serialise sensor operations. The HV-flip ioctl writes the
+ * sensor from process context while the AE thread and the frame-done/
+ * frame-sync works send exposure events; a sensor driver using a group-hold
+ * sequence must not see them interleave. Every caller is process context
+ * (the sensor ioctls do I2C and sleep anyway).
+ */
+static DEFINE_MUTEX(t41_sensor_ops_mutex);
+
 int32_t ispcore_sensor_ops_ioctl(uintptr_t core_sd, uint32_t cmd,
 				 uintptr_t arg)
 {
@@ -159030,6 +159101,7 @@ int32_t ispcore_sensor_ops_ioctl(uintptr_t core_sd, uint32_t cmd,
 
 	if (!core_sd)
 		return -EINVAL;
+	mutex_lock(&t41_sensor_ops_mutex);
 
 	/* The ISP core embeds sixteen remote subdevice pointers at +0x3c. */
 	for (offset = 60; offset < 124; offset += sizeof(uintptr_t)) {
@@ -159053,6 +159125,7 @@ int32_t ispcore_sensor_ops_ioctl(uintptr_t core_sd, uint32_t cmd,
 		if (ret && ret != -ENOIOCTLCMD)
 			break;
 	}
+	mutex_unlock(&t41_sensor_ops_mutex);
 	return ret == -ENOIOCTLCMD ? 0 : ret;
 }
 /* WHOLE_DRIVER_CANDIDATE fn_000000000006f168 origin=fragment_seed original=ispcore_frame_channel_get_fmt */
@@ -167585,9 +167658,7 @@ int64_t ispcore_interrupt_service_routine(uintptr_t a0)
              * the per-frame ISP/sensor state before the next input frame;
              * omitting it lets the first buffer complete and then raises ISP
              * overflow (error bit 0x20). */
-            work_queued = queue_work_on(
-                2, system_wq,
-                &main_fd_work);
+            work_queued = queue_work(system_wq, &main_fd_work);  /* Review2 L11 */
             if (completion_trace_count < 12)
                 printk(KERN_WARNING
                        "tx_isp_t41_recovered: ISP frame-done work queued=%d\n",
