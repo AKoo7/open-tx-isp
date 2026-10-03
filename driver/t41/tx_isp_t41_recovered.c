@@ -20675,6 +20675,9 @@ static int t41_tuning_copy_awb_global_stats(unsigned int channel,
                                 sizeof(response)) ? -EFAULT : 0;
 }
 
+/* Last requested sensor flip mode (.data; -1 = never set). */
+static int t41_sensor_flip_mode = -1;
+
 static int t41_tuning_hvflip(const struct tx_isp_tuning_t41_control *request)
 {
     uint32_t attr[4];
@@ -20689,7 +20692,7 @@ static int t41_tuning_hvflip(const struct tx_isp_tuning_t41_control *request)
         !t41_kernel_data_ptr(attrs))
         return -EINVAL;
     if (request->is_get) {
-        attr[0] = *(uint32_t *)(void *)(attrs + 20);
+        attr[0] = t41_sensor_flip_mode < 0 ? 0 : t41_sensor_flip_mode;
         for (i = 0; i < 3; ++i) {
             channel = mscaler_storage + i * 0x264;
             attr[1 + i] = (channel[0x0a] ? 1U : 0U) |
@@ -20714,21 +20717,26 @@ static int t41_tuning_hvflip(const struct tx_isp_tuning_t41_control *request)
         bits |= (attr[1 + i] & 2) ? 0x30 : 0;
         tisp_s_hv_flip(request->channel, (uintptr_t)&bits);
     }
-    if (*(uint32_t *)(void *)(attrs + 20) == attr[0])
-        return 0;
     if (!t41_kernel_data_ptr(core_sd))
         return -ENODEV;
     core = *(char **)(core_sd + 268);
     if (!t41_kernel_data_ptr(core))
         return -ENODEV;
-    tisp_lsc_hvflip(*(uint32_t *)(void *)(core + 368),
-                    *(uint32_t *)(void *)(core + 372),
-                    (attr[0] >> 1) & 1, attr[0] & 1);
+    /*
+     * Stock skips an unchanged mode by comparing against its own per-VI
+     * record; tisp_tattr+20 is not that record.  Always stage the sensor
+     * write (idempotent register update): timps re-asserts the flip after
+     * a chn0 restart and a skipped re-assert left the sensor unflipped.
+     */
+    if (t41_sensor_flip_mode != (int)attr[0])
+        tisp_lsc_hvflip(*(uint32_t *)(void *)(core + 368),
+                        *(uint32_t *)(void *)(core + 372),
+                        (attr[0] >> 1) & 1, attr[0] & 1);
     *(volatile uint32_t *)(void *)(core + 520) = attr[0];
     smp_wmb();
     *(volatile uint32_t *)(void *)(core + 516) = 1;
-    *(uint32_t *)(void *)(attrs + 20) = attr[0];
-    printk(KERN_INFO "tx_isp_t41_recovered: hvflip sensor=%u isp=%u/%u/%u\n",
+    t41_sensor_flip_mode = attr[0];
+    printk(KERN_WARNING "tx_isp_t41_recovered: hvflip staged sensor=%u isp=%u/%u/%u\n",
            attr[0], attr[1], attr[2], attr[3]);
     return 0;
 }
@@ -159377,10 +159385,15 @@ static void ispcore_irq_main_fd_work(struct work_struct *work)
 		 * the flag (ispcore_irq_main_fd_work+0x190).
 		 */
 		if (index == 5) {
+			int flip_ret;
+
 			event_arg[0] = 0;
 			event_arg[1] = *(uint32_t *)(core + 520);
-			ispcore_sensor_ops_ioctl(core_sd, 0x02000010,
+			flip_ret = ispcore_sensor_ops_ioctl(core_sd, 0x02000010,
 						 (uintptr_t)&event_arg[0]);
+			printk(KERN_WARNING
+			       "tx_isp_t41_recovered: hvflip sensor event mode=%u ret=%d\n",
+			       event_arg[1], flip_ret);
 			*(volatile uint32_t *)(core + 516) = 0;
 			*pending = 0;
 			continue;
@@ -159823,7 +159836,8 @@ static int t41_isp_status_show(struct seq_file *m, void *unused)
         seq_printf(m, "Contrast : %d\n", attrs[3]);
         seq_printf(m, "Brightness : %d\n", attrs[9]);
         seq_printf(m, "Hue : %d\n", attrs[12]);
-        seq_printf(m, "FlipMode: %d\n", *(uint32_t *)(void *)(attrs + 20));
+        seq_printf(m, "FlipMode: %d\n",
+                   t41_sensor_flip_mode < 0 ? 0 : t41_sensor_flip_mode);
     }
     seq_printf(m, "IspFlipMode: %d %d %d\n",
                (mscaler_storage[0x0a] ? 1 : 0) | (mscaler_storage[0x0c] ? 2 : 0),
