@@ -402,6 +402,7 @@ static bool t23_aelift_inited;
 static uint32_t t23_aelift_init_w, t23_aelift_init_h, t23_aelift_init_fps;
 static uint32_t t23_aelift_tgain;		/* last event-4 total gain, Q16 */
 static uint32_t t23_aelift_ev_q10;		/* last event-6 scene EV, Q10 */
+static uint32_t t23_aelift_ev_hi;
 static bool t23_aelift_ev_seen;
 
 /*
@@ -565,24 +566,47 @@ static void t23_aelift_work_fn(struct work_struct *work)
 	t23_aelift_ev_count = 0;
 	spin_unlock_irqrestore(&t23_aelift_ev_lock, flags);
 	for (i = 0; i < n; i++) {
-		/* stock tisp_long_tgain_update: arg0 = log2 total gain, Q16 */
 		/*
-		 * stock tisp_long_ev_update: arg0 = scene EV, Q10.  AWB takes
-		 * it as is; the CCM is recomputed when its EV-dependent
-		 * saturation moves (as the HLIL substitute does on a rung
-		 * change; stock jz_isp_ccm on an EV step).
+		 * stock tisp_long_ev_update: arg0/arg1 = scene EV, Q10, low/high
+		 * word; nothing happens unless it changed.  Then, in stock
+		 * order: AWB takes it as is (tisp_awb_ev_update); the CCM is
+		 * recomputed when its EV-dependent saturation moves (stock
+		 * jz_isp_ccm on an EV step; the HLIL substitute does the same
+		 * on a rung change); ADR and defog are not fed (see below);
+		 * BCSH gets tisp_bcsh_ev_update(ev, hi), gated like the HLIL
+		 * substitute's call.
+		 *
+		 * ADR / defog: stock passes ev >> 10 to them only when they are
+		 * not bypassed (0xc bits 7 / 11).  This driver bypasses both
+		 * unless source_adr/defog_internal_enable is set, and the
+		 * recovered tisp_adr_ev_update / tisp_defog_ev_update store
+		 * into the wrong objects (tevent_info + 0xfc8,
+		 * ivdc_threshold_line instead of stock ev_changed / ev_now), so
+		 * they are not called; the HLIL substitute does not call them
+		 * either.
 		 */
 		if (ev[i].id == 6U) {
+			bool changed = !t23_aelift_ev_seen ||
+				       ev[i].args[0] != t23_aelift_ev_q10 ||
+				       ev[i].args[1] != t23_aelift_ev_hi;
+
 			t23_aelift_ev_q10 = ev[i].args[0];
+			t23_aelift_ev_hi = ev[i].args[1];
 			t23_aelift_ev_seen = true;
-			if (regtrace_t23_source_ccm_events &&
+			if (changed && regtrace_t23_source_ccm_events &&
 			    regtrace_t23_source_ccm_tuning_init &&
 			    regtrace_t23_ccm_saturation(t23_aelift_ev_q10) !=
 			    regtrace_t23_source_ccm_last_saturation)
 				regtrace_t23_source_ccm_commit(
 					regtrace_t23_source_ccm_runtime_ct,
 					t23_aelift_ev_q10);
+			if (changed && regtrace_t23_source_bcsh_events) {
+				tisp_bcsh_ev_update(t23_aelift_ev_q10,
+						    t23_aelift_ev_hi);
+				regtrace_t23_source_bcsh_ev_events++;
+			}
 		}
+		/* stock tisp_long_tgain_update: arg0 = log2 total gain, Q16 */
 		if (ev[i].id == 4U) {
 			t23_aelift_tgain = tisp_math_exp2(ev[i].args[0], 16, 16);
 			if (t23_aelift_debug)
