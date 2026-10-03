@@ -13189,10 +13189,25 @@ static void regtrace_t23_source_ae_write_stats_startup(void)
            regtrace_t23_source_sensor_height);
 }
 
+/*
+ * White balance survives stream restarts like in stock, where
+ * tiziano_awb_init runs once from tisp_init and a stream on/off does not
+ * touch the AWB state.  Here every stream start resets the core, so the
+ * gains in use are written again instead of the bootstrap (1x) gains.
+ * Every on-demand snapshot restarts the stream: with the bootstrap gains
+ * it was taken before the AWB had settled again (green picture).  Set by
+ * the first real gain write; cleared only by a module reload.
+ */
+static bool regtrace_t23_source_awb_kept;
+
 static void regtrace_t23_source_awb_write_static_startup(void)
 {
-    uint32_t rgain = min(regtrace_t23_source_awb_bootstrap_rgain, 0x3fffU);
-    uint32_t bgain = min(regtrace_t23_source_awb_bootstrap_bgain, 0x3fffU);
+    uint32_t rgain = regtrace_t23_source_awb_kept ?
+        regtrace_t23_source_awb_last_rgain :
+        min(regtrace_t23_source_awb_bootstrap_rgain, 0x3fffU);
+    uint32_t bgain = regtrace_t23_source_awb_kept ?
+        regtrace_t23_source_awb_last_bgain :
+        min(regtrace_t23_source_awb_bootstrap_bgain, 0x3fffU);
     uint32_t rvalue = 0x04000000U | rgain;
     uint32_t bvalue = 0x04000000U | bgain;
 
@@ -13207,8 +13222,8 @@ static void regtrace_t23_source_awb_write_static_startup(void)
     system_reg_write(0x1810U, bvalue);
 
     printk(KERN_WARNING
-           "tx_isp_t23_recovered: source AWB neutral startup requested gains=0x%x/0x%x\n",
-           rvalue, bvalue);
+           "tx_isp_t23_recovered: source AWB %s startup requested gains=0x%x/0x%x\n",
+           regtrace_t23_source_awb_kept ? "kept" : "neutral", rvalue, bvalue);
 }
 
 static void regtrace_t23_source_awb_write_stats_startup(void)
@@ -13247,10 +13262,12 @@ static void regtrace_t23_source_awb_write_stats_startup(void)
     regtrace_t23_source_awb_stats_irqs = 0;
     regtrace_t23_source_awb_stats_snapshots = 0;
     regtrace_t23_source_awb_grayworld_updates = 0;
-    regtrace_t23_source_awb_last_rgain = min(
-        regtrace_t23_source_awb_bootstrap_rgain, 0x3fffU);
-    regtrace_t23_source_awb_last_bgain = min(
-        regtrace_t23_source_awb_bootstrap_bgain, 0x3fffU);
+    if (!regtrace_t23_source_awb_kept) {
+        regtrace_t23_source_awb_last_rgain = min(
+            regtrace_t23_source_awb_bootstrap_rgain, 0x3fffU);
+        regtrace_t23_source_awb_last_bgain = min(
+            regtrace_t23_source_awb_bootstrap_bgain, 0x3fffU);
+    }
     regtrace_t23_source_awb_hlil_reset();
     printk(KERN_WARNING
            "tx_isp_t23_recovered: source AWB statistics grid committed for %ux%u tap=%s thresholds=wide\n",
@@ -13281,6 +13298,7 @@ static void regtrace_t23_source_awb_apply_gains(uint32_t rgain,
 
     regtrace_t23_source_awb_last_rgain = rgain;
     regtrace_t23_source_awb_last_bgain = bgain;
+    regtrace_t23_source_awb_kept = true;
 }
 
 #include "tx_isp_t23_awb_runtime.inc"

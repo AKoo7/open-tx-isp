@@ -632,7 +632,8 @@ static void regtrace_t23_source_awb_hlil_capture(const uint32_t *words,
 
     if (!regtrace_t23_source_awb_hlil)
         return;
-    if (regtrace_t23_source_awb_hlil_interval &&
+    /* the first snapshot after a stream start is used at once */
+    if (regtrace_t23_source_awb_hlil_interval && snapshot != 1U &&
         snapshot % regtrace_t23_source_awb_hlil_interval)
         return;
 
@@ -672,15 +673,20 @@ static void regtrace_t23_source_awb_hlil_reset(void)
     cancel_work_sync(&regtrace_t23_source_awb_hlil_work_item);
     spin_lock_irqsave(&regtrace_t23_awb_hlil_lock, flags);
     regtrace_t23_awb_hlil_pending = false;
-    regtrace_t23_awb_hlil_history_count = 0;
+    /* a stream restart keeps the white balance history (see
+     * regtrace_t23_source_awb_kept); only the first start begins empty */
+    if (!regtrace_t23_source_awb_kept)
+        regtrace_t23_awb_hlil_history_count = 0;
     spin_unlock_irqrestore(&regtrace_t23_awb_hlil_lock, flags);
     regtrace_t23_source_awb_hlil_runs = 0;
     regtrace_t23_source_awb_hlil_updates = 0;
     regtrace_t23_source_awb_hlil_drops = 0;
     regtrace_t23_source_awb_hlil_status = 0;
-    regtrace_t23_source_awb_hlil_rg = 0;
-    regtrace_t23_source_awb_hlil_bg = 0;
-    regtrace_t23_source_awb_hlil_ct = REGTRACE_T23_AWB_HLIL_STARTUP_CT;
+    if (!regtrace_t23_source_awb_kept) {
+        regtrace_t23_source_awb_hlil_rg = 0;
+        regtrace_t23_source_awb_hlil_bg = 0;
+        regtrace_t23_source_awb_hlil_ct = REGTRACE_T23_AWB_HLIL_STARTUP_CT;
+    }
     regtrace_t23_source_ccm_event_count = 0;
     regtrace_t23_source_ccm_last_ct = regtrace_t23_source_ccm_runtime_ct;
     regtrace_t23_source_lsc_event_count = 0;
