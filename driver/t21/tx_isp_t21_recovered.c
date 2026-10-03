@@ -7708,7 +7708,8 @@ int32_t isp_vic_interrupt_service_routine(void *arg1)
                 ((void **)vic_status_tmp)[idx] = status;
             }
             err_all = err_all_val + 1;
-            isp_printf(2, "## VIC ERROR status = 0x%08x\n", status);
+            /* Review2 L2: hard IRQ; isp_printf(2) also dumps the stack. */
+            printk_ratelimited(KERN_WARNING "## VIC ERROR status = 0x%08x\n", status);
         }
 
         if ((status & 8) != 0)
@@ -7718,7 +7719,7 @@ int32_t isp_vic_interrupt_service_routine(void *arg1)
             *(uint32_t *)((uintptr_t)s0 + 0x160) += 1;
             ptr = *(uint32_t **)((char *)s0 + 0xb8);
             *ptr |= 4;
-            isp_printf(1, "## VIC ERROR status = 0x%08x,%d\n", status);
+            printk_ratelimited(KERN_WARNING "## VIC ERROR status = 0x%08x (restart)\n", status);
         }
 
         if ((status & 0x80) != 0) {
@@ -11524,6 +11525,19 @@ static bool t21_qbuf_guard = true;
 module_param_named(qbuf_guard, t21_qbuf_guard, bool, 0644);
 MODULE_PARM_DESC(qbuf_guard, "Reject framechan QBUF buffers outside rmem (default 1)");
 
+/* tx-isp GET_BUF/SET_BUF: the VIC subdev behind the file, or NULL. */
+static void *t21_setbuf_vic(void *priv)
+{
+	char *core;
+
+	if (!priv)
+		return NULL;
+	core = *(char **)((char *)priv + 0x2c);
+	if (!core)
+		return NULL;
+	return *(void **)(core + 0xd4);
+}
+
 static long frame_channel_unlocked_ioctl(struct file *file, unsigned int cmd,
 					 unsigned long arg)
 {
@@ -11712,15 +11726,25 @@ static long frame_channel_unlocked_ioctl(struct file *file, unsigned int cmd,
 			if (list_empty(&ch->done) && (file->f_flags & O_NONBLOCK))
 				return -EAGAIN;
 			if (!list_empty(&ch->done)) {
+				/*
+				 * Review2 M5: re-check under the lock; a second
+				 * DQBUF may have taken the last buffer since the
+				 * unlocked test.
+				 */
+				buffer = NULL;
 				__private_spin_lock_irqsave(
 					(spinlock_t *)&ch->done_count, &flags);
-				buffer = list_first_entry(&ch->done,
-					struct t21_frame_buffer_abi, done);
-				list_del(&buffer->done);
-				ch->done_count--;
+				if (!list_empty(&ch->done)) {
+					buffer = list_first_entry(&ch->done,
+						struct t21_frame_buffer_abi, done);
+					list_del(&buffer->done);
+					ch->done_count--;
+				}
 				private_spin_unlock_irqrestore(
 					(spinlock_t *)&ch->done_count, flags);
-				break;
+				if (buffer)
+					break;
+				continue;
 			}
 			ret = private_wait_event_interruptible(
 				(wait_queue_head_t *)ch->wait_queue, check_state,
@@ -14303,7 +14327,9 @@ static long tx_isp_unlocked_ioctl(struct file *file, unsigned int cmd,
 			return -EFAULT;
 		return 0;
 	case 0x800856d5:
-		vic = *(void **)(*(char **)((char *)priv + 0x2c) + 0xd4);
+		vic = t21_setbuf_vic(priv);
+		if (!vic)
+			return -ENODEV;
 		width = *(uint32_t *)((char *)vic + 0xec);
 		height = *(uint32_t *)((char *)vic + 0xf0);
 		w8 = (width + 7) & ~7U;
@@ -14319,7 +14345,9 @@ static long tx_isp_unlocked_ioctl(struct file *file, unsigned int cmd,
 	case 0x800856d4:
 		if (private_copy_from_user(buf, (void __user *)arg, 8))
 			return -EFAULT;
-		vic = *(void **)(*(char **)((char *)priv + 0x2c) + 0xd4);
+		vic = t21_setbuf_vic(priv);
+		if (!vic)
+			return -ENODEV;
 		width = *(uint32_t *)((char *)vic + 0xec);
 		height = *(uint32_t *)((char *)vic + 0xf0);
 		w8 = (width + 7) & ~7U;
@@ -14331,6 +14359,17 @@ static long tx_isp_unlocked_ioctl(struct file *file, unsigned int cmd,
 		total = size1 + size2 + size3 * 0x28;
 		if ((uint32_t)buf[1] < total)
 			return -EINVAL;
+		/*
+		 * Review2 M2: the MDNS engine writes its reference frames here
+		 * every frame; the buffer must lie in rmem like a QBUF buffer.
+		 */
+		if (tx_isp_qbuf_phys_check((u32)buf[0], total)) {
+			pr_warn_ratelimited("tx-isp-t21: MDNS SET_BUF addr=0x%08x len=0x%x outside rmem%s\n",
+					    (u32)buf[0], total,
+					    t21_qbuf_guard ? ", rejected" : " (qbuf_guard=0, accepted)");
+			if (t21_qbuf_guard)
+				return -EINVAL;
+		}
 		system_reg_write(0x1b10, buf[0]);
 		system_reg_write(0x1b14, w8);
 		system_reg_write(0x1b20, buf[0] + size1);
