@@ -28879,6 +28879,7 @@ int32_t tisp_dpc_intp(uint32_t a0)
 int32_t tisp_dpc_all_reg_refresh(int32_t arg1)
 {
 	tisp_dpc_intp(arg1);
+	t21_dpc_scale_intp();	/* beyond vendor, tuning_ctl.h */
 	tisp_ctr_md_np_cfg();
 	tisp_rdns_uu_np_cfg();
 	tisp_rdns_g_lum_np_cfg();
@@ -28896,6 +28897,7 @@ int32_t tisp_dpc_all_reg_refresh(int32_t arg1)
 int32_t tisp_dpc_intp_reg_refresh(int32_t arg1)
 {
 	tisp_dpc_intp(arg1);
+	t21_dpc_scale_intp();	/* beyond vendor, tuning_ctl.h */
 	tisp_dpc_s_par_cfg();
 	tisp_dpc_d_par_cfg();
 	tisp_ctr_par_cfg();

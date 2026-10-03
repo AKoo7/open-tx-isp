@@ -14,6 +14,7 @@
  *   0x08000167 Temper type          TemperDnsAttr/Ctl (S_CTRL)
  *   0x08000083 Temper strength      TemperDnsAttr (tuning ioctl, value)
  *   0x08000082 Temper strength      TemperDnsCtl (tuning ioctl, value)
+ *   0x08000062 DPC strength         SetDPC_Strength (tuning ioctl, value)
  *
  * Here they act on existing T21 mechanisms:
  *
@@ -46,6 +47,7 @@
 #define T21_CID_TEMPER_ATTR	0x08000083
 #define T21_CID_TEMPER_CTL	0x08000082
 #define T21_CID_3DNS_RATIO	0x08000085
+#define T21_CID_DPC_RATIO	0x08000062
 
 #define T21_COLORFX_AUTO	0
 #define T21_COLORFX_BW		1
@@ -218,6 +220,47 @@ static void t21_temper_update(void)
  * Set side.  Returns 1 when the control was handled here (*ret holds the
  * result), 0 to pass it on to the stock dispatcher.
  */
+/*
+ * DPC strength (0x8000062, value 0..255, 128 = tuning file).  Stock T21
+ * has the DPC block (tiziano_dpc, regs 0x204-0x23c) but no strength
+ * control.  The OEM T23/T31 tisp_s_dpc_str_internal scales the m1/m3
+ * detection thresholds; T21's equivalents are the m1 level-0 thresholds:
+ * up to 128 the "f" threshold scales linearly (at least 5) and the "d"
+ * threshold moves towards 1000, above 128 "f" moves towards 1200 and "d"
+ * towards 5.  Applied to the gain-interpolated values (the mapping is
+ * affine, so this equals scaling the bank arrays), every refresh.
+ */
+static uint32_t t21_dpc_ratio = 128;
+
+static void t21_dpc_scale_intp(void)
+{
+	int32_t s = (int32_t)t21_dpc_ratio;
+	int32_t f = (int32_t)dpc_d_m1_l0_fthres_intp;
+	int32_t d = (int32_t)dpc_d_m1_l0_dthres_intp;
+
+	if (s == 128)
+		return;
+	if (s < 128) {
+		f = (f * s) >> 7;
+		if (f < 5)
+			f = 5;
+		d = 1000 + (((d - 1000) * s) >> 7);
+	} else {
+		f += ((1200 - f) * (s - 128)) >> 7;
+		d = ((256 - s) * d + 5 * (s - 128)) >> 7;
+	}
+	dpc_d_m1_l0_fthres_intp = (uintptr_t)(f < 0 ? 0 : f);
+	dpc_d_m1_l0_dthres_intp = (uintptr_t)(d < 0 ? 0 : d);
+}
+
+static void t21_dpc_set_ratio(uint32_t ratio)
+{
+	t21_dpc_ratio = ratio;
+	/* re-interpolate at the gain in use (as the day/night refresh) */
+	if (dpc_gain_old != 0xffffffffU)
+		tisp_dpc_intp_reg_refresh(dpc_gain_old);
+}
+
 static int t21_tuning_ctl_s(int32_t *ctl, int32_t *ret)
 {
 	uint8_t blk[T21_SINTER_BLOCK];
@@ -234,6 +277,14 @@ static int t21_tuning_ctl_s(int32_t *ctl, int32_t *ret)
 		return 1;
 	case T21_CID_COLORFX:
 		*ret = t21_colorfx_set(v);
+		return 1;
+	case T21_CID_DPC_RATIO:
+		if (v > 255) {
+			*ret = -1;
+			return 1;
+		}
+		t21_dpc_set_ratio(v);
+		*ret = 0;
 		return 1;
 	case T21_CID_SINTER_DNS:
 		/* MoveState passes 0/1, not a pointer: the copy fails and the
@@ -298,6 +349,9 @@ static int t21_tuning_ctl_g(int32_t *ctl, int32_t *ret)
 		break;
 	case T21_CID_COLORFX:
 		ctl[1] = (int32_t)t21_colorfx;
+		break;
+	case T21_CID_DPC_RATIO:
+		ctl[1] = (int32_t)t21_dpc_ratio;
 		break;
 	case T21_CID_TEMPER_TYPE:
 		ctl[1] = (int32_t)t21_temper_type;
