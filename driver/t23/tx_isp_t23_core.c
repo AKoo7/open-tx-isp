@@ -9894,6 +9894,14 @@ static uint regtrace_t23_source_ae_hlil_interval = 32;
  * (night) keep the normal cadence and step.
  */
 static uint regtrace_t23_source_ae_hlil_fast_interval = 8;
+/*
+ * Stream start leaves top 0x1c and GIB 0x1008/0x1010/0x1014 as stock does
+ * (cam-B vendor dump: 0x1c=0, 0x1008=0, 0x1010=0x04000400, 0x1014=0; stock
+ * tx-isp-t23.ko never writes 0x1c other than 0 in tisp_init and never
+ * 0x1008/0x1010/0x1014 in linear mode).  0 restores the old bring-up writes
+ * (0x1c=8, 0x1008=286, 0x1010=0, 0x1014=0), which gave a green picture.
+ */
+static bool regtrace_t23_source_stock_stream_regs = true;
 static uint regtrace_t23_source_ae_hlil_sat_permille = 500;
 static uint regtrace_t23_source_ae_hlil_target = 60;
 static uint regtrace_t23_source_ae_hlil_deadband = 5;
@@ -10234,6 +10242,8 @@ module_param_named(source_ae_hlil,
                    regtrace_t23_source_ae_hlil, bool, 0644);
 module_param_named(source_ae_hlil_interval,
                    regtrace_t23_source_ae_hlil_interval, uint, 0644);
+module_param_named(source_stock_stream_regs,
+                   regtrace_t23_source_stock_stream_regs, bool, 0644);
 module_param_named(source_ae_hlil_fast_interval,
                    regtrace_t23_source_ae_hlil_fast_interval, uint, 0644);
 module_param_named(source_ae_hlil_sat_permille,
@@ -14732,7 +14742,7 @@ static int regtrace_t23_source_core_set_stream(int enable,
     if (regtrace_t23_source_msca_init)
         system_reg_write(0x33cU, 0x20230219U);
     system_reg_write(0x804U, regtrace_t23_source_core_mode);
-    system_reg_write(0x1cU, 8U);
+    system_reg_write(0x1cU, regtrace_t23_source_stock_stream_regs ? 0U : 8U);
     system_reg_write(0x800U, 1U);
     if (regtrace_t23_source_awb_static_init)
         regtrace_t23_source_awb_write_static_startup();
@@ -14768,9 +14778,16 @@ static void regtrace_t23_tisp_stream_regs(int enable,
                    ret, reason ? reason : "?");
             return;
         }
-        system_reg_write(0x1010U, 0);
-        system_reg_write(0x1014U, 0);
-        system_reg_write(0x1008U, 286U);
+        if (regtrace_t23_source_stock_stream_regs) {
+            /* GIB: stock values (WDR short-frame gain 1x, mode 0) */
+            system_reg_write(0x1010U, 0x04000400U);
+            system_reg_write(0x1014U, 0);
+            system_reg_write(0x1008U, 0);
+        } else {
+            system_reg_write(0x1010U, 0);
+            system_reg_write(0x1014U, 0);
+            system_reg_write(0x1008U, 286U);
+        }
         system_reg_write(0x1060U, 1);
     } else if (channel < 0 || !regtrace_t23_msca_ch_en) {
         system_reg_write(0x1060U, 0);
