@@ -343,7 +343,11 @@ static uint32_t regtrace_t23_ae_hlil_nearest_state(uint32_t ev)
 }
 
 static uint32_t regtrace_t23_ae_hlil_pending_luma;
+static uint32_t regtrace_t23_ae_hlil_pending_bright;    /* clipped, 1/1000 */
+static uint32_t regtrace_t23_ae_hlil_bright;            /* last processed */
 static uint32_t regtrace_t23_ae_hlil_pending_snapshot;
+/* last run saw an over-exposed picture: run at the fast cadence */
+static bool regtrace_t23_ae_hlil_over;
 static bool regtrace_t23_ae_hlil_pending;
 /* Set while the ladder is rebuilt for a new frame length; blocks new work. */
 static bool regtrace_t23_ae_hlil_retiming;
@@ -378,11 +382,15 @@ static void regtrace_t23_source_ae_hlil_work_body(struct work_struct *work)
     uint32_t upper;
     uint32_t desired_ev;
     uint32_t desired_state;
+    uint32_t bright;
+    uint32_t max_down = 4U;
+    bool saturated;
     int ret = 0;
 
     (void)work;
     spin_lock_irqsave(&regtrace_t23_ae_hlil_lock, flags);
     luma = regtrace_t23_ae_hlil_pending_luma;
+    bright = regtrace_t23_ae_hlil_pending_bright;
     snapshot = regtrace_t23_ae_hlil_pending_snapshot;
     if (!REGTRACE_T23_AE_HLIL_STATE_COUNT) {
         regtrace_t23_ae_hlil_pending = false;
@@ -395,6 +403,7 @@ static void regtrace_t23_source_ae_hlil_work_body(struct work_struct *work)
 
     regtrace_t23_source_ae_hlil_runs++;
     regtrace_t23_source_ae_hlil_luma = luma;
+    regtrace_t23_ae_hlil_bright = bright;
     next_state = state;
     lower = regtrace_t23_source_ae_hlil_target >
             regtrace_t23_source_ae_hlil_deadband ?
@@ -403,18 +412,34 @@ static void regtrace_t23_source_ae_hlil_work_body(struct work_struct *work)
     upper = regtrace_t23_source_ae_hlil_target +
             regtrace_t23_source_ae_hlil_deadband;
 
+    /*
+     * Clipped picture (e.g. daylight after a module load, which starts from
+     * the longest unity-gain exposure): at least sat_permille of the pixels
+     * are above the AE0 bright threshold.  The luma saturates there and
+     * understates the over-exposure (it can even land in the deadband), so
+     * treat it as over-exposed, aim at half the luma estimate and allow six
+     * rungs down instead of four.  Only downwards; dark scenes are unchanged.
+     */
+    saturated = luma && regtrace_t23_source_ae_hlil_sat_permille &&
+                bright >= regtrace_t23_source_ae_hlil_sat_permille;
+
     if (!regtrace_t23_sensor_streaming || !regtrace_t23_core_started) {
         ret = -EAGAIN;
     } else if (!luma) {
         next_state = min(state + 4U,
                          REGTRACE_T23_AE_HLIL_STATE_COUNT - 1U);
-    } else if (luma < lower || luma > upper) {
+    } else if (saturated || luma < lower || luma > upper) {
         uint32_t current_ev =
             rungs[state].ev_q10 >> 10;
+        uint32_t measured = saturated ? max(luma, upper + 1U) : luma;
 
         desired_ev = (uint32_t)div64_u64(
             (uint64_t)current_ev * regtrace_t23_source_ae_hlil_target +
-            luma / 2U, luma);
+            measured / 2U, measured);
+        if (saturated) {
+            desired_ev = max(desired_ev >> 1, 1U);
+            max_down = 6U;
+        }
         desired_ev = clamp(desired_ev,
             rungs[0].ev_q10 >> 10,
             rungs[
@@ -422,11 +447,14 @@ static void regtrace_t23_source_ae_hlil_work_body(struct work_struct *work)
         desired_state = regtrace_t23_ae_hlil_nearest_state(desired_ev);
         if (desired_state > state + 4U)
             next_state = state + 4U;
-        else if (state > desired_state + 4U)
-            next_state = state - 4U;
+        else if (state > desired_state + max_down)
+            next_state = state - max_down;
         else
             next_state = desired_state;
     }
+    /* still moving down from an over-exposed picture: fast cadence */
+    regtrace_t23_ae_hlil_over = !ret && next_state < state &&
+                                (saturated || luma > upper);
 
     if (!ret && next_state != state) {
         rung = &rungs[next_state];
@@ -457,15 +485,15 @@ static void regtrace_t23_source_ae_hlil_work_body(struct work_struct *work)
           (regtrace_t23_source_ae_hlil_runs - 1U))) {
         if (ret)
             printk(KERN_WARNING
-                   "tx_isp_t23_recovered: source AE HLIL run=%u snapshot=%u luma=%u target=%u+-%u state=%u->%u updates=%u ret=%d\n",
-                   regtrace_t23_source_ae_hlil_runs, snapshot, luma,
+                   "tx_isp_t23_recovered: source AE HLIL run=%u snapshot=%u luma=%u bright=%u/1000 target=%u+-%u state=%u->%u updates=%u ret=%d\n",
+                   regtrace_t23_source_ae_hlil_runs, snapshot, luma, bright,
                    regtrace_t23_source_ae_hlil_target,
                    regtrace_t23_source_ae_hlil_deadband, state, next_state,
                    regtrace_t23_source_ae_hlil_updates, ret);
         else
             printk(KERN_INFO
-                   "tx_isp_t23_recovered: source AE HLIL run=%u snapshot=%u luma=%u target=%u+-%u state=%u->%u updates=%u ret=%d\n",
-                   regtrace_t23_source_ae_hlil_runs, snapshot, luma,
+                   "tx_isp_t23_recovered: source AE HLIL run=%u snapshot=%u luma=%u bright=%u/1000 target=%u+-%u state=%u->%u updates=%u ret=%d\n",
+                   regtrace_t23_source_ae_hlil_runs, snapshot, luma, bright,
                    regtrace_t23_source_ae_hlil_target,
                    regtrace_t23_source_ae_hlil_deadband, state, next_state,
                    regtrace_t23_source_ae_hlil_updates, ret);
@@ -477,14 +505,20 @@ static void regtrace_t23_source_ae_hlil_work_body(struct work_struct *work)
 }
 
 static void regtrace_t23_source_ae_hlil_capture(uint32_t luma,
+                                               uint32_t bright_permille,
                                                uint32_t snapshot)
 {
     unsigned long flags;
+    uint32_t interval = regtrace_t23_source_ae_hlil_interval;
 
     if (!regtrace_t23_source_ae_hlil)
         return;
-    if (regtrace_t23_source_ae_hlil_interval &&
-        snapshot % regtrace_t23_source_ae_hlil_interval)
+    /* over-exposed: shorter cadence (never longer than the normal one) */
+    if (ACCESS_ONCE(regtrace_t23_ae_hlil_over) &&
+        regtrace_t23_source_ae_hlil_fast_interval &&
+        (!interval || regtrace_t23_source_ae_hlil_fast_interval < interval))
+        interval = regtrace_t23_source_ae_hlil_fast_interval;
+    if (interval && snapshot % interval)
         return;
 
     spin_lock_irqsave(&regtrace_t23_ae_hlil_lock, flags);
@@ -495,6 +529,7 @@ static void regtrace_t23_source_ae_hlil_capture(uint32_t luma,
         return;
     }
     regtrace_t23_ae_hlil_pending_luma = luma;
+    regtrace_t23_ae_hlil_pending_bright = bright_permille;
     regtrace_t23_ae_hlil_pending_snapshot = snapshot;
     regtrace_t23_ae_hlil_pending = true;
     spin_unlock_irqrestore(&regtrace_t23_ae_hlil_lock, flags);
@@ -517,6 +552,7 @@ static void regtrace_t23_source_ae_hlil_trigger(void)
         return;
     }
     regtrace_t23_ae_hlil_pending_luma = regtrace_t23_source_ae_hlil_luma;
+    regtrace_t23_ae_hlil_pending_bright = regtrace_t23_ae_hlil_bright;
     regtrace_t23_ae_hlil_pending_snapshot =
         regtrace_t23_source_ae_stats_snapshots;
     regtrace_t23_ae_hlil_pending = true;
@@ -600,7 +636,9 @@ static void regtrace_t23_source_ae_hlil_reset(void)
     spin_lock_irqsave(&regtrace_t23_ae_hlil_lock, flags);
     regtrace_t23_ae_hlil_pending = false;
     regtrace_t23_ae_hlil_pending_luma = 0;
+    regtrace_t23_ae_hlil_pending_bright = 0;
     regtrace_t23_ae_hlil_pending_snapshot = 0;
+    regtrace_t23_ae_hlil_over = false;
     spin_unlock_irqrestore(&regtrace_t23_ae_hlil_lock, flags);
 
     if (!REGTRACE_T23_AE_HLIL_STATE_COUNT) {
@@ -634,6 +672,7 @@ static void regtrace_t23_source_ae_hlil_reset(void)
     regtrace_t23_source_ae_hlil_updates = 0;
     regtrace_t23_source_ae_hlil_drops = 0;
     regtrace_t23_source_ae_hlil_luma = 0;
+    regtrace_t23_ae_hlil_bright = 0;
     regtrace_t23_source_ae_hlil_status = 0;
     memset(regtrace_t23_source_ae_scene_luma, 0,
            sizeof(regtrace_t23_source_ae_scene_luma));
