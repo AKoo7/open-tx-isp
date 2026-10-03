@@ -51,7 +51,6 @@
 #include <linux/math64.h>
 #include <soc/gpio.h>
 #include <linux/vmalloc.h>
-#include <linux/crc32.h>
 #include <net/addrconf.h>
 #include <net/cfg80211.h>
 #ifdef __has_include
@@ -4430,21 +4429,6 @@ MODULE_PARM_DESC(ae_step_shift, "T21 AE: no-op since the stock AE (ae_tune2) run
 static int ae_hold_pct = 15;
 module_param(ae_hold_pct, int, 0644);
 MODULE_PARM_DESC(ae_hold_pct, "T21 AE: no-op since the stock AE (ae_tune2) runs; kept for load-line compatibility");
-/* Read-only AE diagnostics (/sys/module/tx_isp_t21/parameters/ae_dbg_*):
- * the AE statistics IRQ count and the centre zone raw sums d/m/s/dc/sc.
- * ae_dbg_luma/target/ret belonged to the replaced controller and stay 0
- * now that the stock AE (ae_tune2) runs. */
-static uint ae_dbg_stat_irqs;
-module_param(ae_dbg_stat_irqs, uint, 0444);
-static uint ae_dbg_luma;
-module_param(ae_dbg_luma, uint, 0444);
-static uint ae_dbg_target;
-module_param(ae_dbg_target, uint, 0444);
-static int ae_dbg_ret;
-module_param(ae_dbg_ret, int, 0444);
-static uint ae_dbg_zone[5];
-static int ae_dbg_zone_n = 5;
-module_param_array(ae_dbg_zone, uint, &ae_dbg_zone_n, 0444);
 
 /*
  * ISP TOP bypass bit 4 is the ADR (local tone mapping) block (pipeline
@@ -8644,140 +8628,10 @@ static void __init regtrace_patch_relocated_data(void)
 }
 
 
-/*
- * Debug aids for stray stores (the T23 82acd1bf class), all off by default:
- *
- *   text_watch=1   keep a copy of this module's core text and compare it at
- *                  the entry and exit of every /dev/tx-isp, /dev/isp-m0 and
- *                  non-per-frame /dev/framechanN ioctl, on proc opens and
- *                  after every ISP event callback (AE/AWB/ADR/defog);
- *                  report changed words with the call they were seen in.
- *   ktext_watch=1  keep a CRC32 per 4 KiB page of the kernel text
- *                  [ktext_start, ktext_end) (defaults: _stext/_etext of the
- *                  thingino PC420 3.10.14 build, override from System.map)
- *                  and compare it at the same ioctl/proc points (not per
- *                  event: ~3.5 MiB per check).
- *
- * A change is reported once (the snapshot is then updated) with
- * KERN_ERR "tx-isp-t21: TEXT CHANGED ..." / "KTEXT CHANGED ...".
- */
-static bool t21_text_watch;
-module_param_named(text_watch, t21_text_watch, bool, 0644);
-static bool t21_ktext_watch;
-module_param_named(ktext_watch, t21_ktext_watch, bool, 0644);
-
-/*
- * stop_trace=<ms>: log every step of the stream-off / link / release paths
- * at KERN_ERR and sleep <ms> after each, so the last step before a silent
- * hang or watchdog reset still leaves the camera over the network
- * (cat /proc/kmsg via ssh).  Only used in process context.  0 = off.
- */
-static uint t21_stop_trace;
-module_param_named(stop_trace, t21_stop_trace, uint, 0644);
 /* Set while the ISP core clocks are gated by ispcore_slake_module. */
 static int t21_isp_clocks_off;
-#define T21_STOP_TRACE(fmt, ...)						\
-	do {								\
-		if (t21_stop_trace) {					\
-			printk(KERN_ERR "tx-isp-t21 stop: " fmt "\n",	\
-			       ##__VA_ARGS__);				\
-			msleep(t21_stop_trace);				\
-		}							\
-	} while (0)
-static ulong t21_ktext_start = 0x80010400UL;
-module_param_named(ktext_start, t21_ktext_start, ulong, 0444);
-static ulong t21_ktext_end = 0x803809d0UL;
-module_param_named(ktext_end, t21_ktext_end, ulong, 0444);
-static u32 *t21_text_snap;
-static size_t t21_text_words;
-static u32 *t21_ktext_crc;
-static size_t t21_ktext_pages;
-static DEFINE_SPINLOCK(t21_text_lock);
-
-static void t21_text_check_module(const char *where, unsigned int cmd)
-{
-	const u32 *text = THIS_MODULE->module_core;
-	unsigned long flags;
-	unsigned int shown = 0;
-	size_t words, i;
-	u32 *snap;
-
-	if (!t21_text_watch || !text)
-		return;
-	if (!t21_text_snap) {
-		words = THIS_MODULE->core_text_size / sizeof(u32);
-		snap = vmalloc(words * sizeof(u32));
-		if (!snap)
-			return;
-		memcpy(snap, text, words * sizeof(u32));
-		spin_lock_irqsave(&t21_text_lock, flags);
-		if (!t21_text_snap) {
-			t21_text_words = words;
-			t21_text_snap = snap;
-			snap = NULL;
-		}
-		spin_unlock_irqrestore(&t21_text_lock, flags);
-		if (snap)
-			vfree(snap);
-		else
-			printk(KERN_WARNING "tx-isp-t21: text watch armed text=%p size=0x%zx at %s\n",
-			       text, words * sizeof(u32), where);
-		return;
-	}
-	spin_lock_irqsave(&t21_text_lock, flags);
-	snap = t21_text_snap;
-	words = t21_text_words;
-	if (memcmp(snap, text, words * sizeof(u32))) {
-		for (i = 0; i < words; i++) {
-			if (snap[i] == text[i])
-				continue;
-			if (shown++ < 16)
-				printk(KERN_ERR "tx-isp-t21: TEXT CHANGED at %p (text+0x%zx) 0x%08x -> 0x%08x seen at %s cmd=0x%x pid=%d comm=%s\n",
-				       &text[i], i * sizeof(u32), snap[i], text[i],
-				       where, cmd, current->pid, current->comm);
-			snap[i] = text[i];
-		}
-		printk(KERN_ERR "tx-isp-t21: TEXT CHANGED %u words, seen at %s cmd=0x%x\n",
-		       shown, where, cmd);
-	}
-	spin_unlock_irqrestore(&t21_text_lock, flags);
-}
-
-static void t21_text_check_kernel(const char *where, unsigned int cmd)
-{
-	unsigned long start = t21_ktext_start & PAGE_MASK;
-	size_t pages, i;
-	u32 crc;
-
-	if (!t21_ktext_watch)
-		return;
-	/* KSEG0 only: always mapped, reading it cannot fault. */
-	if (start < 0x80000000UL || t21_ktext_end <= start ||
-	    t21_ktext_end > 0x9fffffffUL)
-		return;
-	pages = (t21_ktext_end - start + PAGE_SIZE - 1) >> PAGE_SHIFT;
-	if (!t21_ktext_crc) {
-		u32 *tab = vmalloc(pages * sizeof(u32));
-
-		if (!tab)
-			return;
-		for (i = 0; i < pages; i++)
-			tab[i] = crc32_le(~0, (const u8 *)(start + (i << PAGE_SHIFT)), PAGE_SIZE);
-		t21_ktext_pages = pages;
-		t21_ktext_crc = tab;
-		printk(KERN_WARNING "tx-isp-t21: kernel text watch armed %08lx-%08lx (%zu pages) at %s\n",
-		       start, t21_ktext_end, pages, where);
-		return;
-	}
-	for (i = 0; i < t21_ktext_pages; i++) {
-		crc = crc32_le(~0, (const u8 *)(start + (i << PAGE_SHIFT)), PAGE_SIZE);
-		if (crc == t21_ktext_crc[i])
-			continue;
-		printk(KERN_ERR "tx-isp-t21: KTEXT CHANGED page %08lx seen at %s cmd=0x%x pid=%d comm=%s\n",
-		       start + (i << PAGE_SHIFT), where, cmd, current->pid, current->comm);
-		t21_ktext_crc[i] = crc;
-	}
-}
+/* Stop-path tracing removed (stop_trace parameter); call sites stay as no-ops. */
+#define T21_STOP_TRACE(fmt, ...) do { } while (0)
 
 /*
  * free_watch=1: use-after-free detector for this module's large heap
@@ -8934,17 +8788,7 @@ static void t21_free_watch_flush(void)
 
 static void t21_text_check(const char *where, unsigned int cmd)
 {
-	t21_text_check_module(where, cmd);
-	t21_text_check_kernel(where, cmd);
 	t21_free_watch_check(where);
-}
-
-static void t21_text_watch_free(void)
-{
-	vfree(t21_text_snap);
-	t21_text_snap = NULL;
-	vfree(t21_ktext_crc);
-	t21_ktext_crc = NULL;
 }
 
 static long t21_tx_isp_ioctl_watch(struct file *file, unsigned int cmd, unsigned long arg)
@@ -13719,7 +13563,7 @@ static long frame_channel_unlocked_ioctl(struct file *file, unsigned int cmd,
 	if (!t21_isp_valid_ptr(ch))
 		return -ENODEV;
 
-	/* text_watch: every call but the per-frame QBUF/DQBUF/frame wait */
+	/* free-watch: every call but the per-frame QBUF/DQBUF/frame wait */
 	if (cmd != 0xc044560f && cmd != 0xc0445611 && cmd != 0x400456bf)
 		t21_text_check("framechan_ioctl", cmd);
 	else
@@ -19076,8 +18920,6 @@ int32_t tisp_event_process(void)
 		printk_ratelimited(KERN_INFO "tx-isp-t21: event thread IRQs off %u us (event %u)\n",
 				   (uint)dt, event);
 	}
-	if (cb)
-		t21_text_check_module("isp-event", event);
 	return 0;
 }
 
@@ -33225,12 +33067,6 @@ int32_t ae_interrupt_static(void)
 		return IRQ_HANDLED;
 	dma_cache_sync(NULL, (void *)(uintptr_t)(base + offset), 0x1000, 0);
 	tisp_ae_get_statistics((u32 *)(uintptr_t)(base + offset), 0xf001f001);
-	ae_dbg_stat_irqs++;
-	ae_dbg_zone[0] = ((u32 *)ae_array_d)[112];
-	ae_dbg_zone[1] = ((u32 *)ae_array_m)[112];
-	ae_dbg_zone[2] = ((u32 *)ae_array_s)[112];
-	ae_dbg_zone[3] = ((u32 *)ae_array_dc)[112];
-	ae_dbg_zone[4] = ((u32 *)ae_array_sc)[112];
 	return IRQ_HANDLED;
 }
 
@@ -33250,7 +33086,7 @@ static int t21_ae_update_luma(void)
 
 	if (!params[1] || !params[3] ||
 	    params[1] > 15 || params[3] > 15)
-		return ae_dbg_ret = -EINVAL;
+		return -EINVAL;
 
 	/* Match the OEM scene-mode selection.  These channel multipliers are
 	 * supplied by the active tuning bank; they account for the Bayer channel
@@ -33279,11 +33115,9 @@ static int t21_ae_update_luma(void)
 			      (u32 *)_AePointPos, mix_r, mix_b,
 			      &mean, fractions, &zone_sum,
 			      &roi_mean, &roui_mean);
-	ae_dbg_ret = ret;
 	if (ret < 0)
 		return 0;
 	t21_ae_measured_luma = mean;
-	ae_dbg_luma = mean;
 	pr_debug_ratelimited("tx-isp-t21: ae stats grid=%ux%u mix=%u/%u dms=%u/%u/%u luma=%u roi=%u/%u\n",
 			    params[1], params[3], mix_r, mix_b,
 			    ((u32 *)ae_array_d)[0], ((u32 *)ae_array_m)[0],
@@ -38109,106 +37943,14 @@ int32_t system_irq_func_set(unsigned int index, t21_irq_callback_t callback)
 	return 0;
 }
 
-/*
- * ramlog=1: poor man's pstore.  A console that copies every printk record
- * (oops, soft-lockup panic included) through the uncached KSEG1 alias into
- * 64 KiB of ordinary RAM whose physical address is logged at load.  After
- * the panic=2 reboot the buffer is usually still intact until the new
- * kernel reuses those pages; read it with
- *   dd if=/dev/mem bs=4096 skip=$((PHYS >> 12)) count=16
- * Layout: u32 magic "RAML", u32 size, u32 head, u32 wraps, then the ring.
- */
-#define T21_RAMLOG_ORDER 4
-#define T21_RAMLOG_MAGIC 0x4c4d4152u
-static bool t21_ramlog;
-module_param_named(ramlog, t21_ramlog, bool, 0444);
-static unsigned long t21_ramlog_pages;
-static volatile u32 *t21_ramlog_hdr;
-static volatile u8 *t21_ramlog_ring;
-
-static void t21_ramlog_write(struct console *con, const char *text,
-			     unsigned int len)
-{
-	u32 size = t21_ramlog_hdr[1];
-	u32 head = t21_ramlog_hdr[2];
-
-	(void)con;
-	while (len--) {
-		t21_ramlog_ring[head] = *text++;
-		if (++head == size) {
-			head = 0;
-			t21_ramlog_hdr[3]++;
-		}
-	}
-	t21_ramlog_hdr[2] = head;
-}
-
-static struct console t21_ramlog_console = {
-	.name = "t21ram",
-	.write = t21_ramlog_write,
-	.flags = CON_ENABLED | CON_PRINTBUFFER,
-	.index = -1,
-};
-
-static void __init t21_ramlog_start(void)
-{
-	size_t bytes = PAGE_SIZE << T21_RAMLOG_ORDER;
-	unsigned long phys;
-
-	unsigned long spare[8];
-	unsigned int i, n = 0;
-
-	if (!t21_ramlog)
-		return;
-	/* Low RAM is rewritten by the bootloader and the kernel image on the
-	 * way back up; keep the highest of a few candidate blocks. */
-	for (i = 0; i < ARRAY_SIZE(spare); i++) {
-		spare[n] = __get_free_pages(GFP_KERNEL, T21_RAMLOG_ORDER);
-		if (spare[n])
-			n++;
-	}
-	for (i = 0; i < n; i++)
-		if (spare[i] > t21_ramlog_pages)
-			t21_ramlog_pages = spare[i];
-	for (i = 0; i < n; i++)
-		if (spare[i] != t21_ramlog_pages)
-			free_pages(spare[i], T21_RAMLOG_ORDER);
-	if (!t21_ramlog_pages)
-		return;
-	memset((void *)t21_ramlog_pages, 0, bytes);
-	dma_cache_wback_inv(t21_ramlog_pages, bytes);
-	phys = virt_to_phys((void *)t21_ramlog_pages);
-	t21_ramlog_hdr = (volatile u32 *)CKSEG1ADDR(phys);
-	t21_ramlog_ring = (volatile u8 *)t21_ramlog_hdr + 16;
-	t21_ramlog_hdr[1] = bytes - 16;
-	t21_ramlog_hdr[2] = 0;
-	t21_ramlog_hdr[3] = 0;
-	t21_ramlog_hdr[0] = T21_RAMLOG_MAGIC;
-	register_console(&t21_ramlog_console);
-	printk(KERN_ERR "tx-isp-t21: ramlog at phys 0x%08lx size 0x%zx\n",
-	       phys, bytes);
-}
-
-static void t21_ramlog_stop(void)
-{
-	if (!t21_ramlog_pages)
-		return;
-	unregister_console(&t21_ramlog_console);
-	t21_ramlog_hdr[0] = 0;
-	free_pages(t21_ramlog_pages, T21_RAMLOG_ORDER);
-	t21_ramlog_pages = 0;
-}
-
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000034540 origin=model_output original=init_module */
 int32_t __init init_module(void)
 {
 	int32_t result;
 
-	t21_ramlog_start();
 	regtrace_patch_relocated_data();
 	result = tx_isp_init();
 	if (result) {
-		t21_ramlog_stop();
 		return result;
 	}
 	result = tx_isp_sinfo_init();
@@ -38223,7 +37965,6 @@ fail_sinfo:
 	tx_isp_sinfo_exit();
 fail_isp:
 	tx_isp_exit();
-	t21_ramlog_stop();
 	return result;
 }
 
@@ -38233,10 +37974,8 @@ void cleanup_module(void)
 	tx_isp_t21_v4l2_cleanup();
 	tx_isp_sinfo_exit();
 	tx_isp_exit();
-	t21_text_watch_free();
 	t21_tisp_stats_free();
 	t21_free_watch_flush();
-	t21_ramlog_stop();
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000345bc origin=model_output original=tx_isp_vic_remove */
