@@ -79562,6 +79562,19 @@ uint8_t tisp_ae_g_luma(uint8_t *arg1)
 {
     uint8_t result = (uint8_t)min(regtrace_t23_source_ae_hlil_luma, 255U);
 
+    /*
+     * Lifted stock AE: stock tisp_ae_g_luma, the mean of its AE0 histogram
+     * (the substitute's luma is not maintained then).
+     */
+    if (regtrace_t23_source_ae_oem) {
+        uint8_t luma = 0;
+
+        if (t23_aelift_ready)
+            T23_AELIFT_CALL(LA_tisp_ae_g_luma, (uint32_t)(uintptr_t)&luma,
+                            0, 0, 0);
+        result = luma;
+    }
+
     if (arg1)
         *arg1 = result;
     return result;
@@ -102095,6 +102108,15 @@ static long regtrace_t23_tuning_cid(bool get, uint32_t id, uint32_t *value)
         }
         if (v > 2U)
             return -EINVAL;
+        if (regtrace_t23_source_ae_oem) {
+            /* lifted stock AE: stock tisp_s_antiflick on its copies */
+            static const uint32_t hz_of_mode[3] = { 0, 50U, 60U };
+
+            ret = t23_aelift_s_antiflick(hz_of_mode[v]);
+            if (!ret)
+                regtrace_t23_ae_flicker_mode = v;
+            return ret;
+        }
         mutex_lock(&regtrace_t23_sensor_fps_lock);
         ret = regtrace_t23_ae_set_antiflicker(v);
         mutex_unlock(&regtrace_t23_sensor_fps_lock);

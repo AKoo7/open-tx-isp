@@ -753,7 +753,9 @@ static int regtrace_t23_ae_hlil_retime_force(uint32_t max_it,
         rung = &regtrace_t23_ae_hlil_rungs[state];
         regtrace_t23_source_ae_hlil_state = state;
         regtrace_t23_source_ae_hlil_ev = rung->ev_q10;
-        if (regtrace_t23_sensor_streaming && regtrace_t23_core_started)
+        /* the lifted stock AE owns the sensor exposure (source_ae_oem) */
+        if (regtrace_t23_sensor_streaming && regtrace_t23_core_started &&
+            !regtrace_t23_source_ae_oem)
             ret = regtrace_t23_ae_apply_rung(rung, &old_rung,
                                              "source-ae-retime");
     }
