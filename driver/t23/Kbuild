@@ -20,6 +20,10 @@ ccflags-y += -Wno-error=int-conversion
 ccflags-y += -Wno-error=incompatible-pointer-types
 ccflags-y += $(call cc-option,-Wa$(comma)-mno-pdr)
 
+# Rootfs size: address static data through section anchors (one lui/addiu
+# per block instead of a HI16/LO16 pair per object); halves .rel.text.
+ccflags-y += -fsection-anchors
+
 # Rootfs size: drop local (static) symbols from the module image. The kernel
 # resolves exports through __ksymtab, so .symtab/.strtab bulk is dead weight.
 LDFLAGS_MODULE += -x

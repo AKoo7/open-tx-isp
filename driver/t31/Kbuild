@@ -43,6 +43,13 @@ ccflags-$(CONFIG_TX_ISP_T31_V4L2) += -DCONFIG_TX_ISP_T31_V4L2
 # Build both modules - changed tx-isp.o to tx-isp-t31.o
 obj-m := tx-isp-t31.o
 
+# Rootfs size: no .pdr (procedure descriptors, never loaded by the kernel).
+ccflags-y += $(call cc-option,-Wa$(comma)-mno-pdr)
+
+# Rootfs size: address static data through section anchors (one lui/addiu
+# per block instead of a HI16/LO16 pair per object); halves .rel.text.
+ccflags-y += -fsection-anchors
+
 # Rootfs size: drop local (static) symbols from the module image. The kernel
 # resolves exports through __ksymtab, so .symtab/.strtab bulk is dead weight.
 LDFLAGS_MODULE += -x

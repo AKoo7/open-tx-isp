@@ -49,6 +49,9 @@ ccflags-y += -Wno-error=implicit-int
 ccflags-y += -Wno-error=int-conversion
 ccflags-y += -Wno-error=incompatible-pointer-types
 
+# Rootfs size: no .pdr (procedure descriptors, never loaded by the kernel).
+ccflags-y += $(call cc-option,-Wa$(comma)-mno-pdr)
+
 # Rootfs size: drop local (static) symbols from the module image. The kernel
 # resolves exports through __ksymtab, so .symtab/.strtab bulk is dead weight.
 LDFLAGS_MODULE += -x
