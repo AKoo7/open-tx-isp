@@ -1490,6 +1490,7 @@ irqreturn_t ispcore_interrupt_service_routine(int irq, void *dev_id)
     void __iomem *vic_regs;
     u32 interrupt_status;
     u32 hw_interrupt_status; /* raw HW status before bit-0 forcing */
+    int drained_total = 0;
     u32 error_check;
     int i;
 
@@ -1681,6 +1682,7 @@ irqreturn_t ispcore_interrupt_service_routine(int irq, void *dev_id)
         extern int frame_chan_event(void *priv, int event, void *data);
         int drain_count;
         u32 fifo_stat_ch0;
+
         u32 evt[4];  /* event data: [0]=0, [1]=0, [2]=y_addr, [3]=0 */
 
         /* CH0 drain */
@@ -1696,6 +1698,7 @@ irqreturn_t ispcore_interrupt_service_routine(int irq, void *dev_id)
 
         if (drain_count > 0 && isp_dev)
             isp_dev->frame_count += drain_count;
+        drained_total += drain_count;
 
         /* CH1 drain */
         drain_count = 0;
@@ -1705,6 +1708,7 @@ irqreturn_t ispcore_interrupt_service_routine(int irq, void *dev_id)
             frame_chan_event(&frame_channels[1], TX_ISP_FRAME_EVENT_BUFFER_DONE, evt);
             drain_count++;
         }
+        drained_total += drain_count;
         /* CH2 drain */
         drain_count = 0;
         while (drain_count < 8 && (readl(isp_regs + 0x9b7c) & 1) == 0) {
@@ -1713,9 +1717,13 @@ irqreturn_t ispcore_interrupt_service_routine(int irq, void *dev_id)
             frame_chan_event(&frame_channels[2], TX_ISP_FRAME_EVENT_BUFFER_DONE, evt);
             drain_count++;
         }
+        drained_total += drain_count;
     }
 
-    /* Periodic diagnostic — raw interrupt_status (no |= 1 contamination) */
+#ifdef DEBUG
+    /* Periodic diagnostic — raw interrupt_status (no |= 1 contamination).
+     * Review2 L4: compiled only with DEBUG; with no_printk the readl()
+     * arguments were still evaluated (20 MMIO reads every 60 IRQs). */
     {
         static unsigned int isr_log_counter;
         isr_log_counter++;
@@ -1743,6 +1751,7 @@ irqreturn_t ispcore_interrupt_service_routine(int irq, void *dev_id)
                     readl(isp_regs + 0x28), readl(isp_regs + 0xb0));
         }
     }
+#endif
 
     /* Binary Ninja: IRQ callback array processing */
     /* Binary Ninja: for (int i = 0; i != 0x20; i++) */
@@ -1755,7 +1764,9 @@ irqreturn_t ispcore_interrupt_service_routine(int irq, void *dev_id)
         }
     }
 
-    return IRQ_HANDLED;
+    /* Review2 L5: nothing pending and no frame drained: let the spurious
+     * IRQ detection see it. */
+    return (hw_interrupt_status || drained_total) ? IRQ_HANDLED : IRQ_NONE;
 }
 
 /* ISP interrupt handler - now calls the proper dispatch system */
@@ -5130,7 +5141,7 @@ void private_dma_cache_sync(struct device *dev, void *vaddr, size_t size, enum d
 
     pr_debug("private_dma_cache_sync: Cache sync completed using dma_cache_sync\n");
 }
-EXPORT_SYMBOL(private_dma_cache_sync);
+/* Review2 L14: internal, not exported (collides with other vendor modules). */
 
 /* Frame synchronization - using implementation from tx_isp_frame_done.c */
 

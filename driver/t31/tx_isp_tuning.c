@@ -37,6 +37,7 @@
 #include <linux/highmem.h>
 #include <linux/pagemap.h>
 #include <linux/version.h>
+#include <linux/clk.h>
 #include <linux/math64.h>
 #include <asm/cacheflush.h>
 #include <asm/addrspace.h>
@@ -2494,6 +2495,16 @@ static int tisp_adr_build_lut_payload(uint32_t *out_words, int out_cap)
 
 /* Global parameter arrays */
 static void tisp_free_stats_pages(void);
+static void tisp_detach_stats_pages(void);
+static void *tisp_stats_page_get(unsigned long *slot, unsigned int order, bool zero);
+/*
+ * Review2 H3/O4: the statistics DMA rings are allocated on the first
+ * tisp_init and kept until module exit (as T21/T23 do). A restart reuses
+ * them, so the engines can never be left pointing at a freed page, and the
+ * ~128 KiB alloc/free churn per restart is gone.
+ */
+static unsigned long tisp_stats_ae0, tisp_stats_ae1, tisp_stats_awb;
+static unsigned long tisp_stats_adr, tisp_stats_dpc, tisp_stats_af;
 static void *tparams_day = NULL;
 static void *tparams_night = NULL;
 static void *tparams_cust = NULL;
@@ -7500,17 +7511,17 @@ int tisp_init(void *sensor_info_arg, char *param_name)
     /* Binary Ninja OEM ORDER: Allocate ALL DMA buffers FIRST, then init sub-modules */
     pr_info("*** tisp_init: ALLOCATING ISP PROCESSING BUFFERS ***\n");
 
-    /* A second tisp_init without tisp_deinit in between (stream state
-     * that skipped the deinit) overwrote the previous pages: release them
-     * first instead of leaking ~128 KB per init. */
-    tisp_free_stats_pages();
+    /* The rings are kept across inits (see tisp_stats_page_get): a second
+     * tisp_init reuses the same pages, the engines are reprogrammed with
+     * the same addresses below. Clear the published pointers first. */
+    tisp_detach_stats_pages();
 
     /* OEM uses __get_free_pages(0x1040d0, 3) which includes __GFP_ZERO.
      * AE0: order 3 = 8 pages = 32KB (0x8000), we use 0x6000 of it.
      * CRITICAL: Zero the buffer so that before hardware fills it, zone
      * reads return 0 (dark) rather than random garbage that confuses
      * the AE algorithm in libimp. */
-    ae0_buffer = (void *)__get_free_pages(GFP_KERNEL | __GFP_ZERO, 3);
+    ae0_buffer = tisp_stats_page_get(&tisp_stats_ae0, 3, true);
     if (ae0_buffer != NULL) {
         dma_addr_t ae0_phys = virt_to_phys(ae0_buffer);
         /* OEM stores raw KSEG0 (cached) address. dma_cache_sync
@@ -7527,10 +7538,12 @@ int tisp_init(void *sensor_info_arg, char *param_name)
         system_reg_write(0xa048, ae0_phys + 0x5800);
         system_reg_write(0xa04c, 0x33);
         pr_info("*** tisp_init: AE0 buffer allocated at 0x%08x ***\n", (uint32_t)ae0_phys);
+    } else {
+        system_reg_write(0xa04c, 0);    /* no ring: engine off */
     }
 
     /* AE1: order 3 = 8 pages = 32KB (also zeroed per OEM GFP flags) */
-    ae1_buffer = (void *)__get_free_pages(GFP_KERNEL | __GFP_ZERO, 3);
+    ae1_buffer = tisp_stats_page_get(&tisp_stats_ae1, 3, true);
     if (ae1_buffer != NULL) {
         dma_addr_t ae1_phys = virt_to_phys(ae1_buffer);
         data_b2f54 = (uint32_t)ae1_buffer;
@@ -7545,10 +7558,12 @@ int tisp_init(void *sensor_info_arg, char *param_name)
         system_reg_write(0xa848, ae1_phys + 0x5800);
         system_reg_write(0xa84c, 0x33);
         pr_info("*** tisp_init: AE1 buffer allocated at 0x%08x ***\n", (uint32_t)ae1_phys);
+    } else {
+        system_reg_write(0xa84c, 0);    /* no ring: engine off */
     }
 
     /* AWB: order 2 = 4 pages = 16KB (zeroed per OEM GFP flags) */
-    awb_buffer = (void *)__get_free_pages(GFP_KERNEL | __GFP_ZERO, 2);
+    awb_buffer = tisp_stats_page_get(&tisp_stats_awb, 2, true);
     if (awb_buffer != NULL) {
         dma_addr_t awb_phys = virt_to_phys(awb_buffer);
         data_a2f58 = 4;
@@ -7564,11 +7579,13 @@ int tisp_init(void *sensor_info_arg, char *param_name)
         system_reg_write(0xb04c, 3);
         pr_info("*** tisp_init: AWB DMA buffer virt=%p phys=0x%08x pages=%u ***\n",
                 awb_buffer, data_a2f60, data_a2f58);
+    } else {
+        system_reg_write(0xb04c, 0);    /* no ring: engine off */
     }
 
     /* Binary Ninja: ADR statistics DMA buffer (0x4000 bytes) → regs 0x4494-0x44a0
      * OEM: data_a2f68 = virt, data_a2f6c = phys, written to ADR stat registers */
-    adr_buffer = (void *)__get_free_pages(GFP_KERNEL, 2);
+    adr_buffer = tisp_stats_page_get(&tisp_stats_adr, 2, false);
     if (adr_buffer != NULL) {
         dma_addr_t adr_phys_addr = virt_to_phys(adr_buffer);
         system_reg_write(0x4494, adr_phys_addr);
@@ -7582,10 +7599,12 @@ int tisp_init(void *sensor_info_arg, char *param_name)
         adr_dma_phys = (uint32_t)adr_phys_addr;
         pr_info("*** tisp_init: ADR DMA buffer virt=%p phys=0x%08x ***\n",
                 adr_buffer, (uint32_t)adr_phys_addr);
+    } else {
+        system_reg_write(0x4490, 0);    /* no ring: engine off */
     }
 
     /* DPC/Defog: order 2 = 4 pages = 16KB */
-    dpc_buffer = (void *)__get_free_pages(GFP_KERNEL, 2);
+    dpc_buffer = tisp_stats_page_get(&tisp_stats_dpc, 2, false);
     if (dpc_buffer != NULL) {
         dma_addr_t dpc_phys = virt_to_phys(dpc_buffer);
         system_reg_write(0x5b84, dpc_phys);
@@ -7598,10 +7617,12 @@ int tisp_init(void *sensor_info_arg, char *param_name)
         defog_dma_phys = (uint32_t)dpc_phys;
         pr_info("*** tisp_init: DPC/Defog buffer allocated virt=%p phys=0x%08x ***\n",
                 dpc_buffer, (uint32_t)dpc_phys);
+    } else {
+        system_reg_write(0x5b80, 0);    /* no ring: engine off */
     }
 
     /* Buffer 6: order 2 = 4 pages = 16KB */
-    buf6 = (void *)__get_free_pages(GFP_KERNEL, 2);
+    buf6 = tisp_stats_page_get(&tisp_stats_af, 2, false);
     if (buf6 != NULL) {
         dma_addr_t buf6_phys = virt_to_phys(buf6);
         data_a2f80 = (uint32_t)(unsigned long)buf6;
@@ -7613,6 +7634,8 @@ int tisp_init(void *sensor_info_arg, char *param_name)
         system_reg_write(0xb8b4, buf6_phys + 0x3000);
         system_reg_write(0xb8b8, 3);
         pr_info("*** tisp_init: Buf6 allocated at 0x%08x ***\n", (uint32_t)buf6_phys);
+    } else {
+        system_reg_write(0xb8b8, 0);    /* no ring: engine off */
     }
 
     /* Binary Ninja: Main ISP LUT/processing buffer (0x8000 bytes) → regs 0x2010-0x2024 */
@@ -33060,7 +33083,7 @@ ssize_t isp_tunning_read(struct file *file, char __user *buf, size_t count, loff
 	tispPollValue = 0;
 	return count;
 }
-EXPORT_SYMBOL(isp_tunning_read);
+/* Review2 L14: internal, not exported. */
 
 static unsigned int isp_tunning_poll(struct file *file, struct poll_table_struct *wait);
 
@@ -36991,16 +37014,11 @@ EXPORT_SYMBOL(tisp_gib_param_array_set);
 
 
 /*
- * Free the statistics DMA pages tisp_init allocates (AE0/AE1 order 3,
- * AWB/ADR/DPC-defog/AF order 2, ~128 KiB); stock tisp_deinit kfrees its
- * equivalents. Without this every core deinit/init cycle leaked them.
- *
- * Callers must have stopped the ISP input (ispcore_core_ops_init(0) runs
- * tisp_deinit after ispcore_video_s_stream(0)), so the stats engines get
- * no new frame. The pointers are cleared first and the ISP interrupt is
- * synchronised, so a late stats interrupt sees NULL (every reader checks)
- * and nothing reads a page after it is freed. tisp_init reprograms the
- * stats address registers with fresh pages.
+ * Statistics DMA pages tisp_init allocates (AE0/AE1 order 3, AWB/ADR/
+ * DPC-defog/AF order 2, ~128 KiB). They are allocated once and kept:
+ * tisp_deinit only unpublishes them (pointers cleared, ISP interrupt
+ * synchronised, so a late stats interrupt sees NULL). Only module exit
+ * frees them, after disabling every statistics engine.
  */
 /* Module exit: release the statistics DMA pages whatever state the last
  * stream left the core in (the deinit path only runs for some states). */
@@ -37009,12 +37027,21 @@ void tisp_release_stats_pages(void)
     tisp_free_stats_pages();
 }
 
-static void tisp_free_stats_pages(void)
+static void *tisp_stats_page_get(unsigned long *slot, unsigned int order, bool zero)
 {
-    unsigned long ae0 = data_b2f3c, ae1 = data_b2f54, awb = data_a2f5c;
-    unsigned long af = data_a2f80;
-    void *adr = adr_dma_virt, *defog = defog_dma_virt;
+    if (!*slot) {
+        *slot = __get_free_pages(GFP_KERNEL | (zero ? __GFP_ZERO : 0), order);
+        return (void *)*slot;
+    }
+    /* Reused ring: same contents as the fresh __GFP_ZERO pages stock gets. */
+    if (zero)
+        memset((void *)*slot, 0, PAGE_SIZE << order);
+    return (void *)*slot;
+}
 
+/* Unpublish the rings: a late statistics interrupt sees NULL. */
+static void tisp_detach_stats_pages(void)
+{
     data_b2f3c = 0;
     data_b2f48 = 0;
     data_b2f54 = 0;
@@ -37029,19 +37056,55 @@ static void tisp_free_stats_pages(void)
     defog_dma_phys = 0;
     if (ourISPdev && ourISPdev->isp_irq > 0)
         synchronize_irq(ourISPdev->isp_irq);
+}
 
-    if (ae0)
-        free_pages(ae0, 3);
-    if (ae1)
-        free_pages(ae1, 3);
-    if (awb)
-        free_pages(awb, 2);
-    if (adr)
-        free_pages((unsigned long)adr, 2);
-    if (defog)
-        free_pages((unsigned long)defog, 2);
-    if (af)
-        free_pages(af, 2);
+static bool tisp_core_clock_on(void)
+{
+    if (!ourISPdev || !ourISPdev->isp_clk ||
+        !(ourISPdev->sd.base || ourISPdev->core_regs))
+        return false;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 11, 0)
+    return clk_is_enabled(ourISPdev->isp_clk) != 0;
+#else
+    return __clk_is_enabled(ourISPdev->isp_clk);
+#endif
+}
+
+/* Module exit only: stop the engines, then free the rings. */
+static void tisp_free_stats_pages(void)
+{
+    tisp_detach_stats_pages();
+    /*
+     * The core may still run (exit happens in whatever state the last
+     * stream left it). Disable every statistics DMA engine before its
+     * pages go back to the allocator. With the core clock gated nothing
+     * can DMA and the registers are not touched.
+     */
+    if (tisp_core_clock_on()) {
+        system_reg_write(0xa04c, 0);
+        system_reg_write(0xa84c, 0);
+        system_reg_write(0xb04c, 0);
+        system_reg_write(0x4490, 0);
+        system_reg_write(0x5b80, 0);
+        system_reg_write(0xb8b8, 0);
+        wmb();
+        udelay(100);    /* let an in-flight burst finish */
+    }
+
+    if (tisp_stats_ae0)
+        free_pages(tisp_stats_ae0, 3);
+    if (tisp_stats_ae1)
+        free_pages(tisp_stats_ae1, 3);
+    if (tisp_stats_awb)
+        free_pages(tisp_stats_awb, 2);
+    if (tisp_stats_adr)
+        free_pages(tisp_stats_adr, 2);
+    if (tisp_stats_dpc)
+        free_pages(tisp_stats_dpc, 2);
+    if (tisp_stats_af)
+        free_pages(tisp_stats_af, 2);
+    tisp_stats_ae0 = tisp_stats_ae1 = tisp_stats_awb = 0;
+    tisp_stats_adr = tisp_stats_dpc = tisp_stats_af = 0;
 }
 
 /*
@@ -37189,7 +37252,8 @@ int tisp_deinit(void)
     /* OEM calls tisp_param_operate_deinit() — cleanup is handled by module unload */
 
     tisp_deinit_free();
-    tisp_free_stats_pages();
+    /* Rings stay allocated (and programmed) until module exit. */
+    tisp_detach_stats_pages();
 
     /* Free mscaler mask buffers (OEM data_ba480/data_ba47c) */
     kfree(mscaler_mask_active);

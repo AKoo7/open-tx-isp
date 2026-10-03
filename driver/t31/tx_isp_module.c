@@ -143,7 +143,7 @@ static DEFINE_MUTEX(sensor_ops_call_mutex);
 /* Deferred sensor I2C write — runs in workqueue context (process context) */
 static void sensor_expo_work_func(struct work_struct *work);
 DECLARE_WORK(sensor_expo_work, sensor_expo_work_func);
-EXPORT_SYMBOL(sensor_expo_work);
+/* Review2 L14: internal, not exported. */
 static u32 sensor_expo_last_packed = ~0U;
 static uint sensor_expo_catchups;
 module_param_named(sensor_expo_catchups, sensor_expo_catchups, uint, S_IRUGO);
@@ -900,17 +900,26 @@ static struct tx_isp_subdev *isp_i2c_new_subdev_board(struct i2c_adapter *adapte
     client = global_sensor_i2c_client;
     if (client && client->adapter == adapter && client->addr == info->addr) {
         result = i2c_get_clientdata(client);
-        mutex_unlock(&i2c_client_mutex);
         if (result) {
+            struct device_driver *drv = client->dev.driver;
+
+            /*
+             * Pinned again for this session (see below). Review2 L6/L13:
+             * pin under i2c_client_mutex, so a concurrent unregister cannot
+             * free the client (or unbind its driver) between the lookup
+             * and the pin.
+             */
+            if (!drv || !tx_isp_sensor_pin(&tx_isp_t31_sensor_pins,
+                                           drv->owner)) {
+                mutex_unlock(&i2c_client_mutex);
+                return NULL;
+            }
+            mutex_unlock(&i2c_client_mutex);
             pr_info("isp_i2c_new_subdev_board: reusing sensor subdev %p from %s at i2c-%d/0x%02x\n",
                     result, info->type, adapter->nr, info->addr);
-            /* Pinned again for this session (see below). */
-            if (!client->dev.driver ||
-                !tx_isp_sensor_pin(&tx_isp_t31_sensor_pins,
-                                   client->dev.driver->owner))
-                return NULL;
             return (struct tx_isp_subdev *)result;
         }
+        mutex_unlock(&i2c_client_mutex);
     } else {
         mutex_unlock(&i2c_client_mutex);
     }
@@ -1965,7 +1974,7 @@ int frame_chan_event(void *priv, int event, void *data)
         return -ENOIOCTLCMD;
     }
 }
-EXPORT_SYMBOL_GPL(frame_chan_event);
+/* Review2 L14: internal, not exported. */
 
 /* system_reg_write_ae - EXACT Binary Ninja decompiled implementation */
 void system_reg_write_ae(u32 arg1, u32 arg2, u32 arg3)
@@ -4237,6 +4246,20 @@ static bool tx_isp_t31_qbuf_guard = true;
 module_param_named(qbuf_guard, tx_isp_t31_qbuf_guard, bool, 0644);
 MODULE_PARM_DESC(qbuf_guard, "Reject framechan QBUF buffers outside rmem (default 1)");
 
+/*
+ * Review2 M2: MDNS/WDR SET_BUF buffers are DMA targets every frame, like a
+ * QBUF frame buffer; they must lie in rmem too (same qbuf_guard switch).
+ */
+static int tx_isp_t31_setbuf_guard(const char *what, u32 addr, u32 len)
+{
+    if (!tx_isp_qbuf_phys_check(addr, len))
+        return 0;
+    pr_warn_ratelimited("tx-isp-t31: %s SET_BUF addr=0x%08x len=0x%x outside rmem%s\n",
+                        what, addr, len,
+                        tx_isp_t31_qbuf_guard ? ", rejected" : " (qbuf_guard=0, accepted)");
+    return tx_isp_t31_qbuf_guard ? -EINVAL : 0;
+}
+
 /* Called and returns with fcd->buffer_mutex held. */
 static long frame_channel_ioctl_locked(struct file *file, unsigned int cmd,
                                        unsigned long arg)
@@ -5989,6 +6012,8 @@ static long tx_isp_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned 
         if (tx_isp_dma_range_validate(buf_setup.addr, layout.used_size,
                                       TX_ISP_T31_PHYS_DRAM_LIMIT))
             return -EINVAL;
+        if (tx_isp_t31_setbuf_guard("MDNS", buf_setup.addr, layout.used_size))
+            return -EINVAL;
 
         /* OEM does NOT zero the frame buffer — it just programs DMA registers.
          * Previous PINK_DIAG zeroing (memset_io to 0) caused MDNS R=G=B:
@@ -6117,6 +6142,8 @@ static long tx_isp_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned 
 
         if (tx_isp_dma_range_validate(wdr_setup.addr, required_size,
                                       TX_ISP_T31_PHYS_DRAM_LIMIT))
+            return -EINVAL;
+        if (tx_isp_t31_setbuf_guard("WDR", wdr_setup.addr, required_size))
             return -EINVAL;
 
         /* OEM tx_isp_wdr_set_buf programs the physical cache directly. */
