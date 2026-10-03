@@ -14961,6 +14961,45 @@ static void t41_unregister_i2c_sensor(uintptr_t sensor_sd)
 	}
 }
 
+static void t41_reclaim_stale_sensor(uintptr_t vin, uintptr_t arg,
+				     unsigned int sensor_id)
+{
+	struct list_head *head;
+	struct list_head *node;
+	uintptr_t sensor = 0;
+	uintptr_t slot;
+
+	head = (struct list_head *)(vin + T41_VIN_SENSOR_LIST_OFF);
+	private_mutex_lock((void *)(vin + T41_VIN_SENSOR_LOCK_OFF));
+	if (head->next) {
+		for (node = head->next; node != head; node = node->next) {
+			uintptr_t candidate =
+				(uintptr_t)node - T41_SENSOR_LIST_OFF;
+
+			if (!strcmp((char *)(candidate + T41_SENSOR_INFO_OFF),
+				    (char *)arg)) {
+				sensor = candidate;
+				break;
+			}
+		}
+	}
+	if (!sensor) {
+		private_mutex_unlock((void *)(vin + T41_VIN_SENSOR_LOCK_OFF));
+		return;
+	}
+	list_del((struct list_head *)(sensor + T41_SENSOR_LIST_OFF));
+	slot = vin + T41_VIN_ACTIVE_SENSOR_OFF + sensor_id * sizeof(uintptr_t);
+	if (t41_load_ptr(vin, T41_VIN_ACTIVE_SENSOR_OFF +
+			      sensor_id * sizeof(uintptr_t)) == sensor)
+		*(uintptr_t *)slot = 0;
+	private_mutex_unlock((void *)(vin + T41_VIN_SENSOR_LOCK_OFF));
+	printk(KERN_WARNING
+	       "tx_isp_t41_recovered: reclaiming stale sensor %s on vin %u\n",
+	       (char *)arg, sensor_id);
+	if (*(uint32_t *)(sensor + T41_SENSOR_INFO_OFF + 32) == 1)
+		t41_unregister_i2c_sensor(sensor);
+}
+
 static int t41_register_sensor(uintptr_t vin, uintptr_t arg)
 {
 	struct i2c_board_info board_info;
@@ -14994,6 +15033,14 @@ static int t41_register_sensor(uintptr_t vin, uintptr_t arg)
 		isp_printf(1, "unsupported sensor control bus %u\n", cbus_type);
 		return -EINVAL;
 	}
+
+	/* Beyond vendor: a process that dies without IMP_ISP_DelSensor (OOM
+	 * kill, SIGKILL) leaves its sensor on the VIN list and its I2C client
+	 * bound, so every later AddSensor fails with EBUSY from
+	 * i2c_new_device until reboot.  The VIN state check above already
+	 * proved no stream owns this slot, so reclaim a same-named stale
+	 * entry before creating the new client. */
+	t41_reclaim_stale_sensor(vin, arg, sensor_id);
 
 	adapter = private_i2c_get_adapter(*(uint32_t *)(arg + 60));
 	if (!adapter) {
