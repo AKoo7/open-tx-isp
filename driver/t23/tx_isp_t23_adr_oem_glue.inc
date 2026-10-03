@@ -73,7 +73,61 @@ static uint64_t t23_adrlift_call(uint32_t fn, uint32_t a0, uint32_t a1,
 
 int32_t tisp_gamma_param_array_get(int32_t arg1, int32_t *arg2, int32_t *arg3);
 
+/*
+ * Defog scratch.  Stock tisp_defog_soft_process takes seven buffers per run
+ * with kmem_cache_alloc(kmalloc_caches[7..10], GFP_ATOMIC) (128..1024
+ * bytes), dereferences them unchecked and kfrees them at its end.  Here
+ * they come from a fixed pool: no allocation that can fail on the work
+ * path, no slab traffic per defog event.  One defog run at a time (the work
+ * item, under t23_adrlift_mutex; the emulator calls it directly).  Slab
+ * memory is not zeroed either; the lifted code clears what it reads.
+ * Anything the pool cannot serve (larger class, pool exhausted) still goes
+ * to the slab, as stock.
+ */
+#define T23_ADRLIFT_SCRATCH_N	8U
+#define T23_ADRLIFT_SCRATCH_SZ	1024U
+static uint8_t t23_adrlift_scratch[T23_ADRLIFT_SCRATCH_N][T23_ADRLIFT_SCRATCH_SZ]
+	__aligned(32);
+static uint32_t t23_adrlift_scratch_used;
+
+static noinline void *t23_adrlift_slab_alloc(struct kmem_cache *cache, gfp_t gfp)
+{
+	unsigned int i;
+
+	if (cache) {
+		for (i = 0; i <= KMALLOC_SHIFT_HIGH; i++)
+			if (kmalloc_caches[i] == cache)
+				break;
+		if (i > KMALLOC_SHIFT_HIGH ||
+		    kmalloc_size(i) > (int)T23_ADRLIFT_SCRATCH_SZ)
+			return kmem_cache_alloc(cache, gfp);
+	}
+	for (i = 0; i < T23_ADRLIFT_SCRATCH_N; i++) {
+		if (!(t23_adrlift_scratch_used & BIT(i))) {
+			t23_adrlift_scratch_used |= BIT(i);
+			return t23_adrlift_scratch[i];
+		}
+	}
+	WARN_ONCE(1, "adrlift: defog scratch pool exhausted\n");
+	return cache ? kmem_cache_alloc(cache, gfp) : NULL;
+}
+
+static noinline void t23_adrlift_slab_free(const void *p)
+{
+	uintptr_t off = (uintptr_t)p - (uintptr_t)t23_adrlift_scratch;
+
+	if (off < sizeof(t23_adrlift_scratch)) {
+		t23_adrlift_scratch_used &= ~BIT(off / T23_ADRLIFT_SCRATCH_SZ);
+		return;
+	}
+	kfree(p);
+}
+
+#define kmem_cache_alloc(c, f)	t23_adrlift_slab_alloc((c), (f))
+#define kfree(p)		t23_adrlift_slab_free(p)
 #include "tx_isp_t23_adr_oem.inc"
+#undef kmem_cache_alloc
+#undef kfree
 
 /* ---- runtime (source_adr_oem=1) --------------------------------------- */
 
@@ -85,6 +139,34 @@ module_param_array_named(adr_oem_runs, t23_adrlift_counts, uint,
 			 &t23_adrlift_ncounts, 0444);
 MODULE_PARM_DESC(adr_oem_runs, "lifted stock ADR irq,process / defog irq,process runs");
 static bool t23_adrlift_adr_ready, t23_adrlift_defog_ready;
+/*
+ * The core ISR runs the lifted *_interrupt_static on the same objects
+ * tiziano_*_init and the day/night refresh rewrite.  The ISR checks the
+ * ready flags and runs the handlers under this lock; init/refresh take the
+ * handlers off under it (busy), so none is running or starts while they
+ * rewrite the state.  A statistics interrupt in that window is dropped, as
+ * at any stream start.
+ */
+static DEFINE_SPINLOCK(t23_adrlift_irq_lock);
+static bool t23_adrlift_busy;
+
+static void t23_adrlift_set_busy(bool busy)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&t23_adrlift_irq_lock, flags);
+	t23_adrlift_busy = busy;
+	spin_unlock_irqrestore(&t23_adrlift_irq_lock, flags);
+}
+
+static void t23_adrlift_set_ready(bool *ready, bool value)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&t23_adrlift_irq_lock, flags);
+	*ready = value;
+	spin_unlock_irqrestore(&t23_adrlift_irq_lock, flags);
+}
 /* stock tisp_s_defog_str_internal(a0, const u8 *strength) */
 static uint32_t t23_adrlift_adr_str = 0x80U;
 static uint8_t t23_adrlift_defog_str = 0x80U;
@@ -156,16 +238,20 @@ static bool t23_adrlift_rings(void)
 /* core ISR: status bit 18 (ADR statistics), 20 (defog statistics) */
 static void t23_adrlift_irq(uint32_t status)
 {
-	if (!regtrace_t23_source_adr_oem)
+	if (!regtrace_t23_source_adr_oem || !(status & (BIT(18) | BIT(20))))
 		return;
-	if ((status & BIT(18)) && t23_adrlift_adr_ready) {
-		T23_ADRLIFT_CALL(LD_tiziano_adr_interrupt_static, 0, 0, 0, 0);
-		t23_adrlift_counts[0]++;
+	spin_lock(&t23_adrlift_irq_lock);
+	if (!t23_adrlift_busy) {
+		if ((status & BIT(18)) && t23_adrlift_adr_ready) {
+			T23_ADRLIFT_CALL(LD_tiziano_adr_interrupt_static, 0, 0, 0, 0);
+			t23_adrlift_counts[0]++;
+		}
+		if ((status & BIT(20)) && t23_adrlift_defog_ready) {
+			T23_ADRLIFT_CALL(LD_tiziano_defog_interrupt_static, 0, 0, 0, 0);
+			t23_adrlift_counts[2]++;
+		}
 	}
-	if ((status & BIT(20)) && t23_adrlift_defog_ready) {
-		T23_ADRLIFT_CALL(LD_tiziano_defog_interrupt_static, 0, 0, 0, 0);
-		t23_adrlift_counts[2]++;
-	}
+	spin_unlock(&t23_adrlift_irq_lock);
 }
 
 /*
@@ -179,12 +265,12 @@ static int t23_adrlift_adr_init(uint32_t a0, uint32_t width, uint32_t height)
 		return -ENODEV;
 	flush_work(&t23_adrlift_adr_work);
 	mutex_lock(&t23_adrlift_mutex);
-	t23_adrlift_adr_ready = false;
+	t23_adrlift_set_ready(&t23_adrlift_adr_ready, false);
 	T23_ADRLIFT_CALL(LD_tiziano_adr_init, a0, width, height, 0);
 	if (t23_adrlift_adr_str_set)
 		T23_ADRLIFT_CALL(LD_tisp_s_adr_str_internal,
 				 t23_adrlift_adr_str, 0, 0, 0);
-	t23_adrlift_adr_ready = true;
+	t23_adrlift_set_ready(&t23_adrlift_adr_ready, true);
 	mutex_unlock(&t23_adrlift_mutex);
 	printk(KERN_WARNING
 	       "tx_isp_t23_recovered: stock dynamic ADR (lifted) active %ux%u\n",
@@ -198,12 +284,12 @@ static int t23_adrlift_defog_init(uint32_t a0, uint32_t width, uint32_t height)
 		return -ENODEV;
 	flush_work(&t23_adrlift_defog_work);
 	mutex_lock(&t23_adrlift_mutex);
-	t23_adrlift_defog_ready = false;
+	t23_adrlift_set_ready(&t23_adrlift_defog_ready, false);
 	T23_ADRLIFT_CALL(LD_tiziano_defog_init, a0, width, height, 0);
 	if (t23_adrlift_defog_str_set)
 		T23_ADRLIFT_CALL(LD_tisp_s_defog_str_internal, 0,
 				 (uint32_t)(uintptr_t)&t23_adrlift_defog_str, 0, 0);
-	t23_adrlift_defog_ready = true;
+	t23_adrlift_set_ready(&t23_adrlift_defog_ready, true);
 	mutex_unlock(&t23_adrlift_mutex);
 	printk(KERN_WARNING
 	       "tx_isp_t23_recovered: stock defog (lifted) active %ux%u\n",
@@ -212,23 +298,40 @@ static int t23_adrlift_defog_init(uint32_t a0, uint32_t width, uint32_t height)
 }
 
 /*
- * Core stop / statistics DMA free (any context): no new interrupt or
- * process run; a queued run sees !ready and returns.
+ * Core stop (any context): no new interrupt or process run; a queued run
+ * sees !ready and returns.  After this no interrupt handler is running.
  */
 static void t23_adrlift_halt(void)
 {
+	unsigned long flags;
+
+	spin_lock_irqsave(&t23_adrlift_irq_lock, flags);
 	t23_adrlift_adr_ready = false;
 	t23_adrlift_defog_ready = false;
+	spin_unlock_irqrestore(&t23_adrlift_irq_lock, flags);
+}
+
+/*
+ * Process context, before the statistics rings or the module go: wait for
+ * a running process call and drop a queued one.
+ */
+static void t23_adrlift_sync(void)
+{
+	t23_adrlift_halt();
+	cancel_work_sync(&t23_adrlift_adr_work);
+	cancel_work_sync(&t23_adrlift_defog_work);
 }
 
 /* stock tisp_day_or_night_s_ctrl: ADR then defog from the new bank */
 static void t23_adrlift_dn_refresh(void)
 {
 	mutex_lock(&t23_adrlift_mutex);
+	t23_adrlift_set_busy(true);
 	if (t23_adrlift_adr_ready)
 		T23_ADRLIFT_CALL(LD_tiziano_adr_dn_params_refresh, 0, 0, 0, 0);
 	if (t23_adrlift_defog_ready)
 		T23_ADRLIFT_CALL(LD_tiziano_defog_dn_params_refresh, 0, 0, 0, 0);
+	t23_adrlift_set_busy(false);
 	mutex_unlock(&t23_adrlift_mutex);
 }
 

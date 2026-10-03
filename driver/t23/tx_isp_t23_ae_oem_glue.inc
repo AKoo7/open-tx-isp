@@ -109,6 +109,15 @@ static bool t23_aelift_expo_dirty;
 
 static void t23_aelift_work_fn(struct work_struct *work);
 static DECLARE_WORK(t23_aelift_work, t23_aelift_work_fn);
+/*
+ * Process-context users of the lifted AE state: the AE work
+ * (tisp_ae0_process), stream start (tiziano_ae_init, state copy), the
+ * setters (max gain, anti-flicker, compensation), the day/night refresh and
+ * the read-backs.  Stock has the same two contexts unlocked (ioctl vs the
+ * event thread); here a setter can no longer tear a LUT the process run is
+ * reading.  The interrupt-side statistics copy is not under it (as stock).
+ */
+static DEFINE_MUTEX(t23_aelift_mutex);
 
 static noinline __attribute__((noipa)) uint32_t t23_aelift_event_push(uint32_t channel, uint32_t event)
 {
@@ -437,9 +446,9 @@ static void t23_aelift_state_copy(bool save)
 	}
 }
 
-static void t23_aelift_s_max_gain(unsigned int slot, unsigned int flag_off,
-				  uint32_t value);
-static int t23_aelift_s_antiflick(uint32_t hz);
+static void t23_aelift_s_max_gain_locked(unsigned int slot,
+					 unsigned int flag_off, uint32_t value);
+static int t23_aelift_s_antiflick_locked(uint32_t hz);
 static uint32_t t23_aelift_max_set[4];	/* value + 1 per slot, 0 = unset */
 
 static void t23_aelift_start(void)
@@ -461,6 +470,7 @@ static void t23_aelift_start(void)
 	resume = t23_aelift_inited && t23_aelift_saved && it && again &&
 		 width == t23_aelift_init_w && height == t23_aelift_init_h &&
 		 fps == t23_aelift_init_fps;
+	mutex_lock(&t23_aelift_mutex);
 	if (resume)
 		t23_aelift_state_copy(true);
 	ret = t23_aelift_init(width, height, fps);
@@ -470,8 +480,10 @@ static void t23_aelift_start(void)
 		t23_aelift_init_h = height;
 		t23_aelift_init_fps = fps;
 	}
-	if (!ret && resume) {
+	if (!ret && resume)
 		t23_aelift_state_copy(false);
+	mutex_unlock(&t23_aelift_mutex);
+	if (!ret && resume) {
 		spin_lock_irqsave(&t23_aelift_ev_lock, flags);
 		t23_aelift_ev_count = 0;	/* tiziano_ae_init's start gain */
 		spin_unlock_irqrestore(&t23_aelift_ev_lock, flags);
@@ -489,19 +501,24 @@ static void t23_aelift_start(void)
 	}
 	/* maximum gains set before the lift ran (fresh start only: a resumed
 	 * state already holds them) */
+	mutex_lock(&t23_aelift_mutex);
 	if (!ret && !resume) {
 		if (t23_aelift_max_set[1])
-			t23_aelift_s_max_gain(1U, 0x14U, t23_aelift_max_set[1] - 1U);
+			t23_aelift_s_max_gain_locked(1U, 0x14U,
+						     t23_aelift_max_set[1] - 1U);
 		if (t23_aelift_max_set[3])
-			t23_aelift_s_max_gain(3U, 0x1cU, t23_aelift_max_set[3] - 1U);
+			t23_aelift_s_max_gain_locked(3U, 0x1cU,
+						     t23_aelift_max_set[3] - 1U);
 	}
 	/* an anti-flicker mode set before the lift ran (fresh start only) */
 	if (!ret && !resume && regtrace_t23_ae_flicker_mode)
-		t23_aelift_s_antiflick(regtrace_t23_ae_flicker_mode == 1U ? 50U : 60U);
+		t23_aelift_s_antiflick_locked(
+			regtrace_t23_ae_flicker_mode == 1U ? 50U : 60U);
 	/* an AE compensation set before the lift ran (it is stored only) */
 	if (!ret && regtrace_t23_source_ae_compensation != 128U)
 		T23_AELIFT_CALL(LA_tisp_ae_s_comp,
 				regtrace_t23_source_ae_compensation, 0, 0, 0);
+	mutex_unlock(&t23_aelift_mutex);
 	printk(KERN_WARNING
 	       "tx_isp_t23_recovered: stock AE0 (lifted) %s ret=%d fps=0x%x\n",
 	       ret ? "NOT started" : "active", ret, fps);
@@ -514,8 +531,8 @@ static void t23_aelift_start(void)
  * values are kept across a stream restart's tiziano_ae_init by the state
  * copy (t23_aelift_start).
  */
-static void t23_aelift_s_max_gain(unsigned int slot, unsigned int flag_off,
-				  uint32_t value)
+static void t23_aelift_s_max_gain_locked(unsigned int slot,
+					 unsigned int flag_off, uint32_t value)
 {
 	if (!regtrace_t23_source_ae_oem)
 		return;
@@ -524,6 +541,14 @@ static void t23_aelift_s_max_gain(unsigned int slot, unsigned int flag_off,
 	((uint32_t *)(void *)oem_ae_exp_th)[slot] =
 		tisp_math_exp2(value, 5, 10);
 	((uint32_t *)(void *)oem_IspAeFlag)[7] = 0;
+}
+
+static void t23_aelift_s_max_gain(unsigned int slot, unsigned int flag_off,
+				  uint32_t value)
+{
+	mutex_lock(&t23_aelift_mutex);
+	t23_aelift_s_max_gain_locked(slot, flag_off, value);
+	mutex_unlock(&t23_aelift_mutex);
 }
 
 /*
@@ -540,7 +565,7 @@ static void t23_aelift_s_max_gain(unsigned int slot, unsigned int flag_off,
  */
 static uint32_t t23_aelift_flicker_hz;
 
-static int t23_aelift_s_antiflick(uint32_t hz)
+static int t23_aelift_s_antiflick_locked(uint32_t hz)
 {
 	uint32_t *flags = (uint32_t *)(void *)oem_IspAeFlag;
 	uint32_t para[3];
@@ -596,6 +621,16 @@ static int t23_aelift_s_antiflick(uint32_t hz)
 	return 0;
 }
 
+static int t23_aelift_s_antiflick(uint32_t hz)
+{
+	int ret;
+
+	mutex_lock(&t23_aelift_mutex);
+	ret = t23_aelift_s_antiflick_locked(hz);
+	mutex_unlock(&t23_aelift_mutex);
+	return ret;
+}
+
 /* Sensor stream on: the exposure the lifted AE set last (0 = none yet). */
 static uint32_t t23_aelift_stream_packed(void)
 {
@@ -622,9 +657,13 @@ static void t23_aelift_work_fn(struct work_struct *work)
 	unsigned long flags;
 	unsigned int n, i;
 
-	if (!t23_aelift_ready)
+	mutex_lock(&t23_aelift_mutex);
+	if (!t23_aelift_ready) {
+		mutex_unlock(&t23_aelift_mutex);
 		return;
+	}
 	T23_AELIFT_CALL(LA_tisp_ae0_process, 0, 0, 0, 0);
+	mutex_unlock(&t23_aelift_mutex);
 	if (t23_aelift_expo_dirty) {
 		t23_aelift_expo_dirty = false;
 		if (t23_aelift_debug)
@@ -698,6 +737,26 @@ static void t23_aelift_halt(void)
 }
 
 /*
+ * Process context, before the statistics ring or the module go: no new
+ * run, wait for a running one, drop a queued one.
+ */
+static void t23_aelift_sync(void)
+{
+	t23_aelift_halt();
+	cancel_work_sync(&t23_aelift_work);
+}
+
+/* module exit, after t23_aelift_sync */
+static void t23_aelift_free(void)
+{
+	kfree(t23_aelift_buf);
+	t23_aelift_buf = NULL;
+	kfree(t23_aelift_saved);
+	t23_aelift_saved = NULL;
+	t23_aelift_inited = false;
+}
+
+/*
  * Stock tisp_g_ev_attr on the lifted copies (tisp_ae_ctrls, sensor_info),
  * same arithmetic through the lifted helpers.  The stock block (0x8c bytes,
  * word 1 and 0x40..0x77 left alone):
@@ -766,7 +825,9 @@ static bool t23_aelift_ev_info(struct regtrace_t23_ev_info *info)
 	if (!regtrace_t23_source_ae_oem || !t23_aelift_inited)
 		return false;
 	memset(w, 0, sizeof(w));
+	mutex_lock(&t23_aelift_mutex);
 	t23_aelift_g_ev_attr(w);
+	mutex_unlock(&t23_aelift_mutex);
 	info->valid = w[0] != 0;
 	info->manual = w[15] ? 1U : 0U;
 	info->it = w[0];
@@ -799,7 +860,9 @@ static bool t23_aelift_g_max(unsigned int word, uint32_t *value)
 	if (!regtrace_t23_source_ae_oem || !t23_aelift_inited)
 		return false;
 	memset(w, 0, sizeof(w));
+	mutex_lock(&t23_aelift_mutex);
 	t23_aelift_g_ev_attr(w);
+	mutex_unlock(&t23_aelift_mutex);
 	*value = w[word];
 	return true;
 }

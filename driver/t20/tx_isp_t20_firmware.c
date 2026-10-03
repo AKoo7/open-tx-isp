@@ -20629,12 +20629,21 @@ static int32_t t20_dpc_scale_slope(uint32_t v)
  * change. */
 void t20_dpc_apply_ratio(void)
 {
+	unsigned long flags;
+
 	if (!t20_dpc_raw_valid)
 		return;
+	/*
+	 * dynamic_dpc_strength_calculate rewrites the same two registers from
+	 * the firmware's frame path: keep the read-modify-writes in one piece
+	 * (interrupts off, uniprocessor), so neither tears the other's word.
+	 */
+	local_irq_save(flags);
 	APICAL_WRITE_32(0x1d4, (APICAL_READ_32(0x1d4) & 0xfffff000) |
 		(t20_dpc_scale_slope(t20_dpc_raw_slope) & 0xfff));
 	APICAL_WRITE_32(0x1cc, (APICAL_READ_32(0x1cc) & 0xfffff000) |
 		(t20_dpc_scale_thresh(t20_dpc_raw_thresh) & 0xfff));
+	local_irq_restore(flags);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002e7e0 origin=model_output original=dynamic_dpc_strength_calculate */

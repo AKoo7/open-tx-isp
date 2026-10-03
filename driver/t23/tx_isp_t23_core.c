@@ -858,7 +858,10 @@ static const char LC97[] = "&core_dev->mlock";
 static const char LC98[] = "Failed to init output channels!\n";
 static const char LC99[] = "Failed to init tuning module!\n";
 static uintptr_t data_a8f6c;
-static uintptr_t vic_err;
+/* stock object is 52 bytes; the recovered code reads/writes past the
+ * first word, so it gets the stock size (uses go through .v) */
+static union { uintptr_t v; uint32_t stock_[13]; } vic_err;
+#define vic_err (vic_err.v)
 static uintptr_t data_a8f70;
 static uintptr_t data_a8f44;
 static uintptr_t data_a8f48;
@@ -2220,7 +2223,10 @@ static unsigned char __attribute__((aligned(4))) gib_ir_value[8] = {
 static unsigned char __attribute__((aligned(4))) _awb_ct[4] = {
     0x88, 0x13, 0x00, 0x00, 
 };
-static uintptr_t _awb_trend;
+/* stock object is 28 bytes; the recovered code reads/writes past the
+ * first word, so it gets the stock size (uses go through .v) */
+static union { uintptr_t v; uint32_t stock_[7]; } _awb_trend;
+#define _awb_trend (_awb_trend.v)
 static unsigned char __attribute__((aligned(4))) awb_gb_offset[4] = {
     0x00, 0x04, 0x00, 0x00, 
 };
@@ -2231,7 +2237,10 @@ static unsigned char __attribute__((aligned(4))) awb_trend_api_para[28] = {
     0x01, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 
     0x00, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 
 };
-static uintptr_t awb_trend_api_status;
+/* stock object is 8 bytes; the recovered code reads/writes past the
+ * first word, so it gets the stock size (uses go through .v) */
+static union { uintptr_t v; uint32_t stock_[2]; } awb_trend_api_status;
+#define awb_trend_api_status (awb_trend_api_status.v)
 static unsigned char awb_array_b[900];
 static unsigned char awb_array_g[900];
 static unsigned char awb_array_ir[900];
@@ -3121,7 +3130,10 @@ static unsigned char __attribute__((aligned(4))) tisp_BCSH_au32Sthres_wdr[12] = 
     0x00, 0x00, 0x00, 0x00, 0x0a, 0x00, 0x00, 0x00, 0x2a, 0x00, 0x00, 0x00, 
 };
 static unsigned char tisp_BCSH_au32clip0[16];
-static uintptr_t BCSH_real;
+/* stock object is 20 bytes; the recovered code reads/writes past the
+ * first word, so it gets the stock size (uses go through .v) */
+static union { uintptr_t v; uint32_t stock_[5]; } BCSH_real;
+#define BCSH_real (BCSH_real.v)
 static unsigned char ctr_md_np_array[64];
 static unsigned char ctr_std_np_array[64];
 static unsigned char dpc_d_m1_dthres_wdr_array[36];
@@ -5508,13 +5520,16 @@ static unsigned char __attribute__((aligned(4))) hldc_attr_para[16] = {
 static unsigned char __attribute__((aligned(4))) _AePointPos[8] = {
     0x0a, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 
 };
-static uintptr_t (*_ae_reg)();
+/* stock object is 24 bytes; the recovered code reads/writes past the
+ * first word, so it gets the stock size (uses go through .v) */
+static union { uintptr_t (*v)(); uint32_t stock_[6]; } _ae_reg;
+#define _ae_reg (_ae_reg.v)
 static unsigned char data_c3e34[16384];
 static uintptr_t (*data_abc4c)();
 static uintptr_t (*data_abc70)();
 typedef int32_t (*data_abc4c_fn)(int32_t, int16_t *);
 typedef void (*data_abc70_fn)(uint32_t, int32_t);
-static unsigned char IspAeStatic[16384];
+static unsigned char IspAeStatic[0x40bc];	/* stock size */
 static uint32_t IntNum;
 static unsigned char IspAeTuneParam[92];
 static uintptr_t frameNum;
@@ -9090,6 +9105,8 @@ static int32_t sub_b1d4(void);
 static int sub_b1dc(void);
 static int32_t sub_b1e4(void);
 int32_t isp_irq_handle(int32_t arg1, void *arg2);
+/* MSCA channel config: front crop (ioctl) vs the core ISR FIFO drain */
+static DEFINE_SPINLOCK(regtrace_t23_msca_lock);
 int32_t isp_irq_thread_handle(int32_t arg1, void *arg2);
 int32_t tx_isp_enable_irq(uintptr_t a0);
 int32_t tx_isp_disable_irq(uintptr_t a0);
@@ -12174,14 +12191,20 @@ static void regtrace_t23_core_dma_disable(const char *reason)
            reason ? reason : "?");
 }
 
-static void t23_aelift_halt(void);
+static void t23_aelift_sync(void);
+static void t23_adrlift_sync(void);
 
+/* process context (module exit) */
 static void regtrace_t23_core_dma_free(void)
 {
     unsigned int i;
 
-    t23_aelift_halt();
-    t23_adrlift_halt();
+    /*
+     * The lifted AE/ADR/defog work reads these rings: wait for a running
+     * process call and drop a queued one before they go.
+     */
+    t23_aelift_sync();
+    t23_adrlift_sync();
 
     for (i = 0; i < REGTRACE_T23_CORE_DMA_BUFS; i++) {
         kfree(regtrace_t23_core_dma_bufs[i].virt);
@@ -18535,7 +18558,8 @@ fail:
 #endif
 
 /* WHOLE_DRIVER_RELOCATED_DATA_PATCHES */
-static void regtrace_patch_relocated_data(void)
+/* __init: reads __initconst tparams_prefix_init; init_module only */
+static void __init regtrace_patch_relocated_data(void)
 {
     memcpy(tparams, tparams_prefix_init, sizeof(tparams_prefix_init));
     *(const void **)((char *)isp_drivers + 0x0) = (const void *)&tx_isp_vin_driver;
@@ -33396,6 +33420,7 @@ int32_t isp_irq_handle(int32_t irq, void *dev_id)
 
         /* OEM T23 drains MSCA completion FIFOs from the core ISR. */
         if (regtrace_t23_source_frame_done) {
+            spin_lock(&regtrace_t23_msca_lock);
             for (channel = 0; channel < 3; channel++) {
                 uint32_t fifo_base;
                 uint32_t fifo_status;
@@ -33422,6 +33447,7 @@ int32_t isp_irq_handle(int32_t irq, void *dev_id)
                     printk(KERN_INFO "tx_isp_t23_recovered: core MSCA fifo ch=%d status=0x%x drained=%d\n",
                            channel, fifo_status, drained);
             }
+            spin_unlock(&regtrace_t23_msca_lock);
         }
         /* no status bit and no completed frame: nothing for this line */
         if (!status0 && !drained_total)
@@ -45478,6 +45504,7 @@ int32_t tisp_msca_api_set_fcrop(uint32_t a0, uint32_t a1, uint32_t a2,
 {
     uint32_t enable = a1 & 0xffU;
     uint32_t channel;
+    unsigned long flags;
 
     (void)a0;
     if (!enable) {
@@ -45485,6 +45512,8 @@ int32_t tisp_msca_api_set_fcrop(uint32_t a0, uint32_t a1, uint32_t a2,
         fcrop_en = 0;
         return 0;
     }
+    /* not while the core ISR drains/reprograms the same MSCA channels */
+    spin_lock_irqsave(&regtrace_t23_msca_lock, flags);
     for (channel = 0; channel < 3U; channel++) {
         unsigned char *cfg = msca + channel * 56U;
 
@@ -45498,6 +45527,7 @@ int32_t tisp_msca_api_set_fcrop(uint32_t a0, uint32_t a1, uint32_t a2,
     }
     system_reg_write(0xd010U, 1);
     fcrop_en = enable;
+    spin_unlock_irqrestore(&regtrace_t23_msca_lock, flags);
     printk(KERN_INFO "tx_isp_t23_recovered: front crop top=%u left=%u %ux%u\n",
            a2, a3, arg4, arg5);
     return 0;
@@ -66178,8 +66208,11 @@ uint8_t tisp_g_defog_str_internal(uint32_t a0, uintptr_t a1)
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003abe0 origin=fragment_seed original=tisp_s_defog_str_internal */
 int32_t tisp_s_defog_str_internal(uint32_t a0, uintptr_t a1)
 {
+    /* stock reads one byte through a1 unchecked; kernel callers only */
+    if (!regtrace_t23_valid_ptr(a1))
+        return -EINVAL;
     if (regtrace_t23_source_adr_oem)
-        return a1 ? (int32_t)t23_adrlift_s_defog_str(*(const uint8_t *)a1) : -EINVAL;
+        return (int32_t)t23_adrlift_s_defog_str(*(const uint8_t *)a1);
     uint32_t *s0;
     uint32_t *s1;
     uint32_t *s2;
@@ -79600,8 +79633,10 @@ int32_t tisp_ae_s_comp(uint32_t a0)
          * fills its ae_comp_param/ae_comp_x and rewrites the hardware
          * parameters.  Before the lift runs, t23_aelift_start replays it.
          */
+        mutex_lock(&t23_aelift_mutex);
         if (t23_aelift_ready)
             T23_AELIFT_CALL(LA_tisp_ae_s_comp, compensation, 0, 0, 0);
+        mutex_unlock(&t23_aelift_mutex);
         return 0;
     }
     regtrace_t23_source_ae_hlil_target = clamp(target, 16U, 120U);
@@ -79645,9 +79680,11 @@ uint8_t tisp_ae_g_luma(uint8_t *arg1)
     if (regtrace_t23_source_ae_oem) {
         uint8_t luma = 0;
 
+        mutex_lock(&t23_aelift_mutex);
         if (t23_aelift_ready)
             T23_AELIFT_CALL(LA_tisp_ae_g_luma, (uint32_t)(uintptr_t)&luma,
                             0, 0, 0);
+        mutex_unlock(&t23_aelift_mutex);
         result = luma;
     }
 
@@ -92012,7 +92049,9 @@ static void regtrace_t23_source_dn_params_refresh(const char *reason)
      * HLIL substitute keeps its state. */
     if (regtrace_t23_source_ae_oem && t23_aelift_ready) {
         flush_work(&t23_aelift_work);
+        mutex_lock(&t23_aelift_mutex);
         T23_AELIFT_CALL(LA_tiziano_ae_dn_params_refresh, 0, 0, 0, 0);
+        mutex_unlock(&t23_aelift_mutex);
     }
     /* OEM: curves from the new bank, all registers at the current gain. */
     if (regtrace_t23_source_sharpen_initialized &&
@@ -94734,7 +94773,7 @@ static int32_t tisp_set_defog_strength(uint32_t a0, uintptr_t a1)
     /* function prologue: stack frame and callee-saved register setup */
 
     /* fragment 1: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t))(uintptr_t)tisp_s_defog_str_internal)(a0); /* jalr target resolved by relocation */
+    v0 = (uintptr_t *)(uintptr_t)tisp_s_defog_str_internal(a0, a1); /* stock: a0/a1 passed through */
 
     /* fragment 2: Epilogue */
     /* function epilogue: restore registers and return */
@@ -101376,7 +101415,7 @@ ispcore_interrupt_service_routine0x734:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000006bf40 origin=fragment_seed original=init_module */
-int32_t init_module(void)
+int32_t __init init_module(void)
 {
     int ret;
 
@@ -101471,16 +101510,21 @@ void cleanup_module(void)
     regtrace_t23_core_dma_disable("module-exit");
     cancel_work_sync(&regtrace_t23_source_ae_hlil_work_item);
     cancel_work_sync(&regtrace_t23_source_awb_hlil_work_item);
+    t23_aelift_sync();
+    t23_adrlift_sync();
     /* Needs the VIC DMA device, which goes with the platforms. */
     regtrace_t23_snapraw_buffer_free();
     regtrace_unregister_real_platforms();
     cancel_work_sync(&regtrace_t23_source_ae_hlil_work_item);
     cancel_work_sync(&regtrace_t23_source_awb_hlil_work_item);
+    t23_aelift_sync();
+    t23_adrlift_sync();
     /* LSC flip row buffer (tisp_lsc_deinit() only runs on core deinit). */
     vfree((void *)tmp_space);
     tmp_space = 0;
     regtrace_t23_source_parameter_banks_free();
     regtrace_t23_core_dma_free();
+    t23_aelift_free();
     regtrace_unregister_framechans();
     regtrace_unregister_misc_ivdc();
     regtrace_unregister_isp_m0_miscdev();
@@ -101976,8 +102020,10 @@ static long regtrace_t23_tuning_cid(bool get, uint32_t id, uint32_t *value)
          */
         if ((fc[0] & 0xffU) &&
             (fc[3] < 64U || fc[4] < 64U || (fc[3] & 1U) || (fc[4] & 1U) ||
-             fc[2] + fc[3] > regtrace_t23_source_sensor_width ||
-             fc[1] + fc[4] > regtrace_t23_source_sensor_height))
+             fc[2] > regtrace_t23_source_sensor_width ||
+             fc[3] > regtrace_t23_source_sensor_width - fc[2] ||
+             fc[1] > regtrace_t23_source_sensor_height ||
+             fc[4] > regtrace_t23_source_sensor_height - fc[1]))
             return -EINVAL;
         return tisp_msca_api_set_fcrop(0, fc[0], fc[1], fc[2], fc[3], fc[4]);
     }
