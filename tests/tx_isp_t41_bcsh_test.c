@@ -36,6 +36,37 @@ int main(void)
 	assert(t41_bcsh_compute(p,360,5000,200,csc,91,words));
 	assert(!memcmp(saved,words,sizeof(words)));
 	assert(t41_bcsh_round(-32,6)==-1 && t41_bcsh_round(32,6)==1);
+	/* Non-neutral API controls (stock BCS_adjust / H_adjust). */
+	{
+		unsigned char ctl[4] = {128,128,128,128};
+		unsigned int api[29], base[29];
+		p[0x166]=0; put32(csc+4,65536); put32(p+4,110);
+		for(i=0;i<9;++i) put16(p + 0x106 + i*2,40);	/* brightness base */
+		for(i=0;i<9;++i) put16(p + 0x6c + i*2,100);	/* chroma knees v2..v5 */
+		for(i=0;i<9;++i) put16(p + 0x7e + i*2,200);
+		for(i=0;i<9;++i) put16(p + 0x90 + i*2,100);
+		for(i=0;i<9;++i) put16(p + 0xa2 + i*2,200);
+		put16(p+0x68,12); put16(p+0x6a,48);
+		assert(!t41_bcsh_compute(p,360,5000,200,csc,92,base));
+		assert(!t41_bcsh_compute_api(p,360,5000,200,csc,92,ctl,api));
+		assert(!memcmp(api,base,sizeof(base)));
+		ctl[0]=255;	/* brightness: Y offset += v10*(255-128)/128 */
+		assert(!t41_bcsh_compute_api(p,360,5000,200,csc,92,ctl,api));
+		assert((api[6]>>16) == (base[6]>>16) + ((40*255+64)>>7) - 40);
+		ctl[0]=128; ctl[3]=192;	/* hue +90 degrees: rows 1/2 rotate */
+		assert(!t41_bcsh_compute_api(p,360,5000,200,csc,92,ctl,api));
+		assert(api[11]==0 && api[12]==1024);
+		assert(api[13]==(((unsigned)-1024&16383U)<<16) && api[14]==0);
+		ctl[3]=128; ctl[2]=255;	/* saturation max: knees reach 6144 */
+		assert(!t41_bcsh_compute_api(p,360,5000,200,csc,92,ctl,api));
+		assert(api[27]==((6144U<<16)|6144U) && api[28]==((6144U<<16)|6144U));
+		ctl[2]=0;
+		assert(!t41_bcsh_compute_api(p,360,5000,200,csc,92,ctl,api));
+		assert(api[27]==0 && api[28]==0);
+		ctl[2]=128; ctl[1]=0;	/* contrast 0 also fades saturation */
+		assert(!t41_bcsh_compute_api(p,360,5000,200,csc,92,ctl,api));
+		assert(api[27]==0 && memcmp(api,base,sizeof(base)));
+	}
 	puts("T41 neutral-API BCSH matrix conversion, fallback and atomic rejection: passed");
 	return 0;
 }
