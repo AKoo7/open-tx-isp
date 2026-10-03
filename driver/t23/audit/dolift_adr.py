@@ -179,6 +179,13 @@ out_ = re.sub(r'([A-Za-z_][A-Za-z0-9_]*)\.(isra|constprop|part)\.(\d+)', r'\1_\2
 # keep one C frame per stock frame: inlining would stack every inlined
 # callee's frame[] into one kernel stack frame (24 KiB seen with GCC 16)
 out_ = re.sub(r'\boem_', 'oemd_', out_)
+# the stock .rodata image is the same bytes the AE lift already emits as
+# oem_rodata (both lifts copy the whole section of the same module), and it
+# is const: share that copy instead of a second 6.7 KiB one
+out_, n = re.subn(r'^static const uint8_t oemd_rodata\[\d+\] __aligned\(4\) = \{[^\n]*\};$',
+                  '/* stock .rodata: identical to the AE lift\'s const oem_rodata */\n'
+                  '#define oemd_rodata oem_rodata', out_, flags=re.M)
+assert n == 1
 out_ = re.sub(r'\blift_(vamap|xlate|va|lock)\b', r'liftd_\1', out_)
 out_ = out_.replace('LIFT_XLATE', 'LIFTD_XLATE')
 out_ = re.sub(r'^static uint64_t LD_', 'static noinline uint64_t LD_', out_, flags=re.M)
