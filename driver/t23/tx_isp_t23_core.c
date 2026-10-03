@@ -9905,6 +9905,9 @@ static char regtrace_t23_ae_hlil_resume_sensor[32];
 static bool regtrace_t23_source_ae_hlil = true;
 static bool regtrace_t23_source_ae_oem = false; /* tx_isp_t23_ae_oem_glue.inc */
 static uint32_t t23_aelift_stream_packed(void);  /* ditto */
+static bool regtrace_t23_source_adr_oem = true; /* tx_isp_t23_adr_oem_glue.inc */
+static void t23_adrlift_halt(void);
+static void t23_adrlift_irq(uint32_t status);
 static uint regtrace_t23_source_ae_hlil_interval = 32;
 /*
  * While the picture is over-exposed (luma above the deadband) the AE runs
@@ -12150,6 +12153,7 @@ static void regtrace_t23_core_dma_free(void)
     unsigned int i;
 
     t23_aelift_halt();
+    t23_adrlift_halt();
 
     for (i = 0; i < REGTRACE_T23_CORE_DMA_BUFS; i++) {
         kfree(regtrace_t23_core_dma_bufs[i].virt);
@@ -13878,10 +13882,12 @@ static uint32_t regtrace_t23_source_bypass_forced_on(void)
         !regtrace_t23_source_sdns_internal_enable)
         mask |= BIT(15);
     if (!regtrace_t23_source_adr_tuning_init ||
-        !regtrace_t23_source_adr_internal_enable)
+        (!regtrace_t23_source_adr_internal_enable &&
+         !regtrace_t23_source_adr_oem))
         mask |= BIT(7);
     if (!regtrace_t23_source_defog_tuning_init ||
-        !regtrace_t23_source_defog_internal_enable)
+        (!regtrace_t23_source_defog_internal_enable &&
+         !regtrace_t23_source_adr_oem))
         mask |= BIT(11);
     return mask;
 }
@@ -13897,7 +13903,8 @@ static uint32_t regtrace_t23_source_bypass_forced_off(void)
         regtrace_t23_source_sdns_internal_enable)
         mask |= BIT(15);
     if (regtrace_t23_source_adr_tuning_init &&
-        regtrace_t23_source_adr_internal_enable)
+        regtrace_t23_source_adr_internal_enable &&
+        !regtrace_t23_source_adr_oem)
         mask |= BIT(7);
     if (regtrace_t23_source_awb_stats_init)
         mask |= BIT(25);
@@ -13910,7 +13917,8 @@ static uint32_t regtrace_t23_source_bypass_forced_off(void)
     if (regtrace_t23_source_ydns_tuning_init)
         mask |= BIT(17);
     if (regtrace_t23_source_defog_tuning_init &&
-        regtrace_t23_source_defog_internal_enable)
+        regtrace_t23_source_defog_internal_enable &&
+        !regtrace_t23_source_adr_oem)
         mask |= BIT(11);
     return mask;
 }
@@ -14148,6 +14156,7 @@ static int regtrace_t23_source_apply_total_gain(void)
 
 #include "tx_isp_t23_ae_runtime.inc"
 #include "tx_isp_t23_ae_oem_glue.inc"
+#include "tx_isp_t23_adr_oem_glue.inc"
 
 static int regtrace_t23_source_bcsh_write_tuning_startup(void)
 {
@@ -14235,6 +14244,9 @@ static void regtrace_t23_source_defog_write_geometry(uint32_t width,
 static int regtrace_t23_source_defog_prepare(uint32_t width, uint32_t height)
 {
     int ret;
+
+    if (regtrace_t23_source_adr_oem)
+        return t23_adrlift_defog_init(0, width, height);
 
     regtrace_t23_put_le32(defog_ev_list_now,
                           (uint32_t)(uintptr_t)defog_ev_list);
@@ -14600,6 +14612,7 @@ static int regtrace_t23_source_core_set_stream(int enable,
         system_reg_write(0x800U, 0);
         regtrace_t23_core_started = false;
         t23_aelift_halt();
+        t23_adrlift_halt();
         regtrace_t23_source_mdns_initialized = false;
         regtrace_t23_source_sdns_initialized = false;
         regtrace_t23_source_adr_initialized = false;
@@ -33344,6 +33357,7 @@ int32_t isp_irq_handle(int32_t irq, void *dev_id)
                                          regtrace_t23_core_irq_count);
         regtrace_t23_source_awb_stats_irq(status0,
                                           regtrace_t23_core_irq_count);
+        t23_adrlift_irq(status0);
 
         /* OEM: mbus_to_bayer_write() after a sensor Bayer change. */
         if (ACCESS_ONCE(regtrace_t23_bayer_pending) != UINT_MAX) {
@@ -59441,6 +59455,8 @@ int32_t interpolate_adr_x8_y12(int32_t arg1, int32_t arg2, int32_t arg3, int32_t
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002e030 origin=fragment_seed original=tisp_adr_ev_update */
 int32_t tisp_adr_ev_update(uint32_t a0, uint32_t a1)
 {
+    if (regtrace_t23_source_adr_oem)
+        return (int32_t)T23_ADRLIFT_CALL(LD_tisp_adr_ev_update, a0, a1, 0, 0);
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
     uint32_t v1 = 0;
@@ -61173,6 +61189,8 @@ int tiziano_adr_params_init(void)
 int __attribute__((__noinline__, __noclone__))
 tiziano_adr_gamma_refresh(void)
 {
+    if (regtrace_t23_source_adr_oem)
+        return (int)t23_adrlift_entry(LD_tiziano_adr_gamma_refresh, 0, 0, 0, 0, true);
     unsigned char gamma[sizeof(tiziano_gamma_lut) + sizeof(tiziano_gamma_lut_wdr)];
     int size = 0;
     unsigned int i;
@@ -61250,6 +61268,8 @@ tiziano_adr_gamma_refresh(void)
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000330fc origin=fragment_seed original=tisp_adr_param_array_get */
 int32_t tisp_adr_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2)
 {
+    if (regtrace_t23_source_adr_oem)
+        return (int32_t)t23_adrlift_entry(LD_tisp_adr_param_array_get, a0, a1, (uint32_t)a2, 0, true);
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
     uint32_t *local_18 = 0;
@@ -61460,6 +61480,8 @@ int32_t tisp_adr_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2)
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000336c0 origin=fragment_seed original=tisp_adr_param_array_set */
 int32_t tisp_adr_param_array_set(uint32_t a0, uintptr_t a1)
 {
+    if (regtrace_t23_source_adr_oem)
+        return (int32_t)t23_adrlift_entry(LD_tisp_adr_param_array_set, a0, (uint32_t)a1, 0, 0, true);
     uint32_t *local_14 = 0;
     uint32_t *local_18 = 0;
     uint32_t local_1c = 0;
@@ -61688,6 +61710,8 @@ tisp_adr_param_array_set0x24c:
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000033b54 origin=fragment_seed original=tisp_g_adr_str_internal */
 uint32_t tisp_g_adr_str_internal(uint32_t a0, uintptr_t a1)
 {
+    if (regtrace_t23_source_adr_oem)
+        return t23_adrlift_entry(LD_tisp_g_adr_str_internal, a0, (uint32_t)a1, 0, 0, true);
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
 
@@ -61709,6 +61733,8 @@ uint32_t tisp_g_adr_str_internal(uint32_t a0, uintptr_t a1)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000033b64 origin=fragment_seed original=tisp_s_adr_str_internal */
 int32_t tisp_s_adr_str_internal(uint32_t a0)
 {
+    if (regtrace_t23_source_adr_oem)
+        return (int32_t)t23_adrlift_s_adr_str(a0);
     uint32_t *local_14 = 0;
     uint32_t *local_18 = 0;
     uint32_t local_1c = 0;
@@ -62229,6 +62255,8 @@ int32_t tiziano_adr_params_refresh(void)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000034320 origin=model_output original=tiziano_adr_dn_params_refresh */
 int32_t tiziano_adr_dn_params_refresh(void)
 {
+	if (regtrace_t23_source_adr_oem)
+		return (int32_t)t23_adrlift_entry(LD_tiziano_adr_dn_params_refresh, 0, 0, 0, 0, true);
 	tiziano_adr_params_refresh();
 	tiziano_adr_params_init();
 	return 0;
@@ -62237,6 +62265,8 @@ int32_t tiziano_adr_dn_params_refresh(void)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000034358 origin=fragment_seed original=tisp_adr_wdr_en */
 int32_t tisp_adr_wdr_en(uint32_t arg1)
 {
+    if (regtrace_t23_source_adr_oem)
+        return (int32_t)t23_adrlift_entry(LD_tisp_adr_wdr_en, arg1, 0, 0, 0, true);
     uintptr_t t6 = (uintptr_t)&adr_ctc_map2cut_y_now;
     uintptr_t t5 = (uintptr_t)&adr_light_end_now;
     uintptr_t t4 = (uintptr_t)&adr_block_light_now;
@@ -63447,6 +63477,8 @@ tiziano_adr_init0xed8:
 
 int32_t tiziano_adr_init(uint32_t arg0, uint32_t width, uint32_t height)
 {
+    if (regtrace_t23_source_adr_oem)
+        return t23_adrlift_adr_init(arg0, width, height);
     uint32_t width_div = width / 6U;
     uint32_t height_div = height >> 2;
     uint32_t width_sub;
@@ -63573,6 +63605,8 @@ int32_t tiziano_adr_init(uint32_t arg0, uint32_t width, uint32_t height)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000035420 origin=fragment_seed original=tisp_defog_ev_update */
 int32_t *tisp_defog_ev_update(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3)
 {
+    if (regtrace_t23_source_adr_oem)
+        return (int32_t *)(uintptr_t)(uint32_t)T23_ADRLIFT_CALL(LD_tisp_defog_ev_update, a0, a1, a2, a3);
     uint32_t *result;
 
     (void)a2;
@@ -64597,6 +64631,8 @@ void tiziano_defog_params_refresh(void)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000038570 origin=fragment_seed original=tisp_defog_wdr_en */
 int tisp_defog_wdr_en(int enable)
 {
+    if (regtrace_t23_source_adr_oem)
+        return (int)t23_adrlift_entry(LD_tisp_defog_wdr_en, (uint32_t)enable, 0, 0, 0, true);
 	uintptr_t defog_ev_list_now = (uintptr_t)&defog_ev_list_now;
 	uintptr_t defog_trsy0_list_now = (uintptr_t)&defog_trsy0_list_now;
 	uintptr_t defog_trsy1_list_now = (uintptr_t)&defog_trsy1_list_now;
@@ -64690,6 +64726,8 @@ int tisp_defog_wdr_en(int enable)
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000386b4 origin=model_output original=tiziano_defog_dn_params_refresh */
 int32_t tiziano_defog_dn_params_refresh(void)
 {
+	if (regtrace_t23_source_adr_oem)
+		return (int32_t)t23_adrlift_entry(LD_tiziano_defog_dn_params_refresh, 0, 0, 0, 0, true);
 	tiziano_defog_params_refresh();
 	tiziano_defog_params_init();
 	tiziano_defog_set_reg_params();
@@ -64994,6 +65032,8 @@ out:
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000038fec origin=fragment_seed original=tiziano_defog_init */
 int32_t tiziano_defog_init(uint32_t a0, uint32_t a1, uint32_t a2)
 {
+    if (regtrace_t23_source_adr_oem)
+        return t23_adrlift_defog_init(a0, a1, a2);
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
     uint32_t *local_18 = 0;
@@ -65983,6 +66023,8 @@ tiziano_defog_init0xfdc:
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003a260 origin=fragment_seed original=tisp_defog_param_array_get */
 int tisp_defog_param_array_get(int param_id, void *out_buf, int *size_buf)
 {
+    if (regtrace_t23_source_adr_oem)
+        return (int)t23_adrlift_entry(LD_tisp_defog_param_array_get, (uint32_t)param_id, (uint32_t)(uintptr_t)out_buf, (uint32_t)(uintptr_t)size_buf, 0, true);
     uint32_t offset;
 
     offset = 0;
@@ -66110,6 +66152,8 @@ int tisp_defog_param_array_get(int param_id, void *out_buf, int *size_buf)
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003a764 origin=model_output original=tisp_defog_param_array_set */
 int32_t tisp_defog_param_array_set(int32_t arg1, int32_t arg2)
 {
+    if (regtrace_t23_source_adr_oem)
+        return (int32_t)t23_adrlift_entry(LD_tisp_defog_param_array_set, (uint32_t)arg1, (uint32_t)arg2, 0, 0, true);
 	memcpy(&param_defog_weightlut20[6], arg2, 0x80);
 	memcpy(&param_defog_weightlut02, arg2 + 0x80, 0x80);
 	memcpy(&param_defog_weightlut12, arg2 + 0x100, 0x80);
@@ -66176,6 +66220,8 @@ int32_t defog_itp(int32_t arg1, int32_t arg2, int32_t arg3)
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003abd0 origin=fragment_seed original=tisp_g_defog_str_internal */
 uint8_t tisp_g_defog_str_internal(uint32_t a0, uintptr_t a1)
 {
+    if (regtrace_t23_source_adr_oem)
+        return (uint8_t)t23_adrlift_entry(LD_tisp_g_defog_str_internal, a0, (uint32_t)a1, 0, 0, true);
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
 
@@ -66197,6 +66243,8 @@ uint8_t tisp_g_defog_str_internal(uint32_t a0, uintptr_t a1)
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003abe0 origin=fragment_seed original=tisp_s_defog_str_internal */
 int32_t tisp_s_defog_str_internal(uint32_t a0, uintptr_t a1)
 {
+    if (regtrace_t23_source_adr_oem)
+        return a1 ? (int32_t)t23_adrlift_s_defog_str(*(const uint8_t *)a1) : -EINVAL;
     uint32_t *s0;
     uint32_t *s1;
     uint32_t *s2;
@@ -91992,7 +92040,9 @@ static void regtrace_t23_source_dn_params_refresh(const char *reason)
     if (regtrace_t23_source_sdns_initialized &&
         regtrace_t23_source_sdns_load_tuning())
         failed |= BIT(9);
-    if (regtrace_t23_source_adr_initialized) {
+    if (regtrace_t23_source_adr_oem) {
+        t23_adrlift_dn_refresh();
+    } else if (regtrace_t23_source_adr_initialized) {
         if (!regtrace_t23_source_adr_load_tuning()) {
             tiziano_adr_params_init();
             if (regtrace_t23_adr_ratio != 0x80U)
@@ -92001,7 +92051,9 @@ static void regtrace_t23_source_dn_params_refresh(const char *reason)
             failed |= BIT(10);
         }
     }
-    if (regtrace_t23_source_defog_initialized) {
+    if (regtrace_t23_source_adr_oem) {
+        /* refreshed with ADR above */
+    } else if (regtrace_t23_source_defog_initialized) {
         if (!regtrace_t23_source_defog_load_tuning())
             regtrace_t23_defog_strength_apply();
         else
@@ -101745,7 +101797,7 @@ static void regtrace_t23_adr_strength_apply(void)
     unsigned int i;
 
     /* 0x80 is the identity scale; it must still restore the lists */
-    if (!regtrace_t23_source_adr_initialized)
+    if (!regtrace_t23_source_adr_initialized || regtrace_t23_source_adr_oem)
         return;
     for (k = 0; k < 4U; ++k) {
         uint32_t floor = regtrace_t23_get_le32(histSub_4096_diff + k * 4U);
@@ -101801,7 +101853,7 @@ static void regtrace_t23_defog_strength_apply(void)
     unsigned int k;
     unsigned int i;
 
-    if (regtrace_t23_defog_ratio == 0x80U ||
+    if (regtrace_t23_defog_ratio == 0x80U || regtrace_t23_source_adr_oem ||
         !regtrace_t23_source_defog_initialized ||
         !regtrace_t23_valid_ptr((uintptr_t)main_para))
         return;
@@ -102065,7 +102117,10 @@ static long regtrace_t23_tuning_cid(bool get, uint32_t id, uint32_t *value)
         if (v > 0xffU)
             return -EINVAL;
         regtrace_t23_adr_ratio = v;
-        regtrace_t23_adr_strength_apply();
+        if (regtrace_t23_source_adr_oem)
+            t23_adrlift_s_adr_str(v);
+        else
+            regtrace_t23_adr_strength_apply();
         return 0;
     case REGTRACE_TISP_CTRL_DEFOG_STRENGTH: {
         uint8_t strength;
@@ -102078,7 +102133,10 @@ static long regtrace_t23_tuning_cid(bool get, uint32_t id, uint32_t *value)
         if (ret)
             return ret;
         regtrace_t23_defog_ratio = strength;
-        regtrace_t23_defog_strength_apply();
+        if (regtrace_t23_source_adr_oem)
+            t23_adrlift_s_defog_str(strength);
+        else
+            regtrace_t23_defog_strength_apply();
         return 0;
     }
     case REGTRACE_TISP_CTRL_CSC_ATTR: {
