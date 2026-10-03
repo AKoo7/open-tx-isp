@@ -19,6 +19,12 @@
 #include "tx-isp-frame-channel.h"
 #include "tx-isp-videobuf.h"
 #include "tx-isp-debug.h"
+#include "tx_isp/tx_isp_guard.h"
+
+/* 0: log QBUF buffers outside rmem but accept them (pre-guard behaviour). */
+static bool frame_channel_qbuf_guard = true;
+module_param_named(qbuf_guard, frame_channel_qbuf_guard, bool, 0644);
+MODULE_PARM_DESC(qbuf_guard, "Reject framechan QBUF buffers outside rmem (default 1)");
 //#include "tx-isp-csi.h"
 //#include "tx-isp-vic.h"
 
@@ -137,6 +143,19 @@ static int frame_channel_vb2_buffer_prepare(struct vb2_buffer *vb)
 	}
 	if(v4l2_buf->memory == V4L2_MEMORY_USERPTR){
 		addr = vb2_plane_vaddr(vb, 0);
+		/*
+		 * USERPTR "addresses" are physical rmem addresses from
+		 * libimp/OpenIMP (see tx_isp_guard.h). MMAP buffers come from
+		 * the driver's own coherent pool and are not checked.
+		 */
+		if (tx_isp_qbuf_phys_check((u32)(uintptr_t)addr, size)) {
+			ret = tx_isp_qbuf_reject("tx-isp-t20", vdev->index,
+						 v4l2_buf->index,
+						 (u32)(uintptr_t)addr, size,
+						 frame_channel_qbuf_guard);
+			if (ret)
+				return ret;
+		}
 	}else if(v4l2_buf->memory == V4L2_MEMORY_MMAP){
 		addr = vb2_plane_cookie(vb, 0);
 	}else{

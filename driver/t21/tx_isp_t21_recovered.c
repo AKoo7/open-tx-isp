@@ -61,6 +61,7 @@
 #include <asm/uaccess.h>
 
 #include "../include/tx_isp/tx_isp_sinfo.h"
+#include "../include/tx_isp/tx_isp_guard.h"
 
 #include "tx_isp_t21_v4l2.h"
 
@@ -8530,6 +8531,10 @@ int video_input_cmd_show(struct seq_file *m, void *arg1)
     return private_seq_printf(m, "video_input_cmd: %s\n", (void *)&video_input_cmd_buf);
 }
 
+/* Sensor modules registered since the first open of /dev/tx-isp. */
+static struct tx_isp_sensor_pins t21_sensor_pins =
+	TX_ISP_SENSOR_PINS_INIT(t21_sensor_pins);
+
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000037d0 origin=model_output original=isp_i2c_new_subdev_board */
 int32_t isp_i2c_new_subdev_board(int32_t arg1, void *arg2, int32_t arg3)
 {
@@ -8552,6 +8557,10 @@ int32_t isp_i2c_new_subdev_board(int32_t arg1, void *arg2, int32_t arg3)
         if (private_try_module_get(owner)) {
             result = (int32_t)(uintptr_t)
                 private_i2c_get_clientdata(client);
+            /* Keep the sensor module loaded until the last close of
+             * /dev/tx-isp (tx_isp_release). */
+            if (result != 0 && !tx_isp_sensor_pin(&t21_sensor_pins, owner))
+                result = 0;
             private_module_put(owner);
             if (result != 0)
                 return result;
@@ -11510,6 +11519,11 @@ static unsigned int frame_channel_poll(struct file *file, poll_table *wait)
 	return 0;
 }
 
+/* 0: log QBUF buffers outside rmem but accept them (pre-guard behaviour). */
+static bool t21_qbuf_guard = true;
+module_param_named(qbuf_guard, t21_qbuf_guard, bool, 0644);
+MODULE_PARM_DESC(qbuf_guard, "Reject framechan QBUF buffers outside rmem (default 1)");
+
 static long frame_channel_unlocked_ioctl(struct file *file, unsigned int cmd,
 					 unsigned long arg)
 {
@@ -11633,6 +11647,20 @@ static long frame_channel_unlocked_ioctl(struct file *file, unsigned int cmd,
 		if (!buffer || buffer->state || user.memory != ch->memory ||
 		    user.length != ch->active_format.sizeimage)
 			return -EINVAL;
+		/*
+		 * A user-space buffer must lie in rmem (see tx_isp_guard.h).
+		 * The V4L2 node queues its own coherent buffers through
+		 * tx_isp_t21_capture_ioctl() with a stack file (no f_op).
+		 */
+		if (file->f_op &&
+		    tx_isp_qbuf_phys_check(user.userptr, user.length)) {
+			ret = tx_isp_qbuf_reject("tx-isp-t21",
+						 ch->index, user.index,
+						 user.userptr, user.length,
+						 t21_qbuf_guard);
+			if (ret)
+				return ret;
+		}
 
 		buffer->marker = 1;
 		buffer->dma_addr = user.userptr;
@@ -13140,8 +13168,16 @@ int32_t tx_isp_release(int32_t arg1, void *arg2)
 {
 	int32_t ret;
 
+	void *dev;
+	bool last;
+
 	mutex_lock(&t21_isp_open_mutex);
+	dev = *(void **)((char *)arg2 + 0x70);
+	last = *(int32_t *)((char *)dev + 0x108) <= 1;
 	ret = tx_isp_release_unlocked(arg1, arg2);
+	/* After the teardown: the sensor is no longer in use. */
+	if (last)
+		tx_isp_sensor_unpin_all(&t21_sensor_pins);
 	mutex_unlock(&t21_isp_open_mutex);
 	return ret;
 }

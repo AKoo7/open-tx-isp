@@ -56,6 +56,7 @@
 #include "../include/tx_isp/tx_isp_frame_channel.h"
 #include "../include/tx_isp/tx_isp_frame_layout.h"
 #include "../include/tx_isp/tx_isp_sinfo.h"
+#include "../include/tx_isp/tx_isp_guard.h"
 
 /* T31/T31L expose at most 128 MiB of low physical DDR.  The MSCA address
  * FIFOs have no IOMMU or fault containment, so accepting a higher USERPTR can
@@ -870,6 +871,10 @@ int netlink_send_msg(const void *data, size_t len)
  *     private_i2c_unregister_device(client)
  *   return 0
  */
+/* Sensor modules registered since the first open of /dev/tx-isp. */
+static struct tx_isp_sensor_pins tx_isp_t31_sensor_pins =
+    TX_ISP_SENSOR_PINS_INIT(tx_isp_t31_sensor_pins);
+
 static struct tx_isp_subdev *isp_i2c_new_subdev_board(struct i2c_adapter *adapter,
                                                       struct i2c_board_info *info)
 {
@@ -899,6 +904,11 @@ static struct tx_isp_subdev *isp_i2c_new_subdev_board(struct i2c_adapter *adapte
         if (result) {
             pr_info("isp_i2c_new_subdev_board: reusing sensor subdev %p from %s at i2c-%d/0x%02x\n",
                     result, info->type, adapter->nr, info->addr);
+            /* Pinned again for this session (see below). */
+            if (!client->dev.driver ||
+                !tx_isp_sensor_pin(&tx_isp_t31_sensor_pins,
+                                   client->dev.driver->owner))
+                return NULL;
             return (struct tx_isp_subdev *)result;
         }
     } else {
@@ -932,6 +942,11 @@ static struct tx_isp_subdev *isp_i2c_new_subdev_board(struct i2c_adapter *adapte
 
         /* Stock: result = private_i2c_get_clientdata(client) */
         result = i2c_get_clientdata(client);
+
+        /* Keep the sensor module loaded until the last close of
+         * /dev/tx-isp (tx_isp_release). */
+        if (result && !tx_isp_sensor_pin(&tx_isp_t31_sensor_pins, owner))
+            result = NULL;
 
         /* Stock: private_module_put(owner) */
         module_put(owner);
@@ -4217,6 +4232,11 @@ long frame_channel_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned 
     return ret;
 }
 
+/* 0: log QBUF buffers outside rmem but accept them (pre-guard behaviour). */
+static bool tx_isp_t31_qbuf_guard = true;
+module_param_named(qbuf_guard, tx_isp_t31_qbuf_guard, bool, 0644);
+MODULE_PARM_DESC(qbuf_guard, "Reject framechan QBUF buffers outside rmem (default 1)");
+
 /* Called and returns with fcd->buffer_mutex held. */
 static long frame_channel_ioctl_locked(struct file *file, unsigned int cmd,
                                        unsigned long arg)
@@ -4636,6 +4656,22 @@ static long frame_channel_ioctl_locked(struct file *file, unsigned int cmd,
                                    dma_buffer.layout.sizeimage,
                                dma_ret);
             return dma_ret;
+        }
+
+        /*
+         * A user-space buffer must lie in rmem (see tx_isp_guard.h). The
+         * V4L2 node queues its own coherent buffers through
+         * tx_isp_v4l2_legacy_ioctl() with a stack file (no f_op).
+         */
+        if (file->f_op &&
+            tx_isp_qbuf_phys_check(dma_buffer.y_dma,
+                                   dma_buffer.layout.sizeimage)) {
+            dma_ret = tx_isp_qbuf_reject("tx-isp-t31", channel, buffer.index,
+                                         dma_buffer.y_dma,
+                                         dma_buffer.layout.sizeimage,
+                                         tx_isp_t31_qbuf_guard);
+            if (dma_ret)
+                return dma_ret;
         }
 
         pr_debug("*** Channel %d: QBUF - Buffer %d: phys_addr=0x%x, sizeimage=%u, memory=%d, userptr=0x%lx ***\n",
@@ -6326,6 +6362,8 @@ static int tx_isp_release(struct inode *inode, struct file *file)
             tx_isp_teardown_in_progress = true;
             tx_isp_last_close_teardown(isp);
             tx_isp_teardown_in_progress = false;
+            /* After the teardown: the sensor is no longer in use. */
+            tx_isp_sensor_unpin_all(&tx_isp_t31_sensor_pins);
         }
     }
 

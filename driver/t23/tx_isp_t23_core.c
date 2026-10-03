@@ -106,6 +106,11 @@ static uintptr_t ispcore_base;
 static uintptr_t ispcore;
 
 #include "../include/tx_isp/tx_isp_recovered_kernel.h"
+#include "../include/tx_isp/tx_isp_guard.h"
+
+/* Sensor modules registered since the first open of /dev/tx-isp. */
+static struct tx_isp_sensor_pins regtrace_t23_sensor_pins =
+    TX_ISP_SENSOR_PINS_INIT(regtrace_t23_sensor_pins);
 
 /* --- regtrace kernel-ABI portability shims --- */
 #ifndef REGTRACE_SEQ_PRINTF_SHIM
@@ -9364,6 +9369,35 @@ static struct tx_isp_subdev *regtrace_t23_sensor_sd;
 static struct i2c_client *regtrace_t23_sensor_client;
 static struct i2c_driver *regtrace_t23_sensor_driver;
 static struct module *regtrace_t23_sensor_owner;
+/* Guards regtrace_t23_sensor_owner against a sensor rmmod racing a pin. */
+static DEFINE_SPINLOCK(regtrace_t23_sensor_owner_lock);
+static atomic_t regtrace_tx_isp_open_count;
+
+static void regtrace_t23_set_sensor_owner(struct module *owner)
+{
+    unsigned long flags;
+
+    spin_lock_irqsave(&regtrace_t23_sensor_owner_lock, flags);
+    regtrace_t23_sensor_owner = owner;
+    spin_unlock_irqrestore(&regtrace_t23_sensor_owner_lock, flags);
+}
+
+/*
+ * The sensor client is created when the sensor module loads
+ * ("sensor-client-created"), not by a /dev/tx-isp ioctl, so pin the sensor
+ * module while /dev/tx-isp is open: at each open, and when a sensor loads
+ * while it is open. Released at the last close (regtrace_tx_isp_release).
+ */
+static void regtrace_t23_pin_sensor_owner(void)
+{
+    unsigned long flags;
+
+    spin_lock_irqsave(&regtrace_t23_sensor_owner_lock, flags);
+    if (regtrace_t23_sensor_owner)
+        tx_isp_sensor_pin(&regtrace_t23_sensor_pins,
+                          regtrace_t23_sensor_owner);
+    spin_unlock_irqrestore(&regtrace_t23_sensor_owner_lock, flags);
+}
 static bool regtrace_t23_sensor_identified;
 static bool regtrace_t23_sensor_initialized;
 static bool regtrace_t23_sensor_streaming;
@@ -9610,7 +9644,9 @@ void tx_isp_t23_sinfo_driver_added(struct i2c_driver *drv,
            drv && drv->driver.name ? drv->driver.name : "unknown",
            default_i2c_addr);
     regtrace_t23_sensor_driver = drv;
-    regtrace_t23_sensor_owner = owner;
+    regtrace_t23_set_sensor_owner(owner);
+    if (atomic_read(&regtrace_tx_isp_open_count) > 0)
+        regtrace_t23_pin_sensor_owner();
     regtrace_t23_ensure_sensor_client(drv,
                                       (unsigned short)default_i2c_addr,
                                       "sinfo-driver-add");
@@ -11091,7 +11127,7 @@ static void regtrace_t23_release_sensor_client(struct i2c_driver *drv,
     i2c_unregister_device(regtrace_t23_sensor_client);
     regtrace_t23_sensor_client = NULL;
     regtrace_t23_sensor_driver = NULL;
-    regtrace_t23_sensor_owner = NULL;
+    regtrace_t23_set_sensor_owner(NULL);
     regtrace_t23_sensor_sd = NULL;
     regtrace_t23_sensor_identified = false;
     regtrace_t23_sensor_initialized = false;
@@ -15376,7 +15412,6 @@ copy_out:
  * ISP interrupts on. The private block is cleared only by the first open,
  * so a second opener (a tuning tool) does not wipe the streamer's state.
  */
-static atomic_t regtrace_tx_isp_open_count = ATOMIC_INIT(0);
 static int regtrace_t23_txisp_stream(int enable, const char *reason);
 static void regtrace_t23_txisp_last_close(void);
 
@@ -15388,6 +15423,7 @@ static int regtrace_tx_isp_open(struct inode *inode, struct file *file)
         /* new IMP session: OEM tisp_init BCSH defaults (kept across streams) */
         regtrace_t23_bcsh_user_defaults();
     }
+    regtrace_t23_pin_sensor_owner();
     if (file)
         file->private_data = regtrace_tx_isp_private;
     printk(KERN_INFO "tx_isp_t23_recovered: open /dev/tx-isp pid=%d comm=%s\n",
@@ -15400,8 +15436,11 @@ static int regtrace_tx_isp_release(struct inode *inode, struct file *file)
     (void)inode;
     if (file)
         file->private_data = NULL;
-    if (atomic_dec_and_test(&regtrace_tx_isp_open_count))
+    if (atomic_dec_and_test(&regtrace_tx_isp_open_count)) {
         regtrace_t23_txisp_last_close();
+        /* After the teardown: the sensor is no longer in use. */
+        tx_isp_sensor_unpin_all(&regtrace_t23_sensor_pins);
+    }
     printk(KERN_INFO "tx_isp_t23_recovered: release /dev/tx-isp pid=%d comm=%s\n",
            current->pid, current->comm);
     return 0;
@@ -15987,6 +16026,11 @@ static void regtrace_framechan_forget_qbufs_locked(int channel)
         regtrace_framechan_qbuf_queued[channel][i] = false;
 }
 
+/* 0: log QBUF buffers outside rmem but accept them (pre-guard behaviour). */
+static bool regtrace_t23_qbuf_guard = true;
+module_param_named(qbuf_guard, regtrace_t23_qbuf_guard, bool, 0644);
+MODULE_PARM_DESC(qbuf_guard, "Reject framechan QBUF buffers outside rmem (default 1)");
+
 static int regtrace_framechan_record_qbuf(int channel, const uint32_t *words)
 {
     struct tx_isp_nv12_buffer buffer;
@@ -16001,6 +16045,15 @@ static int regtrace_framechan_record_qbuf(int channel, const uint32_t *words)
         return -EINVAL;
 
     userptr = words[TX_ISP_FRAME_WORD_DMA];
+    /* Only user space queues here: the buffer must lie in rmem. */
+    if (tx_isp_qbuf_phys_check(userptr, words[TX_ISP_FRAME_WORD_LENGTH])) {
+        ret = tx_isp_qbuf_reject("tx-isp-t23", channel,
+                                 words[TX_ISP_FRAME_WORD_INDEX], userptr,
+                                 words[TX_ISP_FRAME_WORD_LENGTH],
+                                 regtrace_t23_qbuf_guard);
+        if (ret)
+            return ret;
+    }
     program = regtrace_t23_direct_msca_qbuf;
     if (program) {
         ret = regtrace_t23_build_msca_qbuf(
@@ -23638,6 +23691,12 @@ int32_t isp_i2c_new_subdev_board(uint32_t a0, uintptr_t a1, uint32_t a2)
                 result = (int32_t *)((uintptr_t (*)(uintptr_t))(uintptr_t)private_i2c_get_clientdata)(s1);
                 v0 = *(uintptr_t *)((char *)s1 + 28);
                 v0 = *(uintptr_t *)((char *)v0 + 44);
+                /* Keep the sensor module loaded until the last close of
+                 * /dev/tx-isp (regtrace_tx_isp_release). */
+                if (result != 0 &&
+                    !tx_isp_sensor_pin(&regtrace_t23_sensor_pins,
+                                       (struct module *)v0))
+                    result = 0;
                 ((int32_t (*)(uintptr_t))(uintptr_t)private_module_put)(v0);
                 if (result != 0)
                     return result;
