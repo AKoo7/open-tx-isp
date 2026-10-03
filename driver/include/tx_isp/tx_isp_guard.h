@@ -1,8 +1,8 @@
 /*
  * Robustness guards shared by the per-SoC ISP drivers.
  *
- *  - tx_isp_qbuf_phys_check(): range check for frame buffers that user space
- *    queues on /dev/framechanN by physical address.
+ *  - tx_isp_qbuf_phys_check(): rmem range check for frame buffers that user
+ *    space queues on /dev/framechanN by physical address.
  *  - struct tx_isp_sensor_pins: module references on the sensor drivers the
  *    ISP has registered, held until the last close of /dev/tx-isp.
  *
@@ -15,41 +15,114 @@
 #include <linux/kernel.h>
 #include <linux/mm.h>
 #include <linux/module.h>
-#include <linux/pfn.h>
 #include <linux/spinlock.h>
 
 /*
- * Highest physical address a T10/T20/T21/T23/T31 frame buffer may end at:
- * the 128 MiB DDR aperture of these SoCs (the T31 driver already checks its
- * MSCA addresses against the same limit).
- */
-#define TX_ISP_QBUF_PHYS_LIMIT 0x08000000ULL
-
-/*
  * libimp and OpenIMP queue frame buffers by physical address, taken from
- * rmem: the RAM above the kernel's mem= that the kernel does not manage.
- * QBUF invalidates the CPU cache over the range and the ISP then writes the
- * frame there, so an address inside kernel RAM (or past the DDR) would have
- * the ISP overwrite kernel memory and the invalidate drop dirty kernel cache
- * lines. Accept only a non-empty range below the DDR limit that touches no
- * page the kernel manages. Buffers the driver allocates itself (its V4L2
- * MMAP pools, in kernel RAM) are queued from kernel space and are not
- * checked; see the callers.
- *
- * Returns 0 if the range is acceptable, -EINVAL otherwise.
+ * rmem: the region the kernel command line reserves with rmem=SIZE@BASE
+ * (outside the kernel's mem=). QBUF invalidates the CPU cache over the range
+ * and the ISP then writes the frame there, so an address outside rmem would
+ * have the ISP overwrite kernel memory and the invalidate drop dirty kernel
+ * cache lines. Accept only ranges inside the rmem window. The kernel does
+ * not export the command line to modules, so read /proc/cmdline once, in
+ * process context, on the first QBUF. Without a usable rmem= (no procfs, no
+ * or malformed entry) the window is unknown and nothing is rejected, as
+ * before the guard. Buffers the driver allocates itself (its V4L2 MMAP
+ * pools) are queued from kernel space and are not checked; see the callers.
  */
+#include <linux/err.h>
+#include <linux/fs.h>
+#include <linux/slab.h>
+#include <linux/string.h>
+#include <linux/version.h>
+
+#ifdef READ_ONCE
+#define TX_ISP_READ_ONCE(x) READ_ONCE(x)
+#else
+#define TX_ISP_READ_ONCE(x) ACCESS_ONCE(x)
+#endif
+
+struct tx_isp_rmem_window {
+	int state;		/* 0 not read yet, 1 known, -1 unknown */
+	u32 base;
+	u32 size;
+};
+
+static struct tx_isp_rmem_window tx_isp_rmem_window;
+
+static inline int tx_isp_rmem_parse(const char *cmdline, u32 *base, u32 *size)
+{
+	const char *p = cmdline;
+	unsigned long long b, sz;
+	char *end;
+
+	while ((p = strstr(p, "rmem=")) != NULL) {
+		if (p != cmdline && p[-1] != ' ') {
+			p += 5;
+			continue;
+		}
+		sz = memparse(p + 5, &end);
+		if (*end != '@')
+			return -EINVAL;
+		b = memparse(end + 1, &end);
+		if (!sz || b + sz > 0x100000000ULL)
+			return -EINVAL;
+		*base = (u32)b;
+		*size = (u32)sz;
+		return 0;
+	}
+	return -ENOENT;
+}
+
+static inline void tx_isp_rmem_probe(void)
+{
+	struct tx_isp_rmem_window w = { .state = -1 };
+	struct file *file;
+	char *buf;
+	ssize_t n;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 0)
+	loff_t pos = 0;
+#endif
+
+	buf = kzalloc(2048, GFP_KERNEL);
+	if (!buf)
+		return;		/* retry on the next QBUF */
+	file = filp_open("/proc/cmdline", O_RDONLY, 0);
+	if (!IS_ERR(file)) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 0)
+		n = kernel_read(file, buf, 2047, &pos);
+#else
+		n = kernel_read(file, 0, buf, 2047);
+#endif
+		filp_close(file, NULL);
+		if (n > 0 && !tx_isp_rmem_parse(buf, &w.base, &w.size))
+			w.state = 1;
+	}
+	kfree(buf);
+	if (w.state == 1)
+		pr_info("tx-isp: QBUF guard: rmem window 0x%08x+0x%x\n",
+			w.base, w.size);
+	else
+		pr_warn("tx-isp: QBUF guard inactive: no rmem=SIZE@BASE on the kernel command line\n");
+	tx_isp_rmem_window.base = w.base;
+	tx_isp_rmem_window.size = w.size;
+	smp_wmb();
+	tx_isp_rmem_window.state = w.state;
+}
+
+/* Returns 0 if the range is acceptable, -EINVAL otherwise. */
 static inline int tx_isp_qbuf_phys_check(u32 phys, u32 len)
 {
 	u64 end = (u64)phys + len;
-	unsigned long pfn;
 
-	if (!phys || !len || end > TX_ISP_QBUF_PHYS_LIMIT)
+	if (!TX_ISP_READ_ONCE(tx_isp_rmem_window.state))
+		tx_isp_rmem_probe();
+	if (TX_ISP_READ_ONCE(tx_isp_rmem_window.state) != 1)
+		return 0;
+	smp_rmb();
+	if (!phys || !len || phys < tx_isp_rmem_window.base ||
+	    end > (u64)tx_isp_rmem_window.base + tx_isp_rmem_window.size)
 		return -EINVAL;
-	/* Kernel RAM is one block on these SoCs: checking both ends and
-	 * every page in between costs a compare per page (<= ~800). */
-	for (pfn = PFN_DOWN(phys); pfn <= PFN_DOWN(end - 1); pfn++)
-		if (pfn_valid(pfn))
-			return -EINVAL;
 	return 0;
 }
 
