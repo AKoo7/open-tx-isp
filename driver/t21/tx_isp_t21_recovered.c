@@ -18109,8 +18109,51 @@ int32_t tisp_ae_ir_update(uint32_t a0)
     return 0;
 }
 
+/*
+ * Beyond vendor (0 = stock behaviour):
+ *
+ * ct_event_thresh: the stock JZ_Isp_Awb posts event 8 (_awb_ct, 0) at the end
+ * of every AWB frame and its callback tisp_ct_update always runs
+ * tisp_ccm_ct_update and tisp_lsc_ct_update.  The CCM side has its own CT
+ * gate, but jz_isp_lsc_ct re-interpolates the LSC tables from the CT on every
+ * frame, although the AWB CT only jitters by a few Kelvin in a steady scene.
+ * With ct_event_thresh the callback is skipped while the CT differs by no more
+ * than ct_event_thresh Kelvin from the CT last passed on; the next CT outside
+ * the band is passed on unchanged, so CCM/LSC end within the band of stock.
+ * The first event after tisp_init, after a day/night switch and after a white
+ * balance mode change always passes (t21_ct_ev_force: the next two events,
+ * so an event queued before the change cannot use up the force).
+ */
+static uint ct_event_thresh = 50;
+module_param(ct_event_thresh, uint, 0644);
+MODULE_PARM_DESC(ct_event_thresh, "T21: skip the CT->CCM/LSC update while the AWB CT moved by at most this many Kelvin (default 50, 0 = stock: every frame)");
+
+static u32 t21_ct_ev_last;
+/* Written by the ioctl/init paths, consumed by the callback, which
+ * tisp_event_process runs with IRQs off on this single-core SoC. */
+static u8 t21_ct_ev_force = 2;
+
+static void t21_ct_ev_force_next(void)
+{
+	ACCESS_ONCE(t21_ct_ev_force) = 2;
+}
+
 int32_t tisp_ct_update(uint32_t arg1, uint32_t arg2)
 {
+	u32 th = ACCESS_ONCE(ct_event_thresh);
+	u8 force = ACCESS_ONCE(t21_ct_ev_force);
+	bool forced = force != 0;
+
+	if (forced)
+		ACCESS_ONCE(t21_ct_ev_force) = force - 1;
+
+	if (th && !forced) {
+		u32 d = arg1 > t21_ct_ev_last ? arg1 - t21_ct_ev_last : t21_ct_ev_last - arg1;
+
+		if (d <= th)
+			return 0;
+	}
+	t21_ct_ev_last = arg1;
 	return (int32_t)LIFT_CALL(L_tisp_ct_update, arg1, arg2, 0, 0);
 }
 
@@ -18878,6 +18921,7 @@ int32_t tisp_init(int32_t *arg1)
 	tisp_event_set_cb(5, (int32_t)tisp_again_update);
 	tisp_event_set_cb(6, (int32_t)tisp_ev_update);
 	tisp_event_set_cb(8, (int32_t)tisp_ct_update);
+	t21_ct_ev_force_next();
 	tisp_event_set_cb(7, (int32_t)tisp_ae_ir_update);
 
 	ret = tisp_param_operate_init();
@@ -19483,6 +19527,7 @@ int32_t tisp_s_wb_mode(int32_t mode, int32_t val1, int32_t val2)
     }
 out:
     awb_moa = 1;
+    t21_ct_ev_force_next();
     return 0;
 }
 
@@ -34452,6 +34497,7 @@ int32_t tisp_day_or_night_s_ctrl(uint32_t mode)
     T21_DN_REFRESH(tiziano_af_dn_params_refresh);
 #undef T21_DN_REFRESH
     t21_awb_dn_post(mode, prev_dn);
+    t21_ct_ev_force_next();
 
     return 0;
 }
