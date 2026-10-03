@@ -7749,6 +7749,8 @@ int tx_isp_fs_remove(struct platform_device *pdev);
 int tx_isp_remove(struct platform_device *pdev);
 int tx_isp_core_remove(struct platform_device *pdev);
 
+#include "tx_isp_t21_tuning_ctl.h"
+
 /* WHOLE_DRIVER_RELOCATED_DATA_PATCHES */
 static void __init regtrace_patch_relocated_data(void)
 {
@@ -11889,6 +11891,11 @@ static int32_t apical_isp_core_ops_s_ctrl_collapsed(int32_t *arg1,
  * tuning calls which were lost when the model emitted declarations only. */
 int32_t apical_isp_core_ops_s_ctrl(int32_t *arg1, int32_t *arg2, int32_t arg3)
 {
+	int32_t ret;
+
+	/* Controls stock accepts as no-ops, wired here (tuning_ctl.h). */
+	if (arg2 && t21_tuning_ctl_s(arg2, &ret))
+		return ret;
 	/* Stock dispatcher (lifted); its setters cache values at tuning+0x4094 etc. */
 	return (int32_t)LIFT_CALL(L_apical_isp_core_ops_s_ctrl, (uint32_t)(uintptr_t)arg1, (uint32_t)(uintptr_t)arg2, (uint32_t)arg3, 0);
 }
@@ -12091,6 +12098,10 @@ int32_t apical_isp_af_weight_g_attr_isra_74(void *arg1) __asm__("apical_isp_af_w
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000587c origin=model_output original=apical_isp_core_ops_g_ctrl */
 int32_t apical_isp_core_ops_g_ctrl(int32_t *arg1, int32_t *arg2, int32_t arg3)
 {
+	int32_t ret;
+
+	if (arg2 && t21_tuning_ctl_g(arg2, &ret))
+		return ret;
 	/* Stock dispatcher (lifted). */
 	return (int32_t)LIFT_CALL(L_apical_isp_core_ops_g_ctrl, (uint32_t)(uintptr_t)arg1, (uint32_t)(uintptr_t)arg2, (uint32_t)arg3, 0);
 }
@@ -23714,7 +23725,8 @@ int32_t tiziano_gamma_lut_parameter(void)
 	uint32_t i;
 
 	for (i = 0; i < 128; i++) {
-		uint32_t value = (lut[i + 1] << 12) | lut[i];
+		/* t21_colorfx NEGATIVE inverts the curve (tuning_ctl.h) */
+		uint32_t value = t21_gamma_word(lut[i], lut[i + 1], t21_colorfx);
 		uint32_t offset = i << 2;
 
 		system_reg_write(0x8a00 + offset, value);
@@ -25869,6 +25881,7 @@ int32_t tiziano_ccm_params_refresh(void)
 	ret |= t21_tparams_copy(&cm_ev_list, 0xfba4, 0x24);
 	ret |= t21_tparams_copy(&cm_sat_list, 0xfbc8, 0x24);
 	ret |= t21_tparams_copy(&cm_awb_list, 0xfbec, 8);
+	t21_colorfx_after_ccm_refresh();
 	return ret;
 }
 
@@ -26660,7 +26673,7 @@ static void sdns_write_npv16(uint32_t reg, const void *arr, uint32_t stren)
 	int i;
 
 	for (i = 0; i < 16; i++)
-		v[i] = src[i] * stren;
+		v[i] = t21_sinter_px(src[i] * stren, t21_sinter_ratio);
 	for (i = 0; i < 16; i += 4)
 		system_reg_write(reg + i, sdns_pack4(&v[i]));
 }
@@ -26680,6 +26693,12 @@ int32_t tisp_sdns_y_param_cfg(void)
 	d4 = (uint32_t)sdns_y_dtl_npv_4_intp * s;
 	for (i = 0; i < 15; i++)
 		b[i] = bil[i] * (uint32_t)sdns_y_bil_stren_intp;
+	/* SinterDnsAttr strength (tuning_ctl.h); 128 leaves them as is */
+	for (i = 0; i < 4; i++)
+		d[i] = t21_sinter_px(d[i], t21_sinter_ratio);
+	d4 = t21_sinter_px(d4, t21_sinter_ratio);
+	for (i = 0; i < 15; i++)
+		b[i] = t21_sinter_px(b[i], t21_sinter_ratio);
 
 	system_reg_write(0x2014, ((uint32_t)sdns_y_fus_slope_intp << 16) |
 				 ((uint32_t)sdns_y_dtl_thres_intp << 8) |
@@ -34626,7 +34645,11 @@ int32_t tisp_set_saturation(uint32_t arg)
 	}
 
 	if (day_night == 0) {
-		tisp_ccm_param_array_set(0x81, eff, &size);
+		uint32_t fx[9];
+
+		/* Colorfx BW/VIVID act on the list; tparams keeps it plain. */
+		tisp_ccm_param_array_set(0x81, t21_colorfx_saturation(eff, fx),
+					 &size);
 		memcpy(tparams + 0xfbc8, eff, sizeof(eff));
 		memcpy(tparams_day + 0xfbc8, eff, sizeof(eff));
 		custom_eff[3] = sat;
