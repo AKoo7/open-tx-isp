@@ -615,6 +615,113 @@ static inline int rawdrc_value_v4l2_to_apical(int val)
 	return ret;
 }
 
+/*
+ * Beyond vendor: make the libimp sinter/temper strength ratio take effect.
+ *
+ * IMP_ISP_Tuning_SetSinterStrength / SetTemperStrength (T20 3.12.0 libimp)
+ * scale the strength column of calibration table 109 (sinter, linear) or
+ * 132 (temper) and write it back through IMAGE_TUNING_CID_ISP_TABLE_ATTR.
+ * The firmware evaluates both tables with calc_adjust_modulation_u16(),
+ * which only keeps the table's shape and maps it onto the stab minimum/
+ * maximum strength.  Those limits come from the unscaled IQ table in
+ * apical_isp_day_or_night_s_ctrl_internal(), so a uniformly scaled table
+ * gives the same strength (only a zero end point differs: the firmware then
+ * returns 0, and below the first gain node it returns the stab minimum).
+ * The stock kernel behaves the same way; the vendor control is a no-op.
+ *
+ * Derive the limits from the table that was written, as the day/night path
+ * does from the IQ bank (first row's strength = minimum, last element =
+ * maximum), and remember the ratio against the bank so that a day/night or
+ * DRC reload, which rewrites table and limits from the bank, re-applies it.
+ */
+#define APICAL_ISP_NR_Q8_ONE	256
+static u32 apical_isp_nr_q8[2] = { APICAL_ISP_NR_Q8_ONE, APICAL_ISP_NR_Q8_ONE };
+
+static int apical_isp_nr_slot(unsigned int id, unsigned int *tid)
+{
+	switch (id) {
+	case CALIBRATION_SINTER_STRENGTH_LINEAR:
+		*tid = _CALIBRATION_SINTER_STRENGTH_LINEAR;
+		return 0;
+	case CALIBRATION_TEMPER_STRENGTH:
+		*tid = _CALIBRATION_TEMPER_STRENGTH;
+		return 1;
+	default:
+		return -1;
+	}
+}
+
+/* Table 109 drives the linear pipe only (FS-HDR has table 110). */
+static int apical_isp_nr_slot_active(int slot)
+{
+	unsigned char status;
+	int reason = 0;
+
+	if (slot != 0)
+		return 1;
+	status = apical_command(TIMAGE, WDR_MODE_ID, -1, COMMAND_GET, &reason);
+	return status == ISP_SUCCESS && reason == IMAGE_WDR_MODE_LINEAR;
+}
+
+static void apical_isp_nr_set_limits(int slot, const uint16_t *v, unsigned int n)
+{
+	if (!apical_isp_nr_slot_active(slot))
+		return;
+	if (slot == 0) {
+		stab.global_minimum_sinter_strength = min_t(u16, v[1], 0xff);
+		stab.global_maximum_sinter_strength = min_t(u16, v[n - 1], 0xff);
+	} else {
+		stab.global_minimum_temper_strength = min_t(u16, v[1], 0xff);
+		stab.global_maximum_temper_strength = min_t(u16, v[n - 1], 0xff);
+	}
+}
+
+static int apical_isp_nr_table_ok(const LookupTable *t)
+{
+	return t && t->ptr && t->width == 2 && t->cols >= 2 &&
+	       t->rows * t->cols >= 2;
+}
+
+/* After a bank reload: write bank * ratio back into the firmware LUT. */
+static void apical_isp_nr_reapply(LookupTable **table)
+{
+	static const unsigned int ids[2] = {
+		CALIBRATION_SINTER_STRENGTH_LINEAR, CALIBRATION_TEMPER_STRENGTH,
+	};
+	int slot;
+
+	if (!table)
+		return;
+	for (slot = 0; slot < 2; slot++) {
+		unsigned int tid, n, size, row;
+		const LookupTable *t;
+		uint16_t *buf;
+		int ret = 0;
+
+		if (apical_isp_nr_q8[slot] == APICAL_ISP_NR_Q8_ONE)
+			continue;
+		apical_isp_nr_slot(ids[slot], &tid);
+		t = table[tid];
+		if (!apical_isp_nr_table_ok(t))
+			continue;
+		n = t->rows * t->cols;
+		size = n * 2;
+		buf = kmalloc(size, GFP_KERNEL);
+		if (!buf)
+			continue;
+		memcpy(buf, t->ptr, size);
+		for (row = 0; row < t->rows; row++) {
+			uint16_t *e = &buf[row * t->cols + 1];
+
+			*e = min_t(u32, (*e * apical_isp_nr_q8[slot]) >> 8, 0xffff);
+		}
+		apical_api_calibration(ids[slot], COMMAND_SET, buf, size, &ret);
+		if (!ret)
+			apical_isp_nr_set_limits(slot, buf, n);
+		kfree(buf);
+	}
+}
+
 static int apical_isp_drc_s_control(struct tx_isp_core_device *core, struct v4l2_control *control)
 {
 	struct video_device *video = core->tun;
@@ -667,6 +774,7 @@ static int apical_isp_drc_s_control(struct tx_isp_core_device *core, struct v4l2
 				printk("No this mode! Iridix set failure!\n");
 			}
 			stab.global_minimum_iridix_strength = *(uint8_t *)(table[_CALIBRATION_IRIDIX_MIN_MAX_STR]->ptr);
+			apical_isp_nr_reapply(table);
 		}
 set_drc_val:
 		apical_isp_top_bypass_iridix_write((drc->val == 5)?1:0);
@@ -1710,6 +1818,7 @@ int apical_isp_day_or_night_s_ctrl_internal(struct tx_isp_core_device *core)
 			stab.global_minimum_temper_strength = *((uint16_t *)(table[ _CALIBRATION_TEMPER_STRENGTH]->ptr) + 1);
 			stab.global_maximum_temper_strength = *((uint16_t *)(table[ _CALIBRATION_TEMPER_STRENGTH]->ptr) + table[_CALIBRATION_TEMPER_STRENGTH]->rows * table[_CALIBRATION_TEMPER_STRENGTH]->cols -1 );
 			stab.global_minimum_iridix_strength = *(uint8_t *)(table[_CALIBRATION_IRIDIX_MIN_MAX_STR]->ptr);
+			apical_isp_nr_reapply(table);
 
 			APICAL_WRITE_32(0x40, tmp_top);
 			/* if it is T20,the FR is corresponding to DS2 in bin file. */
@@ -3321,6 +3430,30 @@ static int apical_isp_table_g_attr(struct tx_isp_core_device *core, struct v4l2_
 	return ret;
 }
 
+/* After a user table write: new limits, ratio against the current bank. */
+static void apical_isp_nr_capture(struct tx_isp_core_device *core,
+				  const struct isp_table_info *tinfo,
+				  const void *data)
+{
+	LookupTable **table = apical_isp_table_current(core);
+	const uint16_t *v = data;
+	const uint16_t *b;
+	unsigned int tid, n;
+	int slot;
+
+	slot = apical_isp_nr_slot(tinfo->id, &tid);
+	if (slot < 0 || !table || !apical_isp_nr_table_ok(table[tid]))
+		return;
+	n = tinfo->rows * tinfo->cols;
+	if (tinfo->width != 2 || n != table[tid]->rows * table[tid]->cols)
+		return;
+	b = table[tid]->ptr;
+	apical_isp_nr_q8[slot] = b[n - 1] ?
+		DIV_ROUND_CLOSEST((u32)v[n - 1] * APICAL_ISP_NR_Q8_ONE, b[n - 1]) :
+		APICAL_ISP_NR_Q8_ONE;
+	apical_isp_nr_set_limits(slot, v, n);
+}
+
 static int apical_isp_table_s_attr(struct tx_isp_core_device *core, struct v4l2_control *control)
 {
 	struct isp_table_info tinfo;
@@ -3346,6 +3479,8 @@ static int apical_isp_table_s_attr(struct tx_isp_core_device *core, struct v4l2_
 	}
 	/* The firmware rejects unknown ids and any size but the table's own. */
 	apical_api_calibration(tinfo.id, COMMAND_SET, data, size, &ret);
+	if (!ret)
+		apical_isp_nr_capture(core, &tinfo, data);
 	kfree(data);
 	return ret ? -EINVAL : 0;
 }
