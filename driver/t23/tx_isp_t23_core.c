@@ -9352,6 +9352,35 @@ static struct tx_isp_subdev *regtrace_t23_sensor_sd;
 static struct i2c_client *regtrace_t23_sensor_client;
 static struct i2c_driver *regtrace_t23_sensor_driver;
 static struct module *regtrace_t23_sensor_owner;
+/* Guards regtrace_t23_sensor_owner against a sensor rmmod racing a pin. */
+static DEFINE_SPINLOCK(regtrace_t23_sensor_owner_lock);
+static atomic_t regtrace_tx_isp_open_count;
+
+static void regtrace_t23_set_sensor_owner(struct module *owner)
+{
+    unsigned long flags;
+
+    spin_lock_irqsave(&regtrace_t23_sensor_owner_lock, flags);
+    regtrace_t23_sensor_owner = owner;
+    spin_unlock_irqrestore(&regtrace_t23_sensor_owner_lock, flags);
+}
+
+/*
+ * The sensor client is created when the sensor module loads
+ * ("sensor-client-created"), not by a /dev/tx-isp ioctl, so pin the sensor
+ * module while /dev/tx-isp is open: at each open, and when a sensor loads
+ * while it is open. Released at the last close (regtrace_tx_isp_release).
+ */
+static void regtrace_t23_pin_sensor_owner(void)
+{
+    unsigned long flags;
+
+    spin_lock_irqsave(&regtrace_t23_sensor_owner_lock, flags);
+    if (regtrace_t23_sensor_owner)
+        tx_isp_sensor_pin(&regtrace_t23_sensor_pins,
+                          regtrace_t23_sensor_owner);
+    spin_unlock_irqrestore(&regtrace_t23_sensor_owner_lock, flags);
+}
 static bool regtrace_t23_sensor_identified;
 static bool regtrace_t23_sensor_initialized;
 static bool regtrace_t23_sensor_streaming;
@@ -9598,7 +9627,9 @@ void tx_isp_t23_sinfo_driver_added(struct i2c_driver *drv,
            drv && drv->driver.name ? drv->driver.name : "unknown",
            default_i2c_addr);
     regtrace_t23_sensor_driver = drv;
-    regtrace_t23_sensor_owner = owner;
+    regtrace_t23_set_sensor_owner(owner);
+    if (atomic_read(&regtrace_tx_isp_open_count) > 0)
+        regtrace_t23_pin_sensor_owner();
     regtrace_t23_ensure_sensor_client(drv,
                                       (unsigned short)default_i2c_addr,
                                       "sinfo-driver-add");
@@ -11079,7 +11110,7 @@ static void regtrace_t23_release_sensor_client(struct i2c_driver *drv,
     i2c_unregister_device(regtrace_t23_sensor_client);
     regtrace_t23_sensor_client = NULL;
     regtrace_t23_sensor_driver = NULL;
-    regtrace_t23_sensor_owner = NULL;
+    regtrace_t23_set_sensor_owner(NULL);
     regtrace_t23_sensor_sd = NULL;
     regtrace_t23_sensor_identified = false;
     regtrace_t23_sensor_initialized = false;
@@ -15358,7 +15389,6 @@ copy_out:
  * ISP interrupts on. The private block is cleared only by the first open,
  * so a second opener (a tuning tool) does not wipe the streamer's state.
  */
-static atomic_t regtrace_tx_isp_open_count = ATOMIC_INIT(0);
 static int regtrace_t23_txisp_stream(int enable, const char *reason);
 static void regtrace_t23_txisp_last_close(void);
 
@@ -15370,6 +15400,7 @@ static int regtrace_tx_isp_open(struct inode *inode, struct file *file)
         /* new IMP session: OEM tisp_init BCSH defaults (kept across streams) */
         regtrace_t23_bcsh_user_defaults();
     }
+    regtrace_t23_pin_sensor_owner();
     if (file)
         file->private_data = regtrace_tx_isp_private;
     printk(KERN_INFO "tx_isp_t23_recovered: open /dev/tx-isp pid=%d comm=%s\n",
