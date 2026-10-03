@@ -39,16 +39,18 @@ int32_t *tisp_defog_ev_update(uint32_t a0, uint32_t a1, uint32_t a2,
 /*
  * Stock tisp_long_ev_update, ADR / defog part: tisp_adr_ev_update when ADR
  * is not bypassed (0xc bit 7), then tisp_defog_ev_update when defog is not
- * bypassed (bit 11); both only store ev >> 10 for their algorithm.  This
- * driver bypasses both blocks unless source_adr/defog_internal_enable is
- * set, so with the defaults nothing (not even the 0xc read) happens here.
+ * bypassed (bit 11); both only store ev >> 10 for their algorithm.  With
+ * the lifted stock ADR/defog (source_adr_oem=1, default) the bits follow
+ * the bank like stock; otherwise both blocks stay bypassed unless
+ * source_adr/defog_internal_enable is set.
  */
 static void regtrace_t23_ae_ev_adr_defog(uint32_t ev_lo, uint32_t ev_hi)
 {
     uint32_t top;
 
     if (!regtrace_t23_source_adr_internal_enable &&
-        !regtrace_t23_source_defog_internal_enable)
+        !regtrace_t23_source_defog_internal_enable &&
+        !regtrace_t23_source_adr_oem)
         return;
     top = (uint32_t)system_reg_read(0xc);
     if (!(top & BIT(7)))
