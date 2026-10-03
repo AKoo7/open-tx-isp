@@ -64,6 +64,18 @@
 #endif
 #include <asm/uaccess.h>
 
+#ifdef TX_ISP_T23_NO_TRACE
+/*
+ * Kbuild TX_ISP_T23_TRACE=n (default): KERN_INFO bring-up traces are
+ * compiled out together with their format strings. The arguments are
+ * still evaluated (some read hardware registers). KERN_WARNING and
+ * KERN_ERR messages are untouched.
+ */
+#define t23_is_info_fmt(fmt) ((fmt)[0] == KERN_SOH_ASCII && (fmt)[1] == '6')
+#define printk(fmt, ...) (t23_is_info_fmt(fmt) ? \
+	((void)(0, ##__VA_ARGS__), 0) : (printk)(fmt, ##__VA_ARGS__))
+#endif
+
 /*
  * Rootfs size: recovered functions and objects that nothing in the module
  * references (no relocation against them in tx-isp-t23.o) are declared
