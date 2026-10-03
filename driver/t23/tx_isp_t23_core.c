@@ -2883,6 +2883,22 @@ static uint8_t bcsh_hue_user = 0x80;
 static uint8_t s_bcsh_mjpeg_mode;
 static uint8_t s_bcsh_mjpeg_y_range_low;
 static uint8_t s_bcsh_mjpeg_y_range_high;
+/* user B/C/S/H valid since the first /dev/tx-isp open (see tiziano_bcsh_init) */
+static bool regtrace_t23_bcsh_user_kept;
+
+/* OEM tiziano_bcsh_init defaults of the user-facing BCSH state */
+static void regtrace_t23_bcsh_user_defaults(void)
+{
+    bcsh_brightness = 0x80;
+    bcsh_contrast = 0x80;
+    bcsh_saturation = 0x80;
+    bcsh_hue_user = 0x80;
+    bcsh_hue = 0x3c;
+    s_bcsh_mjpeg_mode = 0;
+    s_bcsh_mjpeg_y_range_low = 0;
+    s_bcsh_mjpeg_y_range_high = 0;
+    regtrace_t23_bcsh_user_kept = true;
+}
 static uint32_t regtrace_t23_bcsh_ev = 1436U << 10;
 static uint32_t regtrace_t23_bcsh_ct = 3187U;
 static unsigned char __attribute__((aligned(4))) tisp_BCSH_au32C[20] = {
@@ -15303,8 +15319,11 @@ static void regtrace_t23_txisp_last_close(void);
 static int regtrace_tx_isp_open(struct inode *inode, struct file *file)
 {
     (void)inode;
-    if (atomic_inc_return(&regtrace_tx_isp_open_count) == 1)
+    if (atomic_inc_return(&regtrace_tx_isp_open_count) == 1) {
         memset(regtrace_tx_isp_private, 0, sizeof(regtrace_tx_isp_private));
+        /* new IMP session: OEM tisp_init BCSH defaults (kept across streams) */
+        regtrace_t23_bcsh_user_defaults();
+    }
     if (file)
         file->private_data = regtrace_tx_isp_private;
     printk(KERN_INFO "tx_isp_t23_recovered: open /dev/tx-isp pid=%d comm=%s\n",
@@ -26039,10 +26058,12 @@ int32_t apical_isp_core_ops_s_ctrl(uintptr_t a0, uintptr_t a1, uint32_t a2)
         printk(KERN_INFO
                "tx_isp_t23_recovered: BCSH s_ctrl cmd=0x%x value=%u\n",
                control, value);
-    /* The BCSH controls take 0..255; the OEM truncated larger values. */
-    if ((control == 0x980900 || control == 0x980901 ||
-         control == 0x980902 || control == 0x98091b) && value > 0xffU)
-        return -EINVAL;
+    /*
+     * The BCSH controls take 0..255 and the OEM keeps only the low byte:
+     * libimp's tuning daemon sends (total_gain << 8) | contrast through
+     * V4L2_CID_CONTRAST, so larger values must not be rejected (it would
+     * re-send them forever).  The (uint8_t) casts below truncate.
+     */
     switch (control) {
     case 0x980900:
         tisp_set_brightness(0, (uint8_t)value);
@@ -57334,14 +57355,16 @@ int32_t tiziano_bcsh_init(void)
     tisp_BCSH_au32OffsetRGB_now = &tisp_BCSH_au32OffsetRGB;
 
     memset(bcsh_ctrl, 0, 0x28);
-    bcsh_brightness = 0x80;
-    bcsh_contrast = 0x80;
-    bcsh_saturation = 0x80;
-    bcsh_hue_user = 0x80;
-    bcsh_hue = 0x3c;
-    s_bcsh_mjpeg_mode = 0;
-    s_bcsh_mjpeg_y_range_low = 0;
-    s_bcsh_mjpeg_y_range_high = 0;
+    /*
+     * The OEM runs tiziano_bcsh_init once per tisp_init (ispcore_core_ops_init,
+     * i.e. sensor enable), so the user's B/C/S/H survive stream off/on.  This
+     * driver re-runs the whole tisp init on every first stream-on, which reset
+     * them to 128 whenever an on-demand stream (snapshot, RTSP client) came up.
+     * The defaults are now set when /dev/tx-isp is first opened (before the
+     * IMP sensor enable, like the OEM tisp_init) and kept across restarts.
+     */
+    if (!regtrace_t23_bcsh_user_kept)
+        regtrace_t23_bcsh_user_defaults();
     regtrace_t23_bcsh_ev = 1436U << 10;
     regtrace_t23_bcsh_ct = 3187U;
     BCSH_real = 1;
