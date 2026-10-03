@@ -9810,7 +9810,8 @@ static bool regtrace_t23_ae_hlil_resume;
 /* sensor the resume point was reached with */
 static char regtrace_t23_ae_hlil_resume_sensor[32];
 static bool regtrace_t23_source_ae_hlil = true;
-static bool regtrace_t23_source_ae_oem;   /* tx_isp_t23_ae_oem_glue.inc */
+static bool regtrace_t23_source_ae_oem = true; /* tx_isp_t23_ae_oem_glue.inc */
+static uint32_t t23_aelift_stream_packed(void);  /* ditto */
 static uint regtrace_t23_source_ae_hlil_interval = 32;
 static uint regtrace_t23_source_ae_hlil_target = 60;
 static uint regtrace_t23_source_ae_hlil_deadband = 5;
@@ -11321,9 +11322,14 @@ static int regtrace_t23_call_sensor_stream(int enable, const char *reason)
             ret = regtrace_t23_sensor_fps_stream_on(reason);
         if (enable && !ret)
             ret = regtrace_t23_source_resolve_sensor_config();
-        packed = regtrace_t23_ae_hlil_stream_packed();
+        /* the lifted stock AE0 owns the exposure: the sensor gets the one
+         * it last set (stock keeps the sensor exposure across a stream
+         * restart), not the substitute's bootstrap */
+        packed = regtrace_t23_source_ae_oem ? t23_aelift_stream_packed() :
+                 regtrace_t23_ae_hlil_stream_packed();
         if (enable && !ret && packed)
             ret = regtrace_t23_call_sensor_exposure(packed,
+                regtrace_t23_source_ae_oem ? "ae-oem-after-stream" :
                 regtrace_t23_source_ae_force_packed ?
                 "source-ae-force-after-stream" :
                 regtrace_t23_ae_hlil_resume ?
@@ -13755,22 +13761,34 @@ static uint32_t regtrace_t23_source_bypass_forced_off(void)
         mask |= BIT(7);
     if (regtrace_t23_source_awb_stats_init)
         mask |= BIT(25);
-    if (regtrace_t23_source_dpc_tuning_init)
-        mask |= BIT(2);
+    /* DPC (bit 2) and CCM (bit 9) follow the bank flag like the OEM
+     * tisp_init / tisp_day_or_night_s_ctrl (the sc2336 night bank
+     * bypasses DPC; both banks set bit 9). */
     if (regtrace_t23_source_ydns_tuning_init)
         mask |= BIT(17);
     if (regtrace_t23_source_defog_tuning_init &&
         regtrace_t23_source_defog_internal_enable)
         mask |= BIT(11);
-    if (regtrace_t23_source_ccm_tuning_init)
-        mask |= BIT(9);
     return mask;
 }
 
+/*
+ * SetModuleControl (bits 0..18): the bits a user changed and their values.
+ * The OEM rebuilds 0xc from the bank on every day/night or mode switch and
+ * loses them; here they are put back on top of the bank flags, at every
+ * rebuild (switches and stream starts), until the module is reloaded.
+ */
+static uint32_t regtrace_t23_user_bypass_mask;
+static uint32_t regtrace_t23_user_bypass_value;
+
 static uint32_t regtrace_t23_source_bypass_overrides(uint32_t bypass)
 {
-    return (bypass & ~regtrace_t23_source_bypass_forced_off()) |
-           regtrace_t23_source_bypass_forced_on();
+    uint32_t forced_on = regtrace_t23_source_bypass_forced_on();
+
+    bypass = (bypass & ~regtrace_t23_source_bypass_forced_off()) | forced_on;
+    bypass = (bypass & ~regtrace_t23_user_bypass_mask) |
+             (regtrace_t23_user_bypass_value & regtrace_t23_user_bypass_mask);
+    return bypass | forced_on;
 }
 
 static void regtrace_t23_source_mode_flags_apply(const uint32_t *flags)
@@ -92057,6 +92075,13 @@ static void regtrace_t23_source_dn_params_refresh(const char *reason)
         else
             failed |= BIT(11);
     }
+    /* OEM order: tiziano_ae_dn_params_refresh after defog.  The lifted
+     * stock AE0 reloads its parameters from the new bank like stock; the
+     * HLIL substitute keeps its state. */
+    if (regtrace_t23_source_ae_oem && t23_aelift_ready) {
+        flush_work(&t23_aelift_work);
+        T23_AELIFT_CALL(LA_tiziano_ae_dn_params_refresh, 0, 0, 0, 0);
+    }
     /* OEM: curves from the new bank, all registers at the current gain. */
     if (regtrace_t23_source_sharpen_initialized &&
         tiziano_sharpen_dn_params_refresh())
@@ -92071,6 +92096,28 @@ static void regtrace_t23_source_dn_params_refresh(const char *reason)
     if (regtrace_t23_source_sdns_initialized)
         regtrace_t23_source_sdns_gain_old = 0xffffffffU;
     ret = regtrace_t23_source_apply_total_gain_value(gain, 0, true, true);
+
+    /* A block whose parameters did not reload from the new bank is
+     * bypassed rather than run with the previous bank's (the next switch
+     * or stream start rebuilds 0xc from the bank again).  Demosaic stays:
+     * without it there is no colour picture at all. */
+    if (failed) {
+        static const uint8_t block_bit[13] = {
+            5,  /* GIB */     10, /* gamma */   4,  /* LSC */
+            2,  /* DPC */     17, /* YDNS */    0xff, /* DMSC */
+            12, /* BCSH */    12, /* CLM */     16, /* MDNS */
+            15, /* SDNS */    7,  /* ADR */     11, /* defog */
+            14, /* sharpen */
+        };
+        uint32_t bypass = 0;
+        unsigned int i;
+
+        for (i = 0; i < ARRAY_SIZE(block_bit); ++i)
+            if ((failed & BIT(i)) && block_bit[i] != 0xff)
+                bypass |= BIT(block_bit[i]);
+        if (bypass)
+            system_reg_write(0x0cU, system_reg_read(0x0cU) | bypass);
+    }
 
     printk(KERN_WARNING
            "tx_isp_t23_recovered: bank switch block refresh reason=%s gain=0x%x tgain_log2=0x%x failed=0x%x ret=%d r0c=0x%08x\n",
@@ -94158,13 +94205,23 @@ int32_t tisp_g_wdr_en(void)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066f38 origin=model_output original=tisp_s_max_again */
 int32_t tisp_s_max_again(int32_t arg1, int32_t arg2)
 {
-	return ((uintptr_t (*)(uintptr_t, uintptr_t))tiziano_ae_s_max_again)((uintptr_t)(arg1), (uintptr_t)(arg2));
+	int32_t ret = ((uintptr_t (*)(uintptr_t, uintptr_t))tiziano_ae_s_max_again)((uintptr_t)(arg1), (uintptr_t)(arg2));
+
+	/* the lifted stock AE0 has its own ae_exp_th: stock slot 1 */
+	if (!ret)
+		t23_aelift_s_max_gain(1U, 0x14U, (uint32_t)arg2);
+	return ret;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066f48 origin=model_output original=tisp_s_max_isp_dgain */
 int32_t tisp_s_max_isp_dgain(int32_t arg1, int32_t arg2)
 {
-	return tiziano_ae_s_max_isp_dgain(arg1, arg2);
+	int32_t ret = tiziano_ae_s_max_isp_dgain(arg1, arg2);
+
+	/* stock slot 3 */
+	if (!ret)
+		t23_aelift_s_max_gain(3U, 0x1cU, (uint32_t)arg2);
+	return ret;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066f58 origin=fragment_seed original=tisp_g_dpc_strength */
@@ -102076,6 +102133,15 @@ static long regtrace_t23_tuning_cid(bool get, uint32_t id, uint32_t *value)
         /* Blocks this driver never loads stay bypassed. */
         control |= (int32_t)(regtrace_t23_source_bypass_forced_on() &
                              0x7ffffU);
+        {
+            uint32_t changed = ((uint32_t)control ^
+                                system_reg_read(0x0cU)) & 0x7ffffU;
+
+            regtrace_t23_user_bypass_mask |= changed;
+            regtrace_t23_user_bypass_value =
+                (regtrace_t23_user_bypass_value & ~changed) |
+                ((uint32_t)control & changed);
+        }
         tisp_s_module_control(0, control);
         return 0;
     }
