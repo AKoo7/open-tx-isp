@@ -14869,6 +14869,7 @@ error:
 #define T41_VIN_DUAL_MODE_OFF         312
 #define T41_SENSOR_LIST_OFF           288
 #define T41_SENSOR_INFO_OFF           296
+#define T41_SENSOR_NAME_LEN           32	/* info: name[32], then cbus type */
 #define T41_SENSOR_VIDEO_INFO_OFF     780
 #define T41_SUBDEV_NOTIFY_OFF         124
 #define T41_SUBDEV_EVENT_OFF          128
@@ -14976,6 +14977,47 @@ static void t41_unregister_i2c_sensor(uintptr_t sensor_sd)
 	}
 }
 
+/*
+ * The core and the VIC keep a 96-byte copy of each synced sensor's
+ * tx_isp_video_in (ispcore_sync_sensor_attr / vic_sensor_ops_sync_sensor_attr
+ * at core+308 / vic+276, per sensor id); words +52/+56 of it point at the
+ * sensor's attributes and registration info (sensor+776/+780).  Before a
+ * stale sensor is freed, drop those copies: the stock "unsync" (sync with
+ * no attributes, as tx_isp_vin set-input does when it switches a sensor
+ * out) through the core event fan-out, which clears the core's and every
+ * child's (VIC's) slot 0, plus the core's own slot for other sensor ids.
+ */
+static void t41_unsync_stale_sensor(uintptr_t sensor)
+{
+	uintptr_t core = (uintptr_t)ispcore_sd;
+	uintptr_t info = t41_load_ptr(sensor, T41_SENSOR_VIDEO_INFO_OFF);
+	bool held = false;
+	unsigned int id;
+
+	if (!t41_kernel_data_ptr((void *)core))
+		return;
+	core = t41_load_ptr(core, 268);
+	if (!t41_kernel_data_ptr((void *)core) || !info)
+		return;
+	for (id = 0; id < T41_SENSOR_MAX_VIN; id++) {
+		uintptr_t blk = core + 308 + id * 96;
+
+		if (t41_load_ptr(blk, 56) != info)
+			continue;
+		printk(KERN_WARNING
+		       "tx_isp_t41_recovered: stale sensor still synced to core/VIC slot %u, unsyncing\n",
+		       id);
+		if (id)
+			memset((void *)blk, 0, 96);
+		else
+			held = true;
+	}
+	/* the stock unsync clears slot 0 only: only when that is this sensor */
+	if (held)
+		ispcore_core_ops_ioctl((uintptr_t)ispcore_sd,
+				       T41_EVENT_SYNC_SENSOR_ATTR, 0);
+}
+
 static void t41_reclaim_stale_sensor(uintptr_t vin, uintptr_t arg,
 				     unsigned int sensor_id)
 {
@@ -14991,8 +15033,8 @@ static void t41_reclaim_stale_sensor(uintptr_t vin, uintptr_t arg,
 			uintptr_t candidate =
 				(uintptr_t)node - T41_SENSOR_LIST_OFF;
 
-			if (!strcmp((char *)(candidate + T41_SENSOR_INFO_OFF),
-				    (char *)arg)) {
+			if (!strncmp((char *)(candidate + T41_SENSOR_INFO_OFF),
+				     (char *)arg, T41_SENSOR_NAME_LEN)) {
 				sensor = candidate;
 				break;
 			}
@@ -15009,8 +15051,9 @@ static void t41_reclaim_stale_sensor(uintptr_t vin, uintptr_t arg,
 		*(uintptr_t *)slot = 0;
 	private_mutex_unlock((void *)(vin + T41_VIN_SENSOR_LOCK_OFF));
 	printk(KERN_WARNING
-	       "tx_isp_t41_recovered: reclaiming stale sensor %s on vin %u\n",
+	       "tx_isp_t41_recovered: reclaiming stale sensor %.32s on vin %u\n",
 	       (char *)arg, sensor_id);
+	t41_unsync_stale_sensor(sensor);
 	if (*(uint32_t *)(sensor + T41_SENSOR_INFO_OFF + 32) == 1)
 		t41_unregister_i2c_sensor(sensor);
 }
@@ -15149,8 +15192,8 @@ static int t41_release_sensor(uintptr_t vin, uintptr_t arg)
 	for (node = head->next; node != head; node = node->next) {
 		uintptr_t candidate = (uintptr_t)node - T41_SENSOR_LIST_OFF;
 
-		if (!strcmp((char *)(candidate + T41_SENSOR_INFO_OFF),
-			    (char *)arg)) {
+		if (!strncmp((char *)(candidate + T41_SENSOR_INFO_OFF),
+			     (char *)arg, T41_SENSOR_NAME_LEN)) {
 			sensor = candidate;
 			break;
 		}
@@ -20738,7 +20781,8 @@ static int t41_tuning_hvflip(const struct tx_isp_tuning_t41_control *request)
                                            (uintptr_t)event_arg);
 
         t41_sensor_flip_mode = attr[0];
-        printk(KERN_WARNING
+        /* timps re-asserts the flip after every chn0 restart */
+        printk_ratelimited(KERN_INFO
                "tx_isp_t41_recovered: hvflip sensor=%u isp=%u/%u/%u ret=%d "
                "pid=%d tid-comm=%s\n", attr[0], attr[1], attr[2], attr[3],
                ret, task_tgid_nr(current), current->comm);
