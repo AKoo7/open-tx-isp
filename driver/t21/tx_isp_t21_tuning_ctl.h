@@ -14,6 +14,7 @@
  *   0x08000167 Temper type          TemperDnsAttr/Ctl (S_CTRL)
  *   0x08000083 Temper strength      TemperDnsAttr (tuning ioctl, value)
  *   0x08000082 Temper strength      TemperDnsCtl (tuning ioctl, value)
+ *   0x08000025 Expr (get)           IMPISPExpr, 12 bytes (tuning ioctl, pointer)
  *
  * Here they act on existing T21 mechanisms:
  *
@@ -28,6 +29,10 @@
  *    (MANUAL; AUTO = 128), at most up to the 8-bit field limit.  The
  *    stren factors themselves are small integers (0..8 in the jxf23
  *    tuning), too coarse to scale.
+ *  - IntegrationTime (same 0x800002c block, [0x52] RANGE): u16 [0x1a]
+ *    becomes the AE exposure ceiling (tisp_ae_ctrls max_integration_time,
+ *    re-seeded from the sensor by tisp_set_fps), as the T20 3.12.0 AE
+ *    caps at stab.global_max_integration_time.  AUTO/MANUAL stay no-ops.
  *  - Temper (3D NR): MANUAL applies the strength through the stock
  *    0x8000085 path, tisp_s_3dns_ratio (128 = tuning file), AUTO puts the
  *    ratio last set through 0x8000085 back (128 if none), DISABLE applies 0.
@@ -46,6 +51,7 @@
 #define T21_CID_TEMPER_ATTR	0x08000083
 #define T21_CID_TEMPER_CTL	0x08000082
 #define T21_CID_3DNS_RATIO	0x08000085
+#define T21_CID_EXPR		0x08000025	/* GetExpr, get side only */
 
 #define T21_COLORFX_AUTO	0
 #define T21_COLORFX_BW		1
@@ -67,6 +73,7 @@
 #define T21_SINTER_B_MANUAL2	98
 #define T21_IT_B_AUTO		0x3f
 #define T21_IT_B_RANGE		0x52
+#define T21_IT_B_MAX		0x1a	/* u16, RANGE max_integration_time */
 
 static uint32_t t21_scene_mode;			/* V4L2 scene, 0 = auto */
 static uint32_t t21_colorfx = T21_COLORFX_AUTO;
@@ -215,6 +222,31 @@ static void t21_temper_update(void)
 }
 
 /*
+ * SetIntegrationTime(MODE_RANGE): the AE exposure ceiling.  Stock
+ * oem-t21.ko ignores the block (0x800002c is a no-op), so the cap read
+ * back but had no effect.  T21 already has the field the T20 3.12.0 AE
+ * caps at (stab.global_max_integration_time there): tisp_ae_ctrls
+ * max_integration_time, seeded from the sensor by tisp_set_fps (ISP
+ * start and every fps change, like the T20 SYNC_VIDEO_IN re-seed) and
+ * copied into _exp_parameter by tisp_ae_ctrls_update each frame, which
+ * also clamps it to the sensor maximum.  Never below the sensor minimum.
+ */
+static void t21_ae_set_it_max(uint32_t lines)
+{
+	const struct t21_sensor_ctrl_view *sctrl =
+		(const struct t21_sensor_ctrl_view *)sensor_ctrl;
+	struct t21_ae_ctrls_view *ae = (struct t21_ae_ctrls_view *)tisp_ae_ctrls;
+	uint32_t lo = sctrl->min_integration_time ? sctrl->min_integration_time : 1;
+	uint32_t hi = sctrl->max_integration_time;
+
+	if (lines < lo)
+		lines = lo;
+	if (hi && lines > hi)
+		lines = hi;
+	ACCESS_ONCE(ae->max_integration_time) = lines;
+}
+
+/*
  * Set side.  Returns 1 when the control was handled here (*ret holds the
  * result), 0 to pass it on to the stock dispatcher.
  */
@@ -241,6 +273,12 @@ static int t21_tuning_ctl_s(int32_t *ctl, int32_t *ret)
 		if (private_copy_from_user(blk, (const void __user *)(uintptr_t)v,
 					   sizeof(blk)))
 			return 0;
+		if (!blk[T21_SINTER_B_VALID] && blk[T21_IT_B_RANGE]) {
+			t21_ae_set_it_max(blk[T21_IT_B_MAX] |
+					  (blk[T21_IT_B_MAX + 1] << 8));
+			*ret = 0;
+			return 1;
+		}
 		if (!blk[T21_SINTER_B_VALID] || blk[T21_IT_B_AUTO] ||
 		    blk[T21_IT_B_RANGE])
 			return 0;
@@ -306,6 +344,14 @@ static int t21_tuning_ctl_g(int32_t *ctl, int32_t *ret)
 	case T21_CID_TEMPER_CTL:
 		ctl[1] = (int32_t)t21_temper_strength;
 		break;
+	case T21_CID_EXPR:
+		/* Stock g_ctrl acknowledges 0x8000025 without writing the
+		 * record; the pre-lift glue answered it from the live AE
+		 * (t21_g_expr), lost when the stock dispatcher was lifted.
+		 * GetExpr's maximum and line time are what a caller converts
+		 * an integration-time cap with. */
+		*ret = t21_g_expr((void __user *)(uintptr_t)v);
+		return 1;
 	case T21_CID_SINTER_DNS:
 		/* fill only the sinter bytes; the integration-time getter
 		 * reads other bytes of the same block, which stay as given */
