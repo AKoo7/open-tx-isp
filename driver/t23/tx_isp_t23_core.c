@@ -86,7 +86,6 @@
 extern void *get_driver_common_interfaces();
 extern uintptr_t __lshrdi3();
 extern uintptr_t __ashldi3();
-extern char __bss_start[];
 struct jz_driver_common_interfaces;
 struct tx_isp_dev { unsigned char __pad[4096]; };
 struct tx_isp_device { unsigned char __pad[4096]; };
@@ -9203,7 +9202,6 @@ int32_t tx_isp_module_deinit(uint32_t a0);
 int32_t tx_isp_subdev_init(uintptr_t a0, uintptr_t a1, uint32_t a2);
 int32_t tx_isp_subdev_deinit(uintptr_t arg1);
 #ifdef REGTRACE_KERNEL_TREE_BUILD
-char __bss_start[4096];
 
 static int private_platform_driver_register(struct platform_driver *drv) { return platform_driver_register(drv); }
 static void private_platform_driver_unregister(struct platform_driver *drv) { platform_driver_unregister(drv); }
@@ -10498,7 +10496,7 @@ module_param_named(sensor_i2c_adapter, regtrace_t23_sensor_i2c_adapter, int, 064
 module_param_named(snapraw_buffer_bytes,
                    regtrace_t23_snapraw_buffer_bytes, uint, 0444);
 MODULE_PARM_DESC(snapraw_buffer_bytes,
-                 "bytes of DMA memory reserved at module load for snapraw");
+                 "bytes of DMA memory allocated per snapraw capture (lazily)");
 module_param_named(snapraw_phys_addr,
                    regtrace_t23_snapraw_phys_addr, uint, 0444);
 MODULE_PARM_DESC(snapraw_phys_addr,
@@ -10705,7 +10703,7 @@ static int regtrace_t23_snapraw_write_file(const void *buffer,
     snprintf(path, sizeof(path), "/tmp/snap%u.raw", index);
     old_fs = get_fs();
     set_fs(KERNEL_DS);
-    output = filp_open(path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    output = filp_open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644);
     if (IS_ERR(output)) {
         int ret = PTR_ERR(output);
 
@@ -10911,11 +10909,13 @@ static ssize_t regtrace_t23_vic_proc_write(struct file *file,
         return -ERANGE;
 
     mutex_lock(&regtrace_t23_snapraw_lock);
-    for (i = 0; i < frames; i++) {
+    ret = regtrace_t23_snapraw_buffer_alloc();
+    if (!ret && !regtrace_t23_snapraw_buffer)
+        ret = -ENOMEM;
+    for (i = 0; !ret && i < frames; i++)
         ret = regtrace_t23_snapraw_one(i);
-        if (ret)
-            break;
-    }
+    /* Lazy: the buffer only lives for one capture transaction. */
+    regtrace_t23_snapraw_buffer_free();
     mutex_unlock(&regtrace_t23_snapraw_lock);
     return ret ? ret : (ssize_t)input_count;
 }
@@ -14684,8 +14684,23 @@ static int regtrace_t23_source_resolve_sensor_config(void)
     return 0;
 }
 
+static DEFINE_MUTEX(regtrace_t23_tuning_mutex);
+static int regtrace_t23_source_core_set_stream_unlocked(int enable,
+                                                        const char *reason);
+
 static int regtrace_t23_source_core_set_stream(int enable,
                                                const char *reason)
+{
+    int ret;
+
+    mutex_lock(&regtrace_t23_tuning_mutex);
+    ret = regtrace_t23_source_core_set_stream_unlocked(enable, reason);
+    mutex_unlock(&regtrace_t23_tuning_mutex);
+    return ret;
+}
+
+static int regtrace_t23_source_core_set_stream_unlocked(int enable,
+                                                        const char *reason)
 {
     int ret;
     uint32_t bypass;
@@ -15035,6 +15050,8 @@ static long regtrace_tx_isp_enuminput(unsigned long arg)
     return 0;
 }
 
+static bool regtrace_t23_qbuf_guard;
+
 static long regtrace_tx_isp_getbuf(unsigned long arg)
 {
     struct regtrace_isp_buf_info info;
@@ -15065,6 +15082,21 @@ static long regtrace_tx_isp_setbuf(unsigned long arg)
         return -EFAULT;
     if (!info.paddr || !info.size)
         return -EINVAL;
+    /*
+     * Review2 M2: the MDNS engine writes its reference frames here every
+     * frame; the buffer must lie in rmem like a QBUF frame buffer.
+     */
+    used = regtrace_mdns_malloc_size(info.mode & 0xffU,
+                                     regtrace_t23_source_sensor_width,
+                                     regtrace_t23_source_sensor_height);
+    if (tx_isp_qbuf_phys_check(info.paddr, used ? used : info.size)) {
+        printk_ratelimited(KERN_WARNING
+                           "tx_isp_t23_recovered: MDNS SET_BUF paddr=0x%x need=0x%x outside rmem%s\n",
+                           info.paddr, used,
+                           regtrace_t23_qbuf_guard ? ", rejected" : " (qbuf_guard=0, accepted)");
+        if (regtrace_t23_qbuf_guard)
+            return -EINVAL;
+    }
 
     used = tisp_mdns_set_malloc_cfg(info.mode & 0xffU,
                                     regtrace_t23_source_sensor_width,
@@ -15135,7 +15167,7 @@ static bool regtrace_isp_m0_is_image_control(u32 id)
 
 static long regtrace_t23_tuning_cid(bool get, uint32_t id, uint32_t *value);
 
-static long regtrace_isp_m0_control(unsigned int cmd, unsigned long arg)
+static long regtrace_isp_m0_control_unlocked(unsigned int cmd, unsigned long arg)
 {
     struct tx_isp_tuning_control ctrl;
     long ret;
@@ -15277,7 +15309,7 @@ static int regtrace_isp_m0_value_control(
     return 1;
 }
 
-static long regtrace_isp_m0_ext_control(unsigned long arg)
+static long regtrace_isp_m0_ext_control_unlocked(unsigned long arg)
 {
     static const struct tx_isp_tuning_cmd_desc routes[] = {
         { TX_ISP_TUNING_CMD_T31_SENSOR_FPS, 4,
@@ -15594,6 +15626,35 @@ static int regtrace_isp_m0_release(struct inode *inode, struct file *file)
     printk(KERN_INFO "tx_isp_t23_recovered: release /dev/isp-m0 pid=%d comm=%s\n",
            current->pid, current->comm);
     return 0;
+}
+
+
+/*
+ * Review2 M1: the tuning ioctls (both isp-m0 dispatchers) and core stream
+ * start/stop share one mutex, as stock serialises the tuning node with
+ * core_dev->mlock. Order: tuning mutex outside the aelift/adrlift mutexes;
+ * the framechan stream lock (taken before core set_stream) is never taken
+ * under it.
+ */
+
+static long regtrace_isp_m0_control(unsigned int cmd, unsigned long arg)
+{
+    long ret;
+
+    mutex_lock(&regtrace_t23_tuning_mutex);
+    ret = regtrace_isp_m0_control_unlocked(cmd, arg);
+    mutex_unlock(&regtrace_t23_tuning_mutex);
+    return ret;
+}
+
+static long regtrace_isp_m0_ext_control(unsigned long arg)
+{
+    long ret;
+
+    mutex_lock(&regtrace_t23_tuning_mutex);
+    ret = regtrace_isp_m0_ext_control_unlocked(arg);
+    mutex_unlock(&regtrace_t23_tuning_mutex);
+    return ret;
 }
 
 static long regtrace_isp_m0_ioctl_body(struct file *file, unsigned int cmd,
@@ -16087,9 +16148,17 @@ static int regtrace_framechan_record_qbuf(int channel, const uint32_t *words)
         if (!regtrace_framechan_qbuf_queued[channel][i])
             slot = i;
     }
-    if (slot < 0)
-        slot = regtrace_framechan_qbuf_count[channel] %
-            REGTRACE_FRAMECHAN_QBUF_SLOTS;
+    if (slot < 0) {
+        /*
+         * Review2 L6: all slots hold queued buffers. Overwriting one would
+         * lose its completion and starve the pool; refuse instead.
+         */
+        spin_unlock_irqrestore(&regtrace_framechan_done_lock, flags);
+        printk_ratelimited(KERN_WARNING
+                           "tx_isp_t23_recovered: framechan%d QBUF: all %d slots queued, -EBUSY\n",
+                           channel, REGTRACE_FRAMECHAN_QBUF_SLOTS);
+        return -EBUSY;
+    }
     regtrace_framechan_qbuf_index[channel][slot] =
         words[TX_ISP_FRAME_WORD_INDEX];
     regtrace_framechan_qbuf_userptr[channel][slot] = userptr;
@@ -32142,9 +32211,12 @@ label_acdc:
 static int32_t isp_free_buffer(int32_t arg1) {
     private_mutex_lock(((char *)&ispmem + 0x1a0));
 
-    /* data_a91ec is at offset 412 (0x19C) from .bss base */
-    unsigned int *bss_base = &__bss_start;
-    unsigned int data_a91ec = bss_base[412 / 4];
+    /*
+     * data_a91ec is the stock .bss+0x19c buffer list head. This build has
+     * no such list (it read a never-written 4 KB dummy named __bss_start),
+     * so the head is always empty.
+     */
+    unsigned int data_a91ec = 0;
     
     unsigned int v1 = data_a91ec;
     unsigned int *i = 0;
@@ -33400,6 +33472,8 @@ static int32_t regtrace_t23_irq_none(const char *name, int32_t irq)
     return IRQ_NONE;
 }
 
+static unsigned int regtrace_t23_vic_err_restarts;
+
 int32_t isp_irq_handle(int32_t irq, void *dev_id)
 {
     unsigned char *sd;
@@ -33443,6 +33517,37 @@ int32_t isp_irq_handle(int32_t irq, void *dev_id)
                    "tx_isp_t23_recovered: VIC irq=%d count=%u status=0x%x/0x%x pending=0x%x/0x%x mask=0x%x/0x%x\n",
                    irq, regtrace_t23_vic_irq_count, status0, status1,
                    pending0, pending1, mask0, mask1);
+        /*
+         * Stock isp_vic_interrupt_service_routine error handler: on an
+         * asfifo/size/overflow error stop the VIC (ctrl=4), wait for it to
+         * go idle, re-latch 0x104/0x108 and restart it (ctrl=1). Stock
+         * polls unbounded; bound it to ~1 ms in hard IRQ like T31.
+         */
+        if ((pending0 & 0xde00U) && vic_start_ok == 1 &&
+            ACCESS_ONCE(regtrace_t23_vic_streaming)) {
+            unsigned int timeout = 1000;
+            u32 ctl;
+
+            regtrace_t23_vic_err_restarts++;
+            printk_ratelimited(KERN_WARNING
+                               "tx_isp_t23_recovered: VIC error 0x%x, restarting VIC (n=%u)\n",
+                               pending0, regtrace_t23_vic_err_restarts);
+            writel(4, base + 0x0);
+            wmb();
+            ctl = readl(base + 0x0);
+            while (ctl != 0 && timeout--) {
+                udelay(1);
+                ctl = readl(base + 0x0);
+            }
+            if (ctl != 0)
+                printk_ratelimited(KERN_WARNING
+                                   "tx_isp_t23_recovered: VIC did not stop, addr ctl is 0x%x\n",
+                                   ctl);
+            writel(readl(base + 0x104), base + 0x104);
+            writel(readl(base + 0x108), base + 0x108);
+            writel(1, base + 0x0);
+            wmb();
+        }
         return IRQ_HANDLED;
     }
 
@@ -92109,7 +92214,9 @@ static void regtrace_t23_source_dn_params_refresh(const char *reason)
     if (regtrace_t23_source_ae_oem && t23_aelift_ready) {
         flush_work(&t23_aelift_work);
         mutex_lock(&t23_aelift_mutex);
+        t23_aelift_set_busy(true);
         T23_AELIFT_CALL(LA_tiziano_ae_dn_params_refresh, 0, 0, 0, 0);
+        t23_aelift_set_busy(false);
         mutex_unlock(&t23_aelift_mutex);
     }
     /* OEM: curves from the new bank, all registers at the current gain. */
@@ -101489,56 +101596,39 @@ int32_t __init init_module(void)
         tx_isp_sinfo_exit();
         return ret;
     }
-    ret = regtrace_register_tx_isp_miscdev();
-    if (ret != 0) {
-        regtrace_t23_vin_proc_exit();
-        tx_isp_sinfo_exit();
-        return ret;
-    }
-    ret = regtrace_register_isp_m0_miscdev();
-    if (ret != 0) {
-        regtrace_unregister_tx_isp_miscdev();
-        regtrace_t23_vin_proc_exit();
-        tx_isp_sinfo_exit();
-        return ret;
-    }
-    ret = regtrace_register_misc_ivdc();
-    if (ret != 0) {
-        regtrace_unregister_isp_m0_miscdev();
-        regtrace_unregister_tx_isp_miscdev();
-        regtrace_t23_vin_proc_exit();
-        tx_isp_sinfo_exit();
-        return ret;
-    }
-    ret = regtrace_register_framechans();
-    if (ret != 0) {
-        regtrace_unregister_misc_ivdc();
-        regtrace_unregister_isp_m0_miscdev();
-        regtrace_unregister_tx_isp_miscdev();
-        regtrace_t23_vin_proc_exit();
-        tx_isp_sinfo_exit();
-        return ret;
-    }
+    /*
+     * Review2 M6: platforms first, user-visible device nodes last, so an
+     * early open (mdev, a respawning streamer) never sees a half-built
+     * driver. Exit tears the nodes down first.
+     */
     ret = regtrace_register_real_platforms();
     if (ret != 0) {
-        regtrace_unregister_framechans();
-        regtrace_unregister_misc_ivdc();
-        regtrace_unregister_isp_m0_miscdev();
-        regtrace_unregister_tx_isp_miscdev();
         regtrace_t23_vin_proc_exit();
         tx_isp_sinfo_exit();
         return ret;
     }
-    ret = regtrace_t23_snapraw_buffer_alloc();
+    ret = regtrace_register_tx_isp_miscdev();
+    if (ret == 0)
+        ret = regtrace_register_isp_m0_miscdev();
+    if (ret == 0)
+        ret = regtrace_register_misc_ivdc();
+    if (ret == 0)
+        ret = regtrace_register_framechans();
     if (ret != 0) {
-        regtrace_unregister_real_platforms();
         regtrace_unregister_framechans();
         regtrace_unregister_misc_ivdc();
         regtrace_unregister_isp_m0_miscdev();
         regtrace_unregister_tx_isp_miscdev();
+        regtrace_unregister_real_platforms();
         regtrace_t23_vin_proc_exit();
         tx_isp_sinfo_exit();
+        return ret;
     }
+    /*
+     * The snapraw DMA buffer (4 MiB, order 10) is allocated on the first
+     * "snapraw" command and freed after it; a fragmented reload must not
+     * fail here for a debug feature.
+     */
     if (!ret)
         regtrace_t23_text_check("module-init", 0);
     return ret;
@@ -101552,6 +101642,11 @@ void cleanup_module(void)
 #ifdef REGTRACE_KERNEL_TREE_BUILD
     vfree(regtrace_t23_text_snap);
     regtrace_t23_text_snap = NULL;
+    /* No file is open (fops hold a module reference): nodes go first. */
+    regtrace_unregister_framechans();
+    regtrace_unregister_misc_ivdc();
+    regtrace_unregister_isp_m0_miscdev();
+    regtrace_unregister_tx_isp_miscdev();
     regtrace_framechan_set_streaming(0, false);
     regtrace_framechan_set_streaming(1, false);
     regtrace_framechan_set_streaming(2, false);
@@ -101572,7 +101667,9 @@ void cleanup_module(void)
     t23_aelift_sync();
     t23_adrlift_sync();
     /* Needs the VIC DMA device, which goes with the platforms. */
+    mutex_lock(&regtrace_t23_snapraw_lock);
     regtrace_t23_snapraw_buffer_free();
+    mutex_unlock(&regtrace_t23_snapraw_lock);
     regtrace_unregister_real_platforms();
     cancel_work_sync(&regtrace_t23_source_ae_hlil_work_item);
     cancel_work_sync(&regtrace_t23_source_awb_hlil_work_item);
@@ -101584,10 +101681,6 @@ void cleanup_module(void)
     regtrace_t23_source_parameter_banks_free();
     regtrace_t23_core_dma_free();
     t23_aelift_free();
-    regtrace_unregister_framechans();
-    regtrace_unregister_misc_ivdc();
-    regtrace_unregister_isp_m0_miscdev();
-    regtrace_unregister_tx_isp_miscdev();
     regtrace_t23_vin_proc_exit();
     tx_isp_sinfo_exit();
     return;

@@ -118,6 +118,22 @@ static DECLARE_WORK(t23_aelift_work, t23_aelift_work_fn);
  * reading.  The interrupt-side statistics copy is not under it (as stock).
  */
 static DEFINE_MUTEX(t23_aelift_mutex);
+/*
+ * Review2 L1: the AE0 statistics handlers run in the core ISR; the day/night
+ * refresh and the anti-flicker rewrite (process context, under the mutex)
+ * take them off with this busy flag, as the ADR/defog lift does.
+ */
+static DEFINE_SPINLOCK(t23_aelift_irq_lock);
+static bool t23_aelift_busy;
+
+static void t23_aelift_set_busy(bool busy)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&t23_aelift_irq_lock, flags);
+	t23_aelift_busy = busy;
+	spin_unlock_irqrestore(&t23_aelift_irq_lock, flags);
+}
 
 static noinline __attribute__((noipa)) uint32_t t23_aelift_event_push(uint32_t channel, uint32_t event)
 {
@@ -626,7 +642,9 @@ static int t23_aelift_s_antiflick(uint32_t hz)
 	int ret;
 
 	mutex_lock(&t23_aelift_mutex);
+	t23_aelift_set_busy(true);
 	ret = t23_aelift_s_antiflick_locked(hz);
+	t23_aelift_set_busy(false);
 	mutex_unlock(&t23_aelift_mutex);
 	return ret;
 }
@@ -644,10 +662,14 @@ static bool t23_aelift_irq(uint32_t status)
 {
 	if (!regtrace_t23_source_ae_oem || !t23_aelift_ready)
 		return false;
-	if (status & BIT(26))
-		T23_AELIFT_CALL(LA_ae0_interrupt_static, 0, 0, 0, 0);
-	if (status & BIT(27))
-		T23_AELIFT_CALL(LA_ae0_interrupt_hist, 0, 0, 0, 0);
+	spin_lock(&t23_aelift_irq_lock);
+	if (!t23_aelift_busy) {
+		if (status & BIT(26))
+			T23_AELIFT_CALL(LA_ae0_interrupt_static, 0, 0, 0, 0);
+		if (status & BIT(27))
+			T23_AELIFT_CALL(LA_ae0_interrupt_hist, 0, 0, 0, 0);
+	}
+	spin_unlock(&t23_aelift_irq_lock);
 	return true;
 }
 
