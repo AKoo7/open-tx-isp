@@ -290,6 +290,10 @@ static void t23_aelift_start(void)
 		return;
 	ret = t23_aelift_init(regtrace_t23_source_sensor_width,
 			      regtrace_t23_source_sensor_height, fps);
+	/* an AE compensation set before the lift ran (it is stored only) */
+	if (!ret && regtrace_t23_source_ae_compensation != 128U)
+		T23_AELIFT_CALL(LA_tisp_ae_s_comp,
+				regtrace_t23_source_ae_compensation, 0, 0, 0);
 	printk(KERN_WARNING
 	       "tx_isp_t23_recovered: stock AE0 (lifted, experimental) %s ret=%d fps=0x%x\n",
 	       ret ? "NOT started" : "active", ret, fps);

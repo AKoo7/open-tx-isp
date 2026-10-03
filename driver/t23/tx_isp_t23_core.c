@@ -13583,6 +13583,7 @@ static int regtrace_t23_source_ccm_commit(uint32_t ct, uint32_t ev_q10)
 
 static void regtrace_t23_ccm_user_apply(void);
 static void regtrace_t23_adr_strength_apply(void);
+static uint32_t regtrace_t23_adr_ratio;   /* DRC strength, defined below */
 static void regtrace_t23_defog_strength_apply(void);
 
 static int regtrace_t23_source_ccm_write_tuning_startup(void)
@@ -14549,7 +14550,7 @@ static int regtrace_t23_source_core_set_stream(int enable,
             return ret;
         }
     }
-    if (regtrace_t23_source_adr_tuning_init)
+    if (regtrace_t23_source_adr_tuning_init && regtrace_t23_adr_ratio != 0x80U)
         regtrace_t23_adr_strength_apply();
     if (regtrace_t23_source_sharpen_tuning_init)
         regtrace_t23_source_sharpen_write_tuning_startup();
@@ -79619,6 +79620,16 @@ int32_t tisp_ae_s_comp(uint32_t a0)
     uint32_t target = (60U * compensation + 64U) / 128U;
 
     regtrace_t23_source_ae_compensation = compensation;
+    if (regtrace_t23_source_ae_oem) {
+        /*
+         * The lifted stock AE0 owns the compensation: stock tisp_ae_s_comp
+         * fills its ae_comp_param/ae_comp_x and rewrites the hardware
+         * parameters.  Before the lift runs, t23_aelift_start replays it.
+         */
+        if (t23_aelift_ready)
+            T23_AELIFT_CALL(LA_tisp_ae_s_comp, compensation, 0, 0, 0);
+        return 0;
+    }
     regtrace_t23_source_ae_hlil_target = clamp(target, 16U, 120U);
     regtrace_t23_source_ae_hlil_trigger();
     return 0;
@@ -81199,6 +81210,24 @@ int tisp_api_ae_flick_t_set(void *a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004c35c origin=fragment_seed original=tisp_api_ae_scene_pare_set */
+/*
+ * The AE scene parameters (backlight compensation, highlight depress, ...)
+ * and their reload flags belong to whichever AE0 runs: with the lifted
+ * stock AE0 (source_ae_oem=1) its own _scene_para/IspAeFlag copies, which
+ * its ae0_tune2 reads; otherwise the substitute's copies.
+ */
+static unsigned char *regtrace_t23_ae_scene_para(uint32_t **flags)
+{
+    BUILD_BUG_ON(sizeof(oem__scene_para) != sizeof(_scene_para));
+    BUILD_BUG_ON(sizeof(oem_IspAeFlag) != sizeof(IspAeFlag));
+    if (regtrace_t23_source_ae_oem) {
+        *flags = (uint32_t *)(void *)oem_IspAeFlag;
+        return oem__scene_para;
+    }
+    *flags = (uint32_t *)(void *)IspAeFlag;
+    return _scene_para;
+}
+
 int32_t tisp_api_ae_scene_pare_set(uint32_t context, const void *params)
 {
     uint32_t *flags = (uint32_t *)(void *)IspAeFlag;
@@ -81206,7 +81235,7 @@ int32_t tisp_api_ae_scene_pare_set(uint32_t context, const void *params)
     (void)context;
     if (!params)
         return -EINVAL;
-    memcpy(_scene_para, params, sizeof(_scene_para));
+    memcpy(regtrace_t23_ae_scene_para(&flags), params, sizeof(_scene_para));
     flags[4] = 1;
     flags[5] = 1;
     flags[7] = 0;
@@ -81221,7 +81250,8 @@ int32_t tisp_api_ae_scene_pare_get(uint32_t a0, uint32_t a1, uintptr_t a2)
     (void)a0;
     if (!a1 || !a2)
         return -EINVAL;
-    memcpy((void *)(uintptr_t)a1, _scene_para, sizeof(_scene_para));
+    memcpy((void *)(uintptr_t)a1, regtrace_t23_ae_scene_para(&flags),
+           sizeof(_scene_para));
     *(uint32_t *)(uintptr_t)a2 = sizeof(_scene_para);
     flags[4] = 1;
     flags[5] = 1;
@@ -92015,7 +92045,8 @@ static void regtrace_t23_source_dn_params_refresh(const char *reason)
     if (regtrace_t23_source_adr_initialized) {
         if (!regtrace_t23_source_adr_load_tuning()) {
             tiziano_adr_params_init();
-            regtrace_t23_adr_strength_apply();
+            if (regtrace_t23_adr_ratio != 0x80U)
+                regtrace_t23_adr_strength_apply();
         } else {
             failed |= BIT(10);
         }
@@ -92876,8 +92907,9 @@ int64_t tisp_s_antiflick(uint32_t a0, uintptr_t a1, uint32_t a2)
 int32_t tisp_s_Hilightdepress(uint32_t a0, uint32_t a1)
 {
     uint32_t params[sizeof(_scene_para) / sizeof(uint32_t)];
+    uint32_t *flags;
 
-    memcpy(params, _scene_para, sizeof(params));
+    memcpy(params, regtrace_t23_ae_scene_para(&flags), sizeof(params));
     params[0] = 1;
     params[5] = 1;
     params[6] = a1 + 1;
@@ -92906,8 +92938,9 @@ int tisp_g_Hilightdepress(uint32_t *out)
 int32_t tisp_s_BacklightComp(uint32_t a0, uint32_t a1)
 {
     uint32_t params[sizeof(_scene_para) / sizeof(uint32_t)];
+    uint32_t *flags;
 
-    memcpy(params, _scene_para, sizeof(params));
+    memcpy(params, regtrace_t23_ae_scene_para(&flags), sizeof(params));
     params[0] = 1;
     params[5] = a1 + 1;
     params[6] = 1;
@@ -101712,7 +101745,8 @@ static void regtrace_t23_adr_strength_apply(void)
     unsigned int k;
     unsigned int i;
 
-    if (s == 0x80U || !regtrace_t23_source_adr_initialized)
+    /* 0x80 is the identity scale; it must still restore the lists */
+    if (!regtrace_t23_source_adr_initialized)
         return;
     for (k = 0; k < 4U; ++k) {
         uint32_t floor = regtrace_t23_get_le32(histSub_4096_diff + k * 4U);
