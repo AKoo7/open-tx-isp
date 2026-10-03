@@ -2585,8 +2585,13 @@ static int isp_m0_show(struct seq_file *m, void *v)
 	seq_printf(m, "ISP Runing Mode : %s\n",
 		   apical_isp_ds1_cs_conv_clip_min_uv_read() == 512 ? "Night" : "Day");
 	seq_printf(m, "ISP Custom Mode : %s\n", "Disable");
+	/* WDR_MODE_ID reports the mode value (IMAGE_WDR_MODE_LINEAR = 0x0e,
+	 * IMAGE_WDR_MODE_FS_HDR = 0x0f), not a flag: a linear sensor must
+	 * read "Disable", as apical_isp_day_or_night_s_ctrl_internal()
+	 * compares it. */
 	seq_printf(m, "ISP WDR Mode : %s\n",
-		   isp_m0_get(TIMAGE, WDR_MODE_ID) ? "Enable" : "Disable");
+		   isp_m0_get(TIMAGE, WDR_MODE_ID) == IMAGE_WDR_MODE_FS_HDR ?
+		   "Enable" : "Disable");
 	seq_printf(m, "SENSOR Integration Time : %d lines\n", stab.global_integration_time);
 	seq_printf(m, "SENSOR Max Integration Time : %d lines\n", max_it);
 	seq_printf(m, "SENSOR analog gain : %d\n", again);
