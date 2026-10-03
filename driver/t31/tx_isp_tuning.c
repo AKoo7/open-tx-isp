@@ -1698,6 +1698,10 @@ static uint8_t bcsh_hue_user = 0x80;
 static uint8_t bcsh_brightness_user = 0x80;
 static uint8_t bcsh_contrast_user = 0x80;
 static uint8_t bcsh_saturation_user = 0x80;
+/* Scene mode / colour effect (beyond vendor, see tx_isp_scene_colorfx.h) */
+#include "../common/tx_isp_scene_colorfx.h"
+static uint32_t t31_scene_mode;
+static uint32_t t31_colorfx = TX_ISP_COLORFX_AUTO;
 static int8_t bcsh_ctrl;
 static uint8_t bcsh_ctrl_aux;
 static uint32_t bcsh_last_ev;
@@ -9226,12 +9230,12 @@ static int apical_isp_core_ops_g_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
             ret = 0;
             break;
 
-        case 0x98091f:
-            ctrl->value = 0;
+        case TX_ISP_CID_COLORFX:
+            ctrl->value = t31_colorfx;
             break;
 
-        case 0x9a091a:
-            ctrl->value = 0;
+        case TX_ISP_CID_SCENE_MODE:
+            ctrl->value = t31_scene_mode;
             break;
 
         default:
@@ -9244,6 +9248,26 @@ out:
     // pr_info("Mutex unlock\n");
     //mutex_unlock(&tuning->lock);
     return ret;
+}
+
+/* Colorfx: AUTO/BW/VIVID through the BCSH saturation, NEGATIVE through the
+ * gamma LUT.  Before the tuning core runs only the state is stored. */
+static int t31_colorfx_set(uint32_t fx)
+{
+    uint32_t old = t31_colorfx;
+
+    if (!tx_isp_colorfx_valid(fx))
+        return -EINVAL;
+    if (fx == old)
+        return 0;
+    t31_colorfx = fx;
+    if (!tuning_ready())
+        return 0;
+    if (tx_isp_colorfx_scales_sat(fx) || tx_isp_colorfx_scales_sat(old))
+        tiziano_bcsh_update(ourISPdev->tuning_data);
+    if (fx == TX_ISP_COLORFX_NEGATIVE || old == TX_ISP_COLORFX_NEGATIVE)
+        tiziano_gamma_lut_parameter();
+    return 0;
 }
 
 static int apical_isp_core_ops_s_ctrl(struct tx_isp_dev *dev, struct isp_core_ctrl *ctrl)
@@ -9291,6 +9315,20 @@ static int apical_isp_core_ops_s_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
         case 0x980915:  // VFLIP
             tuning->vflip = ctrl->value ? 1 : 0;
             tisp_apply_hvflip(tuning);
+            break;
+
+        case TX_ISP_CID_SCENE_MODE:  /* stock: no-op; here stored, nothing applied */
+            if (!tx_isp_scene_valid((uint32_t)ctrl->value)) {
+                ret = -EINVAL;
+                goto out;
+            }
+            t31_scene_mode = (uint32_t)ctrl->value;
+            break;
+
+        case TX_ISP_CID_COLORFX:     /* stock: no-op */
+            ret = t31_colorfx_set((uint32_t)ctrl->value);
+            if (ret)
+                goto out;
             break;
 
         case 0x8000164:  // ISP_CTRL_BYPASS
@@ -9628,8 +9666,6 @@ static int apical_isp_core_ops_s_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
         case 0x800016b:
         case 0x800016c:
         case 0x9a0914:   /* (no-op) */
-        case 0x9a091a:   /* (no-op) */
-        case 0x98091f:   /* (no-op) */
         case 0x8000001:  /* (no-op) */
         case 0x8000084:  /* (no-op) */
             ret = 0;
@@ -20452,8 +20488,10 @@ int tiziano_gamma_lut_parameter(void)
 		uint32_t reg = 0x40000;
 		int32_t i;
 		for (i = 2; i < 0x102; i += 2) {
-			uint32_t val = ((uint32_t)tiziano_gamma_lut_now[i / 2] << 12) |
-					   (uint32_t)tiziano_gamma_lut_now[(i - 2) / 2];
+			/* Colorfx NEGATIVE inverts the curve (AUTO = stock) */
+			uint32_t val = tx_isp_colorfx_gamma_word(
+				tiziano_gamma_lut_now[(i - 2) / 2],
+				tiziano_gamma_lut_now[i / 2], t31_colorfx);
 
 			system_reg_write(reg, val);
 			system_reg_write(reg + 0x8000, val);
@@ -32466,7 +32504,8 @@ static void tiziano_bcsh_dump2(void)
 
 static void tiziano_bcsh_TransitParam(void)
 {
-    uint8_t user_sat = bcsh_saturation_user;
+    /* Colorfx BW/VIVID act on the saturation used here; AUTO = as set. */
+    uint8_t user_sat = tx_isp_colorfx_sat(t31_colorfx, bcsh_saturation_user);
     uint8_t user_contrast = bcsh_contrast_user;
     uint8_t user_brightness = bcsh_brightness_user;
     uint32_t brightness_scaled = ((uint32_t)user_brightness * bcsh_B) >> 7;
