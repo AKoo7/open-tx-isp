@@ -13755,22 +13755,34 @@ static uint32_t regtrace_t23_source_bypass_forced_off(void)
         mask |= BIT(7);
     if (regtrace_t23_source_awb_stats_init)
         mask |= BIT(25);
-    if (regtrace_t23_source_dpc_tuning_init)
-        mask |= BIT(2);
+    /* DPC (bit 2) and CCM (bit 9) follow the bank flag like the OEM
+     * tisp_init / tisp_day_or_night_s_ctrl (the sc2336 night bank
+     * bypasses DPC; both banks set bit 9). */
     if (regtrace_t23_source_ydns_tuning_init)
         mask |= BIT(17);
     if (regtrace_t23_source_defog_tuning_init &&
         regtrace_t23_source_defog_internal_enable)
         mask |= BIT(11);
-    if (regtrace_t23_source_ccm_tuning_init)
-        mask |= BIT(9);
     return mask;
 }
 
+/*
+ * SetModuleControl (bits 0..18): the bits a user changed and their values.
+ * The OEM rebuilds 0xc from the bank on every day/night or mode switch and
+ * loses them; here they are put back on top of the bank flags, at every
+ * rebuild (switches and stream starts), until the module is reloaded.
+ */
+static uint32_t regtrace_t23_user_bypass_mask;
+static uint32_t regtrace_t23_user_bypass_value;
+
 static uint32_t regtrace_t23_source_bypass_overrides(uint32_t bypass)
 {
-    return (bypass & ~regtrace_t23_source_bypass_forced_off()) |
-           regtrace_t23_source_bypass_forced_on();
+    uint32_t forced_on = regtrace_t23_source_bypass_forced_on();
+
+    bypass = (bypass & ~regtrace_t23_source_bypass_forced_off()) | forced_on;
+    bypass = (bypass & ~regtrace_t23_user_bypass_mask) |
+             (regtrace_t23_user_bypass_value & regtrace_t23_user_bypass_mask);
+    return bypass | forced_on;
 }
 
 static void regtrace_t23_source_mode_flags_apply(const uint32_t *flags)
@@ -92072,6 +92084,28 @@ static void regtrace_t23_source_dn_params_refresh(const char *reason)
         regtrace_t23_source_sdns_gain_old = 0xffffffffU;
     ret = regtrace_t23_source_apply_total_gain_value(gain, 0, true, true);
 
+    /* A block whose parameters did not reload from the new bank is
+     * bypassed rather than run with the previous bank's (the next switch
+     * or stream start rebuilds 0xc from the bank again).  Demosaic stays:
+     * without it there is no colour picture at all. */
+    if (failed) {
+        static const uint8_t block_bit[13] = {
+            5,  /* GIB */     10, /* gamma */   4,  /* LSC */
+            2,  /* DPC */     17, /* YDNS */    0xff, /* DMSC */
+            12, /* BCSH */    12, /* CLM */     16, /* MDNS */
+            15, /* SDNS */    7,  /* ADR */     11, /* defog */
+            14, /* sharpen */
+        };
+        uint32_t bypass = 0;
+        unsigned int i;
+
+        for (i = 0; i < ARRAY_SIZE(block_bit); ++i)
+            if ((failed & BIT(i)) && block_bit[i] != 0xff)
+                bypass |= BIT(block_bit[i]);
+        if (bypass)
+            system_reg_write(0x0cU, system_reg_read(0x0cU) | bypass);
+    }
+
     printk(KERN_WARNING
            "tx_isp_t23_recovered: bank switch block refresh reason=%s gain=0x%x tgain_log2=0x%x failed=0x%x ret=%d r0c=0x%08x\n",
            reason ? reason : "?", gain, regtrace_t23_tgain_log2, failed, ret,
@@ -102076,6 +102110,15 @@ static long regtrace_t23_tuning_cid(bool get, uint32_t id, uint32_t *value)
         /* Blocks this driver never loads stay bypassed. */
         control |= (int32_t)(regtrace_t23_source_bypass_forced_on() &
                              0x7ffffU);
+        {
+            uint32_t changed = ((uint32_t)control ^
+                                system_reg_read(0x0cU)) & 0x7ffffU;
+
+            regtrace_t23_user_bypass_mask |= changed;
+            regtrace_t23_user_bypass_value =
+                (regtrace_t23_user_bypass_value & ~changed) |
+                ((uint32_t)control & changed);
+        }
         tisp_s_module_control(0, control);
         return 0;
     }
