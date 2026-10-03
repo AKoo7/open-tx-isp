@@ -46,6 +46,17 @@ static void t20_ae_integration_limits(const struct tx_isp_sensor_attribute *attr
 	if (!max || (attr->max_integration_time &&
 	    attr->max_integration_time < max))
 		max = attr->max_integration_time;
+	/*
+	 * stab.global_max_integration_time is the AE exposure ceiling: seeded
+	 * from the sensor on every SYNC_VIDEO_IN and lowered by the user through
+	 * SetIntegrationTime(MODE_RANGE) (IMAGE_TUNING_CID_SYSTEM_TAB).  The OEM
+	 * 3.12.0 AE honours it; the compact AE ignored it, so the cap had no
+	 * effect.  Never below the sensor minimum.
+	 */
+	if (stab.global_max_integration_time &&
+	    (!max || stab.global_max_integration_time < max))
+		max = max_t(uint32_t, stab.global_max_integration_time,
+			    *min_integration);
 	*max_integration = max;
 }
 
