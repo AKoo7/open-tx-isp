@@ -12,14 +12,19 @@
 #include <linux/module.h>
 
 #pragma push_macro("EXPORT_SYMBOL")
+#pragma push_macro("EXPORT_SYMBOL_GPL")
 #undef EXPORT_SYMBOL
+#undef EXPORT_SYMBOL_GPL
 #define EXPORT_SYMBOL(sym) EXPORT_SYMBOL_SWALLOWED_##sym
+/* an SDK revision exporting it _GPL is swallowed the same way */
+#define EXPORT_SYMBOL_GPL(sym) EXPORT_SYMBOL_SWALLOWED_##sym
 #define EXPORT_SYMBOL_SWALLOWED_isp_printf \
 	extern int isp_printf(unsigned int level, unsigned char *fmt, ...)
 
 #include "../../../external/ingenic-sdk/3.10.14/isp/t20/tx-isp-debug.c"
 
 #undef EXPORT_SYMBOL_SWALLOWED_isp_printf
+#pragma pop_macro("EXPORT_SYMBOL_GPL")
 #pragma pop_macro("EXPORT_SYMBOL")
 
 EXPORT_SYMBOL(isp_printf);
