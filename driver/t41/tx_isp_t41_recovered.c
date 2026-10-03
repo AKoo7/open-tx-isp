@@ -20723,21 +20723,27 @@ static int t41_tuning_hvflip(const struct tx_isp_tuning_t41_control *request)
     if (!t41_kernel_data_ptr(core))
         return -ENODEV;
     /*
-     * Stock skips an unchanged mode by comparing against its own per-VI
-     * record; tisp_tattr+20 is not that record.  Always stage the sensor
-     * write (idempotent register update): timps re-asserts the flip after
-     * a chn0 restart and a skipped re-assert left the sensor unflipped.
+     * Apply the sensor flip synchronously (process context, I2C).  The
+     * frame-done slot-5 staging of stock was never consumed on this
+     * driver (no sensor event seen on cam-F), so do not depend on it.
+     * Always write: timps re-asserts the flip after a chn0 restart.
      */
     if (t41_sensor_flip_mode != (int)attr[0])
         tisp_lsc_hvflip(*(uint32_t *)(void *)(core + 368),
                         *(uint32_t *)(void *)(core + 372),
                         (attr[0] >> 1) & 1, attr[0] & 1);
-    *(volatile uint32_t *)(void *)(core + 520) = attr[0];
-    smp_wmb();
-    *(volatile uint32_t *)(void *)(core + 516) = 1;
-    t41_sensor_flip_mode = attr[0];
-    printk(KERN_WARNING "tx_isp_t41_recovered: hvflip staged sensor=%u isp=%u/%u/%u\n",
-           attr[0], attr[1], attr[2], attr[3]);
+    {
+        uint32_t event_arg[2] = { 0, attr[0] };
+        int ret = ispcore_sensor_ops_ioctl((uintptr_t)core_sd, 0x02000010,
+                                           (uintptr_t)event_arg);
+
+        t41_sensor_flip_mode = attr[0];
+        printk(KERN_WARNING
+               "tx_isp_t41_recovered: hvflip sensor=%u isp=%u/%u/%u ret=%d "
+               "pid=%d tid-comm=%s\n", attr[0], attr[1], attr[2], attr[3],
+               ret, task_tgid_nr(current), current->comm);
+        return ret;
+    }
     return 0;
 }
 
