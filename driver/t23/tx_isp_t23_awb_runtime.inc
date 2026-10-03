@@ -201,7 +201,7 @@ static int regtrace_t23_awb_hlil_calculate(
     uint32_t average_rg_q;
     uint32_t average_bg_q;
     uint32_t active_zones = 0;
-    bool indoor = regtrace_t23_source_ae_hlil_ev >=
+    bool indoor = regtrace_t23_ae_ev_q10() >=
                   (REGTRACE_T23_AWB_HLIL_INDOOR_EV << q);
     const uint32_t *rgbg_weight_mesh = indoor ?
         regtrace_t23_awb_hlil_indoor_ct_weight_mesh :
@@ -552,7 +552,7 @@ static void regtrace_t23_source_awb_hlil_work_body(struct work_struct *work)
 
             if (delta > 0x20U)
                 regtrace_t23_source_ccm_commit(
-                    result.ct, regtrace_t23_source_ae_hlil_ev);
+                    result.ct, regtrace_t23_ae_ev_q10());
         }
         if (regtrace_t23_source_lsc_events &&
             regtrace_t23_source_lsc_tuning_init &&
@@ -607,7 +607,7 @@ static void regtrace_t23_source_awb_hlil_work_body(struct work_struct *work)
                    regtrace_t23_awb_hlil_snapshot_data.snapshot,
                    regtrace_t23_awb_hlil_snapshot_data.bank,
                    result.active_zones, result.light_source_zones,
-                   regtrace_t23_source_ae_hlil_ev,
+                   regtrace_t23_ae_ev_q10(),
                    result.rg, result.bg, result.ct, wb_mode,
                    mf_rg, mf_bg, gain_rg, gain_bg,
                    regtrace_t23_source_awb_hlil_updates);

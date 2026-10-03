@@ -9821,6 +9821,8 @@ static uint regtrace_t23_source_ae_hlil_drops;
 static uint regtrace_t23_source_ae_hlil_luma;
 static uint regtrace_t23_source_ae_hlil_state;
 static uint regtrace_t23_source_ae_hlil_ev = 1436U << 10;
+/* scene EV (Q10) for AWB/CCM: hlil_ev, or the lifted AE's event 6 (glue) */
+static uint32_t regtrace_t23_ae_ev_q10(void);
 static uint regtrace_t23_source_ae_hlil_status;
 static uint regtrace_t23_source_ae_compensation = 128U;
 static uint32_t regtrace_t23_source_ae_scene_luma[8];
@@ -13604,7 +13606,7 @@ static int regtrace_t23_source_ccm_write_tuning_startup(void)
     regtrace_t23_ccm_user_apply();
     ret = regtrace_t23_source_ccm_commit(
         regtrace_t23_source_ccm_runtime_ct,
-        regtrace_t23_source_ae_hlil_ev);
+        regtrace_t23_ae_ev_q10());
     if (ret)
         return ret;
 
@@ -13687,7 +13689,7 @@ static int regtrace_t23_source_ccm_select_bank(const void *bank)
     if (!ret && regtrace_t23_source_ccm_tuning_init)
         ret = regtrace_t23_source_ccm_commit(
             regtrace_t23_source_ccm_runtime_ct,
-            regtrace_t23_source_ae_hlil_ev);
+            regtrace_t23_ae_ev_q10());
     if (!ret)
         return 0;
 
@@ -102071,7 +102073,7 @@ static long regtrace_t23_tuning_cid(bool get, uint32_t id, uint32_t *value)
         if (regtrace_t23_source_ccm_tuning_init && regtrace_t23_core_started)
             ret = regtrace_t23_source_ccm_commit(
                 regtrace_t23_source_ccm_runtime_ct,
-                regtrace_t23_source_ae_hlil_ev);
+                regtrace_t23_ae_ev_q10());
         return ret;
     }
     case REGTRACE_TISP_CTRL_TEMPER:
@@ -102195,7 +102197,9 @@ static long regtrace_t23_tuning_cid(bool get, uint32_t id, uint32_t *value)
         return ret;
     case REGTRACE_TISP_CTRL_MAX_AGAIN:
         if (get) {
-            *value = regtrace_t23_ae_get_max_again();
+            /* lifted AE: stock apical_isp_max_again_g_ctrl (live) */
+            if (!t23_aelift_g_max(11U, value))
+                *value = regtrace_t23_ae_get_max_again();
             return 0;
         }
         mutex_lock(&regtrace_t23_sensor_fps_lock);
@@ -102204,7 +102208,9 @@ static long regtrace_t23_tuning_cid(bool get, uint32_t id, uint32_t *value)
         return ret;
     case REGTRACE_TISP_CTRL_MAX_DGAIN:
         if (get) {
-            *value = regtrace_t23_ae_get_max_dgain();
+            /* lifted AE: stock apical_isp_max_dgain_g_ctrl (live) */
+            if (!t23_aelift_g_max(12U, value))
+                *value = regtrace_t23_ae_get_max_dgain();
             return 0;
         }
         mutex_lock(&regtrace_t23_sensor_fps_lock);

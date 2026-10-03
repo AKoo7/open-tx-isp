@@ -401,6 +401,20 @@ static uint8_t *t23_aelift_saved;
 static bool t23_aelift_inited;
 static uint32_t t23_aelift_init_w, t23_aelift_init_h, t23_aelift_init_fps;
 static uint32_t t23_aelift_tgain;		/* last event-4 total gain, Q16 */
+static uint32_t t23_aelift_ev_q10;		/* last event-6 scene EV, Q10 */
+static bool t23_aelift_ev_seen;
+
+/*
+ * Scene EV for AWB (indoor/outdoor weights) and the CCM saturation.  Stock
+ * gets it from AE event 6 (tisp_long_ev_update -> tisp_awb_ev_update,
+ * tisp_ccm_ev_update); with the HLIL substitute it is its rung EV.
+ */
+static uint32_t regtrace_t23_ae_ev_q10(void)
+{
+	if (regtrace_t23_source_ae_oem && t23_aelift_ev_seen)
+		return t23_aelift_ev_q10;
+	return regtrace_t23_source_ae_hlil_ev;
+}
 
 static void t23_aelift_state_copy(bool save)
 {
@@ -552,6 +566,23 @@ static void t23_aelift_work_fn(struct work_struct *work)
 	spin_unlock_irqrestore(&t23_aelift_ev_lock, flags);
 	for (i = 0; i < n; i++) {
 		/* stock tisp_long_tgain_update: arg0 = log2 total gain, Q16 */
+		/*
+		 * stock tisp_long_ev_update: arg0 = scene EV, Q10.  AWB takes
+		 * it as is; the CCM is recomputed when its EV-dependent
+		 * saturation moves (as the HLIL substitute does on a rung
+		 * change; stock jz_isp_ccm on an EV step).
+		 */
+		if (ev[i].id == 6U) {
+			t23_aelift_ev_q10 = ev[i].args[0];
+			t23_aelift_ev_seen = true;
+			if (regtrace_t23_source_ccm_events &&
+			    regtrace_t23_source_ccm_tuning_init &&
+			    regtrace_t23_ccm_saturation(t23_aelift_ev_q10) !=
+			    regtrace_t23_source_ccm_last_saturation)
+				regtrace_t23_source_ccm_commit(
+					regtrace_t23_source_ccm_runtime_ct,
+					t23_aelift_ev_q10);
+		}
 		if (ev[i].id == 4U) {
 			t23_aelift_tgain = tisp_math_exp2(ev[i].args[0], 16, 16);
 			if (t23_aelift_debug)
@@ -660,6 +691,23 @@ static bool t23_aelift_ev_info(struct regtrace_t23_ev_info *info)
 	info->it_min = *(uint16_t *)(void *)((uint8_t *)w + 0x78);
 	info->it_max = *(uint16_t *)(void *)((uint8_t *)w + 0x7a);
 	info->line_us = *(uint16_t *)(void *)((uint8_t *)w + 0x88);
+	return true;
+}
+
+/*
+ * MAX_AGAIN / MAX_DGAIN read-back while the lifted AE runs: stock
+ * apical_isp_max_again_g_ctrl / _max_dgain_g_ctrl return tisp_g_ev_attr
+ * word 11 / 12 (the live limit from tisp_ae_ctrls, log2 Q5).
+ */
+static bool t23_aelift_g_max(unsigned int word, uint32_t *value)
+{
+	uint32_t w[36];
+
+	if (!regtrace_t23_source_ae_oem || !t23_aelift_inited)
+		return false;
+	memset(w, 0, sizeof(w));
+	t23_aelift_g_ev_attr(w);
+	*value = w[word];
 	return true;
 }
 

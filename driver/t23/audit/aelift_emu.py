@@ -205,6 +205,9 @@ def run_scene(name, scene, night=False, flicker_amp=0.0, deflicker=None, frames=
     print('   ev_attr end: it %d ev %d us %d again %d ispdg %d tgain_db %d total_gain %d manual %d (%s)' % (
         w[0], w[2], w[4], w[7], w[8], w[9], w[10], w[15],
         'same all frames' if a.evattr == b.evattr else 'DIFF'))
+    e6 = [e[1] for e in a.ev if e[0] == 6]
+    print('   event 6 (AWB/CCM EV, Q10): %d events, last %s; max again %d max ISP dgain %d (getters)' % (
+        len(e6), e6[-1] if e6 else '-', w[11], w[12]))
     if not same:
         for nm, A, B in (('writes', a.c.writes, b.c.writes), ('events', a.ev, b.ev), ('sensor', a.sens, b.sens),
                          ('ev_attr', a.evattr, b.evattr)):
