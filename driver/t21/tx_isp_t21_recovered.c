@@ -19061,7 +19061,15 @@ int32_t awb_interrupt_static(void)
  * gains/CT.  With awb_ir_freeze the estimation is skipped while day_night
  * is 1 (gains, _awb_ct and so CCM/LSC keep their last day values), the day
  * gains in 0x604/0x608 are snapshotted at the day->night switch and written
- * back at the night->day switch.
+ * back at the night->day switch.  The day->night parameter switch itself
+ * writes the night parameter set's gains into 0x604/0x608, so the snapshot
+ * is taken before it and the restore after the return switch.  The
+ * night->day refresh sets first_frame, which makes the next JZ_Isp_Awb take
+ * the gains measured from that frame's statistics instead of filtering from
+ * the current ones (the restore would be overwritten at once), so the
+ * restore also clears first_frame.  The freeze is not applied while the
+ * user selected a manual/preset white balance (tisp_s_wb_mode) or froze the
+ * AWB (awb_frz): the stock AWB applies those and has to keep running.
  */
 static uint awb_lux_hyst = 10;
 module_param(awb_lux_hyst, uint, 0644);
@@ -19143,12 +19151,21 @@ static void t21_awb_dn_pre(uint32_t mode)
 	}
 }
 
+/* The user took over white balance: manual/preset mode or frozen AWB. */
+static bool t21_awb_user_wb(void)
+{
+	return ACCESS_ONCE(tisp_wb_attr.mode) != 0 || ACCESS_ONCE(awb_frz);
+}
+
 static void t21_awb_dn_post(uint32_t mode, uint32_t prev)
 {
 	if (mode == 0 && prev == 1 && awb_ir_freeze && awb_day_gain_valid &&
-	    !ACCESS_ONCE(awb_frz)) {
+	    !t21_awb_user_wb()) {
 		system_reg_write(0x604, awb_day_gain[0]);
 		system_reg_write(0x608, awb_day_gain[1]);
+		/* tiziano_awb_dn_params_refresh set first_frame: the first day
+		 * AWB frame would replace these gains by the measured ones */
+		ACCESS_ONCE(first_frame) = 0;
 	}
 }
 
@@ -19157,7 +19174,7 @@ int32_t JZ_Isp_Awb(void)
 	u32 ev, eff;
 	int32_t ret;
 
-	if (awb_ir_freeze && day_night == 1)
+	if (awb_ir_freeze && day_night == 1 && !t21_awb_user_wb())
 		return 0;
 	ev = awb_ev;
 	eff = t21_awb_hyst_ev(ev);
