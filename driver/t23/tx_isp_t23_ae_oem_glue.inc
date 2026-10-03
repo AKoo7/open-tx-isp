@@ -439,6 +439,7 @@ static void t23_aelift_state_copy(bool save)
 
 static void t23_aelift_s_max_gain(unsigned int slot, unsigned int flag_off,
 				  uint32_t value);
+static int t23_aelift_s_antiflick(uint32_t hz);
 static uint32_t t23_aelift_max_set[4];	/* value + 1 per slot, 0 = unset */
 
 static void t23_aelift_start(void)
@@ -494,6 +495,9 @@ static void t23_aelift_start(void)
 		if (t23_aelift_max_set[3])
 			t23_aelift_s_max_gain(3U, 0x1cU, t23_aelift_max_set[3] - 1U);
 	}
+	/* an anti-flicker mode set before the lift ran (fresh start only) */
+	if (!ret && !resume && regtrace_t23_ae_flicker_mode)
+		t23_aelift_s_antiflick(regtrace_t23_ae_flicker_mode == 1U ? 50U : 60U);
 	/* an AE compensation set before the lift ran (it is stored only) */
 	if (!ret && regtrace_t23_source_ae_compensation != 128U)
 		T23_AELIFT_CALL(LA_tisp_ae_s_comp,
@@ -520,6 +524,76 @@ static void t23_aelift_s_max_gain(unsigned int slot, unsigned int flag_off,
 	((uint32_t *)(void *)oem_ae_exp_th)[slot] =
 		tisp_math_exp2(value, 5, 10);
 	((uint32_t *)(void *)oem_IspAeFlag)[7] = 0;
+}
+
+/*
+ * Stock tisp_s_antiflick (0x658c4) for the lifted AE.  hz is 0 (off), 50 or
+ * 60 (the 0x980918 power line control maps 0/1/2 through the same table).
+ * The deflicker parameters (12 bytes, word 0 = enable) and the flicker
+ * timing (24 bytes: hz, fps, VTS, sensor+0x48) come from the active bank
+ * (tparams+0x13348/+0x13354); tiziano_deflicker_expt_tune rebuilds the
+ * deflicker LUT for hz; both blocks go back into tparams and the day and
+ * night banks (+584/+596, so a day/night refresh keeps them), into the AE's
+ * copies with the reload flags (tisp_api_ae_deflick_para_set /
+ * tisp_api_ae_flick_t_set) and tisp_ae_trig reloads the AE hardware
+ * parameters.  Off keeps the last frequency, as stock.
+ */
+static uint32_t t23_aelift_flicker_hz;
+
+static int t23_aelift_s_antiflick(uint32_t hz)
+{
+	uint32_t *flags = (uint32_t *)(void *)oem_IspAeFlag;
+	uint32_t para[3];
+	uint32_t ft[6];
+	uint32_t stk[8] = { 0 };
+	uint32_t fps;
+	uint32_t vts;
+	uint32_t u48;
+
+	if (hz != 0 && hz != 50U && hz != 60U)
+		return -EINVAL;
+	if (hz)
+		t23_aelift_flicker_hz = hz;
+	if (!t23_aelift_ready)
+		return 0;	/* t23_aelift_start replays it */
+	memcpy(para, tparams + 0x13348, sizeof(para));
+	memcpy(ft, tparams + 0x13354, sizeof(ft));
+	para[0] = hz ? 1U : 0U;
+	fps = *(uint32_t *)(void *)(oem_sensor_info + 0x30);
+	vts = *(uint16_t *)(void *)(oem_sensor_info + 0x4a);
+	u48 = *(uint16_t *)(void *)(oem_sensor_info + 0x48);
+	/* stock outgoing argument area: 16(sp) LUT, 20(sp) node count */
+	stk[4] = (uint32_t)(uintptr_t)oem__deflick_lut;
+	stk[5] = (uint32_t)(uintptr_t)oem__nodes_num;
+	LA_tiziano_deflicker_expt(t23_aelift_flicker_hz, fps, vts, u48,
+				  (uint32_t)(uintptr_t)stk);
+	ft[0] = t23_aelift_flicker_hz;
+	ft[1] = fps;
+	ft[2] = vts;
+	ft[3] = u48;
+	memcpy(tparams + 0x13348, para, sizeof(para));
+	memcpy(oem__deflicker_para, para, sizeof(para));
+	memcpy(tparams + 0x13354, ft, sizeof(ft));
+	memcpy(oem__flicker_t, ft, sizeof(ft));
+	if (tparams_day) {
+		memcpy((void *)(tparams_day + 584), para, sizeof(para));
+		memcpy((void *)(tparams_day + 596), ft, sizeof(ft));
+	}
+	if (tparams_night) {
+		memcpy((void *)(tparams_night + 584), para, sizeof(para));
+		memcpy((void *)(tparams_night + 596), ft, sizeof(ft));
+	}
+	/* tisp_ae_trig on the lifted copies */
+	flags[4] = 1;
+	flags[5] = 1;
+	flags[6] = 1;
+	flags[7] = 0;
+	T23_AELIFT_CALL(LA_tiziano_ae_set_hardware_param, 0,
+			(uint32_t)(uintptr_t)oem__ae_parameter, 1, 0);
+	printk(KERN_INFO
+	       "tx_isp_t23_recovered: stock AE0 antiflicker %u Hz (enable %u) fps=0x%x vts=%u\n",
+	       t23_aelift_flicker_hz, para[0], fps, vts);
+	return 0;
 }
 
 /* Sensor stream on: the exposure the lifted AE set last (0 = none yet). */

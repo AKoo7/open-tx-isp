@@ -9756,6 +9756,7 @@ static int regtrace_t23_sensor_registered;
 #define REGTRACE_TISP_CTRL_TOTAL_GAIN TX_ISP_TUNING_CMD_TOTAL_GAIN
 #define REGTRACE_TISP_CTRL_AE_LUMA TX_ISP_TUNING_CMD_AE_LUMA
 #define REGTRACE_TISP_CTRL_CUSTOM_MODE 0x080000e7U
+#define REGTRACE_TISP_CTRL_FRONT_CROP 0x080000e3U
 #define REGTRACE_TISP_CTRL_AE_COMP TX_ISP_TUNING_CMD_AE_COMP
 #define REGTRACE_TISP_CTRL_SINTER TX_ISP_TUNING_CMD_SINTER
 #define REGTRACE_TISP_CTRL_RUNNING_MODE TX_ISP_TUNING_CMD_T31_RUNNING_MODE
@@ -9903,7 +9904,7 @@ static bool regtrace_t23_ae_hlil_resume;
 /* sensor the resume point was reached with */
 static char regtrace_t23_ae_hlil_resume_sensor[32];
 static bool regtrace_t23_source_ae_hlil = true;
-static bool regtrace_t23_source_ae_oem = false; /* tx_isp_t23_ae_oem_glue.inc */
+static bool regtrace_t23_source_ae_oem = true; /* tx_isp_t23_ae_oem_glue.inc */
 static uint32_t t23_aelift_stream_packed(void);  /* ditto */
 static uint regtrace_t23_source_ae_hlil_interval = 32;
 /*
@@ -45400,157 +45401,63 @@ int32_t tisp_msca_api_set_mirr_flip(int32_t arg1, void *arg2)
 	return 0;
 }
 
-/* WHOLE_DRIVER_CANDIDATE fn_000000000001b310 origin=fragment_seed original=tisp_msca_api_get_fcrop */
+/*
+ * Stock tisp_msca_api_get_fcrop (0x1b310): IMPISPFrontCrop from channel 0's
+ * MSCA state: enable (byte), top, left, width, height.
+ */
 int32_t tisp_msca_api_get_fcrop(uint32_t a0, uintptr_t a1)
 {
-    uint32_t ra = 0;
-    uintptr_t *v0 = 0;
-    uint32_t v1 = 0;
+    unsigned char *out = (unsigned char *)a1;
 
-    /* fragment 0: Arithmetic */
-    v0 = (uintptr_t *)&fcrop_en;
-
-    /* fragment 1: MemoryAccess */
-    v0 = *(uint32_t *)((char *)((char *)&fcrop_en));
-    v0 = 0 < v0;
-    *(uint8_t *)((char *)a1 + 0) = v0;
-    v0 = (uintptr_t *)&msca;
-    v0 = v0;
-    v1 = *(uint32_t *)((char *)v0 + 16);
-    *(uint32_t *)((char *)a1 + 8) = v1;
-    v1 = *(uint32_t *)((char *)v0 + 20);
-    *(uint32_t *)((char *)a1 + 4) = v1;
-    v1 = *(uint32_t *)((char *)v0 + 24);
-    *(uint32_t *)((char *)a1 + 12) = v1;
-    v0 = *(uint32_t *)((char *)v0 + 28);
-
-    /* fragment 2: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    /* fragment 3: MemoryAccess */
-    *(uint32_t *)((char *)a1 + 16) = v0;
-
+    (void)a0;
+    if (!out)
+        return -EINVAL;
+    out[0] = fcrop_en != 0;
+    memcpy(out + 8, msca + 0x10, 4);    /* left */
+    memcpy(out + 4, msca + 0x14, 4);    /* top */
+    memcpy(out + 12, msca + 0x18, 4);   /* width */
+    memcpy(out + 16, msca + 0x1c, 4);   /* height */
     return 0;
 }
 
-/* WHOLE_DRIVER_CANDIDATE fn_000000000001b34c origin=fragment_seed original=tisp_msca_api_set_fcrop */
-int32_t tisp_msca_api_set_fcrop(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t arg4, uint32_t arg5)
+/*
+ * Stock tisp_msca_api_set_fcrop (0x1b34c), reached from the 0x80000e3 control
+ * as (0, enable, top, left, width, height).  With enable set every channel
+ * takes the window as its sensor-side input (left/top/width/height at
+ * +0x10..+0x1c), locks it against the channel attributes (+3) and has its
+ * scaler parameters, curves and channel configuration recomputed, then the
+ * shadow registers are latched (0xd010).  enable == 0 only logs and clears
+ * fcrop_en: the stock module leaves the last window in place.  Channels that
+ * are not running get the window for their next start; the running ones are
+ * reloaded through this driver's channel load (same OEM call order).
+ */
+int32_t tisp_msca_api_set_fcrop(uint32_t a0, uint32_t a1, uint32_t a2,
+                                uint32_t a3, uint32_t arg4, uint32_t arg5)
 {
-    uint32_t *local_10 = 0;
-    uint32_t *local_14 = 0;
-    uint32_t *local_18 = 0;
-    uint32_t local_1c = 0;
-    uint32_t local_20 = 0;
-    uint32_t local_24 = 0;
-    uint32_t local_28 = 0;
-    uint32_t local_2c = 0;
-    uint32_t local_30 = 0;
-    uint32_t local_34 = 0;
-    uint32_t local_3c = 0;
-    uint32_t local_40 = 0;
-    uint32_t local_44 = 0;
-    uint32_t local_48 = 0;
-    uint32_t local_4c = 0;
-    uint32_t ra = 0;
-    uintptr_t *s0 = 0;
-    uint32_t *s1 = 0;
-    uint32_t *s2 = 0;
-    uint32_t *s3 = 0;
-    uint32_t *s4 = 0;
-    uint32_t *s5 = 0;
-    uint32_t *s6 = 0;
-    uint32_t s7 = 0;
-    uint32_t s8 = 0;
-    uintptr_t *v0 = 0;
+    uint32_t enable = a1 & 0xffU;
+    uint32_t channel;
 
-    /* fragment 0: Prologue */
-    /* function prologue: stack frame and callee-saved register setup */
+    (void)a0;
+    if (!enable) {
+        isp_printf(2, "tisp_msca_api_set_fcrop: front crop disabled, window kept (as stock)\n");
+        fcrop_en = 0;
+        return 0;
+    }
+    for (channel = 0; channel < 3U; channel++) {
+        unsigned char *cfg = msca + channel * 56U;
 
-    /* fragment 1: Arithmetic */
-    s3 = a1 & 255;
-
-    /* fragment 2: StackAccess */
-    local_34 = ra;
-    local_30 = s8;
-    local_2c = s7;
-    local_28 = s6;
-    local_24 = s5;
-    local_20 = s4;
-    local_18 = s2;
-    local_14 = s1;
-    local_10 = s0;
-    local_3c = a1;
-    local_40 = a2;
-
-    /* fragment 3: Branch */
-    local_44 = a3;
-    if (s3 == 0) { goto tisp_msca_api_set_fcrop0xf8; }
-
-    /* fragment 4: Arithmetic */
-    s0 = (uintptr_t *)&msca;
-    s2 = a0 & 255;
-    s0 = s0;
-    s1 = 0;
-    s8 = (uintptr_t)&tisp_msca_para_calc;
-    s7 = (uintptr_t)&tisp_msca_curve_calc;
-    s6 = (uintptr_t *)&tisp_msca_init_chx_cfg;
-    s5 = (uintptr_t *)&tisp_msca_ch_curve_write_ctrl;
-    s4 = (uintptr_t *)&system_reg_write;
-
-tisp_msca_api_set_fcrop0x64:
-    /* fragment 5: CallSetup */
-    *(uint32_t *)((char *)s0 + 16) = local_44;
-    *(uint32_t *)((char *)s0 + 20) = local_40;
-    *(uint32_t *)((char *)s0 + 24) = local_48;
-    *(uint32_t *)((char *)s0 + 28) = local_4c;
-    *(uint8_t *)((char *)s0 + 3) = 1;
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t))(uint32_t *)tisp_msca_para_calc)(s2, s1, s0); /* jalr target resolved by relocation */
-
-    /* fragment 6: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uint32_t *)tisp_msca_curve_calc)(s2, s1); /* jalr target resolved by relocation */
-
-    /* fragment 7: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t))(uint32_t *)tisp_msca_init_chx_cfg)(s2, s1, s0); /* jalr target resolved by relocation */
-
-    /* fragment 8: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t))(uintptr_t)tisp_msca_ch_curve_write_ctrl)(s2); /* jalr target resolved by relocation */
-
-    /* fragment 9: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uint32_t *)system_reg_write)(53264, 1); /* jalr target resolved by relocation */
-
-    /* fragment 10: Arithmetic */
-    s1 = s1 + 1;
-    v0 = 3;
-
-    /* fragment 11: Branch */
-    s0 = s0 + 56;
-    if (s1 != v0) { goto tisp_msca_api_set_fcrop0x64; }
-
-    /* fragment 12: Branch */
-    goto tisp_msca_api_set_fcrop0x114;
-
-tisp_msca_api_set_fcrop0xf8:
-    /* fragment 13: CallSetup */
-    v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t))(uint32_t *)isp_printf)(2, &LC7); /* jalr target resolved by relocation */
-
-    /* fragment 14: Epilogue */
-    /* function epilogue: restore registers and return */
-    return (int32_t)v0;
-
-tisp_msca_api_set_fcrop0x114:
-    /* fragment 15: Arithmetic */
-    v0 = (uintptr_t *)&fcrop_en;
-
-    /* fragment 16: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    /* fragment 17: MemoryAccess */
-    *(uint32_t *)((char *)((char *)&fcrop_en)) = s3;
-    s3 = local_1c;
-
-    /* fragment 18: Epilogue */
-    /* function epilogue: restore registers and return */
-
+        regtrace_t23_put_le32(cfg + 0x10, a3);      /* left */
+        regtrace_t23_put_le32(cfg + 0x14, a2);      /* top */
+        regtrace_t23_put_le32(cfg + 0x18, arg4);    /* width */
+        regtrace_t23_put_le32(cfg + 0x1c, arg5);    /* height */
+        cfg[3] = 1;
+        if (cfg[0] && regtrace_t23_core_started)
+            tisp_msca_chx_cfg_load(0, channel, (uintptr_t)cfg);
+    }
+    system_reg_write(0xd010U, 1);
+    fcrop_en = enable;
+    printk(KERN_INFO "tx_isp_t23_recovered: front crop top=%u left=%u %ux%u\n",
+           a2, a3, arg4, arg5);
     return 0;
 }
 
@@ -79655,6 +79562,19 @@ uint8_t tisp_ae_g_luma(uint8_t *arg1)
 {
     uint8_t result = (uint8_t)min(regtrace_t23_source_ae_hlil_luma, 255U);
 
+    /*
+     * Lifted stock AE: stock tisp_ae_g_luma, the mean of its AE0 histogram
+     * (the substitute's luma is not maintained then).
+     */
+    if (regtrace_t23_source_ae_oem) {
+        uint8_t luma = 0;
+
+        if (t23_aelift_ready)
+            T23_AELIFT_CALL(LA_tisp_ae_g_luma, (uint32_t)(uintptr_t)&luma,
+                            0, 0, 0);
+        result = luma;
+    }
+
     if (arg1)
         *arg1 = result;
     return result;
@@ -101957,6 +101877,30 @@ static long regtrace_t23_tuning_cid(bool get, uint32_t id, uint32_t *value)
     long ret = 0;
 
     switch (id) {
+    case REGTRACE_TISP_CTRL_FRONT_CROP: {
+        /* IMPISPFrontCrop: bool enable, top, left, width, height */
+        uint32_t fc[5];
+
+        if (get) {
+            memset(fc, 0, sizeof(fc));
+            tisp_msca_api_get_fcrop(0, (uintptr_t)fc);
+            return regtrace_t23_copy_out(v, fc, sizeof(fc));
+        }
+        ret = regtrace_t23_copy_in(fc, v, sizeof(fc));
+        if (ret)
+            return ret;
+        /*
+         * The stock module takes any window.  A window outside the sensor
+         * picture or below the scaler minimum stalls the MSCA here, so it
+         * is rejected (beyond vendor).
+         */
+        if ((fc[0] & 0xffU) &&
+            (fc[3] < 64U || fc[4] < 64U || (fc[3] & 1U) || (fc[4] & 1U) ||
+             fc[2] + fc[3] > regtrace_t23_source_sensor_width ||
+             fc[1] + fc[4] > regtrace_t23_source_sensor_height))
+            return -EINVAL;
+        return tisp_msca_api_set_fcrop(0, fc[0], fc[1], fc[2], fc[3], fc[4]);
+    }
     case REGTRACE_TISP_CTRL_WB_ATTR: {
         struct { uint32_t mode; uint16_t rgain; uint16_t bgain; } wb;
         uint32_t attr[7];
@@ -102164,6 +102108,15 @@ static long regtrace_t23_tuning_cid(bool get, uint32_t id, uint32_t *value)
         }
         if (v > 2U)
             return -EINVAL;
+        if (regtrace_t23_source_ae_oem) {
+            /* lifted stock AE: stock tisp_s_antiflick on its copies */
+            static const uint32_t hz_of_mode[3] = { 0, 50U, 60U };
+
+            ret = t23_aelift_s_antiflick(hz_of_mode[v]);
+            if (!ret)
+                regtrace_t23_ae_flicker_mode = v;
+            return ret;
+        }
         mutex_lock(&regtrace_t23_sensor_fps_lock);
         ret = regtrace_t23_ae_set_antiflicker(v);
         mutex_unlock(&regtrace_t23_sensor_fps_lock);
