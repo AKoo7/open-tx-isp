@@ -2509,6 +2509,59 @@ static unsigned int isp_m0_get(unsigned int type, unsigned int id)
 	return status == ISP_SUCCESS ? (unsigned int)reason : 0;
 }
 
+/*
+ * Read-only CCM / LSC / Iridix state, appended after the T31-format lines
+ * so no existing consumer (first-match or last-match parsers) changes.
+ * Everything is read back from the Apical registers the firmware writes:
+ *  - top 0x40: bit 17 colour matrix, bit 14 mesh shading, bit 15 Iridix,
+ *    bit 1 ISP mirror (set = bypassed).  The bypass bits come from the IQ
+ *    bank (customer top, applied on every day/night switch) and the
+ *    LSC/DRC tuning controls.
+ *  - 0x480..0x4a0: the CCM color_matrix_update() writes every frame
+ *    (CT-blended, saturation applied), 9 x s16 sign-magnitude, 256 = 1.0.
+ *  - 0x380 bit 0 mesh enable, 0x394 CT bank per channel, 0x398 blend
+ *    between the banks, 0x39c low 16 bits the gain-modulated strength.
+ *  - t20_mesh_mirrored: whether the last mesh (re)load mirrored the
+ *    table columns (it follows the ISP mirror bit at reload time).
+ */
+extern int t20_mesh_mirrored;
+extern int t20_mesh_mode;
+
+static int isp_m0_s16(unsigned int v)
+{
+	return (v & 0x8000) ? -(int)(v & 0x7fff) : (int)(v & 0x7fff);
+}
+
+static void isp_m0_show_ccm_lsc(struct seq_file *m)
+{
+	unsigned int top = APICAL_READ_32(0x40);
+	unsigned int bank = APICAL_READ_32(0x394);
+	unsigned int alpha = APICAL_READ_32(0x398);
+	int c[9];
+	int i;
+
+	for (i = 0; i < 9; i++)
+		c[i] = isp_m0_s16(APICAL_READ_32(0x480 + 4 * i) & 0xffff);
+
+	seq_printf(m, "ISP CCM module : %s\n", (top & (1 << 17)) ? "Bypass" : "Enable");
+	seq_printf(m, "ISP CCM : %d %d %d / %d %d %d / %d %d %d\n",
+		   c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7], c[8]);
+	seq_printf(m, "ISP LSC module : %s\n",
+		   (top & (1 << 14)) ? "Bypass" :
+		   (APICAL_READ_32(0x380) & 1) ? "Enable" : "Disable");
+	seq_printf(m, "ISP LSC strength : %d\n", APICAL_READ_32(0x39c) & 0xffff);
+	seq_printf(m, "ISP LSC CT bank : %d %d %d blend %d %d %d\n",
+		   bank & 7, (bank >> 8) & 7, (bank >> 16) & 7,
+		   alpha & 0xff, (alpha >> 8) & 0xff, (alpha >> 16) & 0xff);
+	seq_printf(m, "ISP LSC mesh : mode %d, %s, ISP mirror %s\n",
+		   t20_mesh_mode,
+		   t20_mesh_mirrored < 0 ? "not loaded" :
+		   t20_mesh_mirrored ? "mirrored" : "normal",
+		   (top & 2) ? "Disable" : "Enable");
+	seq_printf(m, "ISP Iridix module : %s\n", (top & (1 << 15)) ? "Bypass" : "Enable");
+	seq_printf(m, "ISP Iridix strength : %d\n", APICAL_READ_32(0x3c4) & 0xff);
+}
+
 static int isp_m0_show(struct seq_file *m, void *v)
 {
 	struct tx_isp_core_device *core = m->private;
@@ -2612,9 +2665,15 @@ static int isp_m0_show(struct seq_file *m, void *v)
 	seq_printf(m, "Contrast : %d\n", isp_m0_get(TSCENE_MODES, CONTRAST_STRENGTH_ID));
 	seq_printf(m, "Brightness : %d\n", isp_m0_get(TSCENE_MODES, BRIGHTNESS_STRENGTH_ID));
 	seq_printf(m, "Antiflicker : %d\n", isp_m0_get(TALGORITHMS, ANTIFLICKER_MODE_ID));
+	/* The hflip/vflip controls never reach the firmware's ORIENTATION
+	 * nodes (they set core->hflip_state, applied as the ISP mirror at
+	 * frame end, and core->vflip_state, applied as the DMA direction),
+	 * so those nodes always read their init value; report what is
+	 * applied instead. */
 	seq_printf(m, "Mirror: %s, Flip: %s\n",
-		   isp_m0_get(TIMAGE, ORIENTATION_HFLIP_ID) ? "Enable" : "Disable",
-		   isp_m0_get(TIMAGE, ORIENTATION_VFLIP_ID) ? "Enable" : "Disable");
+		   core->hflip_state ? "Enable" : "Disable",
+		   core->vflip_state ? "Enable" : "Disable");
+	isp_m0_show_ccm_lsc(m);
 	return 0;
 }
 
