@@ -2060,6 +2060,8 @@ int32_t iridix_init_pre_post_gamma(int32_t *arg1);
 int32_t iridix_initialize(int32_t *arg1);
 unsigned int iridix_control_strength_calculate(int32_t * arg1);
 int32_t iridix_update(int32_t *arg1);
+extern uint32_t t20_drc_ratio;
+extern uint32_t t20_defog_floor;
 uint32_t _update_ds(uint32_t *arg1);
 int32_t _update_ds2(uint32_t *arg1);
 int32_t _update_fr(uint32_t *arg1);
@@ -8766,9 +8768,9 @@ int32_t scene_mode(void *arg1, int32_t arg2, char arg3, int32_t *arg4)
         result = apical_command(3, 0x5b, 0x8c, 0, arg4);
         if (result != 0)
             return 5;
-        if (s2_val == 0)
-            return 5;
-        break;
+        /* OEM 0x4398-0x43ac: return here; the lift's break fell into
+         * label_1d418 and stored an uninitialised max integration time. */
+        return s2_val ? 0 : 5;
     case 0x49:
     case 0x4a:
         s4_val = 0;
@@ -8818,9 +8820,10 @@ label_1d5ac:
         return 5;
 
 label_1d3e0:
-    result = 0;
-    if (s2_val == 0)
-        return 5;
+    /* OEM 0x42cc: return 0 when the AE/AWB/saturation resets succeeded,
+     * else 5.  The lift fell through into label_1d5dc, which jumps back
+     * here: an endless loop for every mode that reached this label. */
+    return s2_val ? 0 : 5;
 
 label_1d5dc:
     *(uint8_t *)((char *)arg1 + 0xf96) = 1;
@@ -9161,89 +9164,51 @@ int32_t antifog_mode(int32_t arg1, int32_t arg2, char arg3, int32_t *arg4)
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001dc08 origin=model_output original=antifog_set_preset */
 int32_t antifog_set_preset(void *arg1, int32_t arg2, char arg3, int32_t *arg4)
 {
-    uint8_t *base = (uint8_t *)arg1;
-    uint8_t preset = (uint8_t)arg3;
-    int32_t result;
-    uint8_t *stab;
-    uint8_t *stab_40;
-    uint8_t *stab_9;
-    int32_t reg_val;
-    int32_t reg_val2;
-    int32_t write_val;
-    int32_t write_val2;
-    int32_t *data_42918;
+	/*
+	 * OEM 0x4af8 (libt20-firmware 3.12.0).  The lift declared a local
+	 * "uint8_t *stab" and wrote through "(char *)&stab + 0x9/0x28", i.e.
+	 * into its own stack frame instead of the system table: every preset
+	 * corrupted the caller's frame (kernel unaligned access at BadVA
+	 * 0xffffffff on cam-E with ANTIFOG_STRONG).  Rewritten from the
+	 * disassembly; only applies while antifog is enabled (base+0x1526).
+	 */
+	uint8_t *base = (uint8_t *)arg1;
+	uint32_t nib;
+	uint8_t strength;
 
-    *arg4 = 0;
+	*arg4 = 0;
+	if ((uint8_t)arg3 != 0) {
+		if ((uint8_t)arg3 != 1)
+			return 1;
+		*arg4 = (int32_t)base[0x1525];
+		return 0;
+	}
 
-    if (preset != 0) {
-        result = 1;
-        if (preset == 1) {
-            result = 0;
-            *arg4 = (int32_t)base[0x1525];
-        }
-        return result;
-    }
-
-    if (arg2 == 0x30) {
-        result = 0;
-        if (base[0x1526] != 0) {
-            stab = (uint8_t *)((char *)&stab + 0x9);
-            *stab = 1;
-            reg_val = APICAL_READ_32(0x3c8);
-            write_val = (reg_val & 0xfffffff0) | 4;
-            APICAL_WRITE_32(0x3c8, write_val);
-            reg_val2 = APICAL_READ_32(0x3c8);
-            write_val2 = (reg_val2 & 0xffffff0f) | 0x40;
-            APICAL_WRITE_32(0x3c8, write_val2);
-            data_42918 = -0x40;
-            stab_40 = (uint8_t *)((char *)&stab + 0x28);
-            *stab_40 = (uint8_t)data_42918;
-			base[0x1525] = (uint8_t)arg2;
-        }
-        return result;
-    }
-
-    if (arg2 == 0x31) {
-        result = 0;
-        if (base[0x1526] != 0) {
-            stab = (uint8_t *)((char *)&stab + 0x9);
-            *stab = 1;
-            reg_val = APICAL_READ_32(0x3c8);
-            write_val = (reg_val & 0xfffffff0) | 7;
-            APICAL_WRITE_32(0x3c8, write_val);
-            reg_val2 = APICAL_READ_32(0x3c8);
-            write_val2 = (reg_val2 & 0xffffff0f) | 0x70;
-            APICAL_WRITE_32(0x3c8, write_val2);
-            data_42918 = -0x80;
-            stab_40 = (uint8_t *)((char *)&stab + 0x28);
-            *stab_40 = (uint8_t)data_42918;
-			base[0x1525] = (uint8_t)arg2;
-        }
-        return result;
-    }
-
-    if (arg2 != 0x2f) {
-        *arg4 = 1;
-        return 5;
-    }
-
-    result = 0;
-    if (base[0x1526] != 0) {
-        stab = (uint8_t *)((char *)&stab + 0x9);
-        *stab = 1;
-        reg_val = APICAL_READ_32(0x3c8);
-        write_val = reg_val & 0xfffffff0;
-        APICAL_WRITE_32(0x3c8, write_val);
-        reg_val2 = APICAL_READ_32(0x3c8);
-        write_val2 = reg_val2 & 0xffffff0f;
-        APICAL_WRITE_32(0x3c8, write_val2);
-        data_42918 = -1;
-        stab_40 = (uint8_t *)((char *)&stab + 0x28);
-        *stab_40 = (uint8_t)data_42918;
-		base[0x1525] = (uint8_t)arg2;
-    }
-
-    return result;
+	switch (arg2) {
+	case 0x2f:		/* ANTIFOG_STRONG */
+		nib = 0x0;
+		strength = 0xff;
+		break;
+	case 0x30:		/* ANTIFOG_MEDIUM */
+		nib = 0x4;
+		strength = 0xc0;
+		break;
+	case 0x31:		/* ANTIFOG_WEAK */
+		nib = 0x7;
+		strength = 0x80;
+		break;
+	default:
+		*arg4 = 1;
+		return 5;
+	}
+	if (!base[0x1526])
+		return 0;
+	stab[9] = 1;
+	APICAL_WRITE_32(0x3c8, (APICAL_READ_32(0x3c8) & 0xfffffff0) | nib);
+	APICAL_WRITE_32(0x3c8, (APICAL_READ_32(0x3c8) & 0xffffff0f) | (nib << 4));
+	stab[40] = strength;
+	base[0x1525] = (uint8_t)arg2;
+	return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001ddf0 origin=model_output original=orientation_hflip */
@@ -12296,12 +12261,18 @@ unsigned int iridix_control_strength_calculate(int32_t * arg1) {
 
     int32_t s0_2;
 
-    if (s4 == 0) {
-        s0_2 = (int32_t)(*(uint16_t *)_GET_USHORT_PTR(0xd1));
-    } else {
+    {
         uint32_t v0_4 = (uint32_t)(*(uint16_t *)_GET_USHORT_PTR(0xd0)) << 8;
-        uint32_t lo_1 = (uint32_t)s4 / v0_4;
-        s0_2 = (int32_t)((uint32_t)s0_1 / lo_1);
+        uint32_t lo_1 = v0_4 ? (uint32_t)s4 / v0_4 : 0;
+
+        /* OEM 0x7c0-0x7d0 traps (teq, divide by zero) when the weighted
+         * histogram sum is below LUT 208 << 8; that kills the ISP
+         * interrupt and, with panic=2, the camera.  Treat it like an
+         * empty histogram (OEM s4 == 0 path) instead. */
+        if (s4 == 0 || lo_1 == 0)
+            s0_2 = (int32_t)(*(uint16_t *)_GET_USHORT_PTR(0xd1));
+        else
+            s0_2 = (int32_t)((uint32_t)s0_1 / lo_1);
     }
 
     void *v0_6;
@@ -12410,6 +12381,21 @@ int32_t iridix_update(int32_t *arg1)
     uint32_t min_val = (uint32_t)stab[41] << 8;
     if ((min_val & 0xff00) < (uint32_t)(uint16_t)result)
         result = (int16_t)min_val;
+
+    /* Beyond vendor: DRC ratio on the auto strength (see t20_drc_ratio). */
+    if (!stab[9] && t20_drc_ratio != 128) {
+        uint32_t v = (uint16_t)result;
+
+        if (t20_drc_ratio < 128)
+            v = (v * t20_drc_ratio) >> 7;
+        else if (v < 0xff00)
+            v += ((0xff00 - v) * (t20_drc_ratio - 128)) / 127;
+        result = (int16_t)(v > 0xff00 ? 0xff00 : v);
+    }
+    /* Beyond vendor: defog strength floor (see t2x_defog_apply()). */
+    if (!stab[9] && t20_defog_floor &&
+        (uint32_t)(uint16_t)result < (t20_defog_floor << 8))
+        result = (int16_t)(t20_defog_floor << 8);
 
     *(int16_t *)((char *)arg1 + 0x10) = (int16_t)result;
     return result;
@@ -20591,6 +20577,66 @@ int32_t *awb_normalise(int32_t *arg1)
 	return (int32_t *)(fsm + 0x760);
 }
 
+/*
+ * Beyond vendor (T10/T20): DPC and DRC strength.  The stock tuning switch
+ * has no case for the TISP DPC-ratio and DRC-ratio controls the T21/T23/
+ * T31 libimp sends; the hardware blocks exist (raw-frontend dynamic defect
+ * pixel: threshold 0x1cc, HP-mask slope 0x1d4; Iridix: strength from
+ * iridix_update()).  128 is neutral (the IQ-driven values, identical to
+ * stock), so nothing changes until a ratio is set.
+ *
+ *  - DPC: below 128 the threshold moves towards 4095 and the slope towards
+ *    0 (0 = no correction), above 128 the threshold moves towards 1 and the
+ *    slope towards 4095 (same shape as the OEM T23 tisp_s_dpc_str_internal
+ *    threshold scaling).
+ *  - DRC: the auto Iridix strength (after the IQ min/max clamp) is scaled
+ *    by ratio/128 below 128 (0 = no local tone mapping) and moves linearly
+ *    towards full strength (255) above 128.  Manual Iridix (antifog/defog,
+ *    DRC MANUAL) is left alone.
+ */
+uint32_t t20_dpc_ratio = 128;
+uint32_t t20_drc_ratio = 128;
+uint32_t t20_defog_floor;	/* 0 = off, else minimum auto Iridix strength */
+uint16_t t20_dpc_raw_slope;
+uint16_t t20_dpc_raw_thresh;
+int t20_dpc_raw_valid;
+
+static int32_t t20_dpc_scale_thresh(uint32_t v)
+{
+	uint32_t s = t20_dpc_ratio;
+
+	if (s == 128)
+		return v;
+	if (s < 128)
+		return v + ((0xfff - v) * (128 - s) >> 7);
+	v = (v * (256 - s)) >> 7;
+	return v ? v : 1;
+}
+
+static int32_t t20_dpc_scale_slope(uint32_t v)
+{
+	uint32_t s = t20_dpc_ratio;
+
+	if (s == 128)
+		return v;
+	if (s < 128)
+		return (v * s) >> 7;
+	return v + ((0xfff - v) * (s - 128) >> 7);
+}
+
+/* Called from the tuning ioctl: re-write the registers from the last
+ * gain-interpolated values so the new ratio acts before the next gain
+ * change. */
+void t20_dpc_apply_ratio(void)
+{
+	if (!t20_dpc_raw_valid)
+		return;
+	APICAL_WRITE_32(0x1d4, (APICAL_READ_32(0x1d4) & 0xfffff000) |
+		(t20_dpc_scale_slope(t20_dpc_raw_slope) & 0xfff));
+	APICAL_WRITE_32(0x1cc, (APICAL_READ_32(0x1cc) & 0xfffff000) |
+		(t20_dpc_scale_thresh(t20_dpc_raw_thresh) & 0xfff));
+}
+
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002e7e0 origin=model_output original=dynamic_dpc_strength_calculate */
 int32_t dynamic_dpc_strength_calculate(int32_t *arg1)
 {
@@ -20622,6 +20668,12 @@ int32_t dynamic_dpc_strength_calculate(int32_t *arg1)
         result_1d4 = reg_1d4;
         result_1cc = reg_1cc;
     }
+
+    t20_dpc_raw_slope = (uint16_t)(result_1d4 & 0xfff);
+    t20_dpc_raw_thresh = (uint16_t)(result_1cc & 0xfff);
+    t20_dpc_raw_valid = 1;
+    result_1d4 = t20_dpc_scale_slope(t20_dpc_raw_slope);
+    result_1cc = t20_dpc_scale_thresh(t20_dpc_raw_thresh);
 
     int32_t cur_1d4 = APICAL_READ_32(0x1d4);
     int32_t new_1d4 = (result_1d4 & 0xfff) | (cur_1d4 & 0xfffff000);

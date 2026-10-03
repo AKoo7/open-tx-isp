@@ -1303,12 +1303,22 @@ static inline int apical_isp_scene_s_control(struct tx_isp_core_device *core, st
 	int reason = 0;
 	int ret = ISP_SUCCESS;
 
-	return ISP_SUCCESS;
+	/*
+	 * Beyond vendor: the stock driver returned here, so SetSceneMode was a
+	 * no-op on T10/T20.  The firmware scene presets (scene_mode(), AE/AWB
+	 * range/max integration time/saturation/sharpening per scene) run
+	 * now that the lifted control flow is repaired.  Nothing changes
+	 * until a scene is set; LANDSCAPE has no firmware preset (EINVAL).
+	 */
 	api.type = TSCENE_MODES;
 	api.dir = COMMAND_SET;
 	api.id = SCENE_MODE_ID;
 	api.value = scene_value_v4l2_to_apical(tuning->ctrls.scene->val);
+	if (api.value < 0)
+		return -EINVAL;
 	status = apical_command(api.type, api.id, api.value, api.dir, &reason);
+	if (status != ISP_SUCCESS)
+		ret = -EINVAL;
 	return ret;
 }
 
@@ -3622,10 +3632,113 @@ err_get_gain_log2:
 }
 
 
+/*
+ * Beyond vendor (T10/T20): DPC, DRC and defog strength on the TISP control
+ * IDs the T21/T23/T31 libimp (and OpenIMP) send.  The stock T10/T20 switch
+ * answers them with -EPERM.  128 is the neutral value everywhere: nothing
+ * changes until one of them is set to something else.
+ *
+ *  - DPC ratio (0x8000062, value): raw-frontend dynamic defect-pixel
+ *    threshold/slope scaling in dynamic_dpc_strength_calculate().
+ *  - DRC ratio (0x80000a2, value): auto Iridix strength scaled below 128,
+ *    towards full strength above 128, in iridix_update().
+ *  - Defog strength (0x8000039, pointer to one byte like the vendor ABI):
+ *    T10/T20 have no separate defog block; the firmware's antifog is an
+ *    Iridix mode (ANTIFOG_MODE/PRESET: manual Iridix at 0x80/0xc0/0xff
+ *    plus the Iridix variance fields in 0x3c8).  That path is not used:
+ *    the preset lift wrote into its own stack frame (fixed below), going
+ *    back from manual to auto Iridix hung cam-E (bisected to the
+ *    global_manual_iridix 1 -> 0 step), and restoring 0x3c8 with Iridix
+ *    active hung cam-C.  Defog keeps the auto Iridix in charge instead:
+ *    0..128 = off (stock picture), 129..255 = lower bound for the auto
+ *    Iridix strength in iridix_update().  Where the IQ bank bypasses
+ *    Iridix (top bypass bit 15, e.g. the T10 jxh42 bank) DRC and defog
+ *    have no visible effect, like any other Iridix setting.
+ */
+#define T2X_CID_DEFOG_STRENGTH	(V4L2_CID_PRIVATE_BASE + 0x39)
+#define T2X_CID_DPC_RATIO	(V4L2_CID_PRIVATE_BASE + 0x62)
+#define T2X_CID_DRC_RATIO	(V4L2_CID_PRIVATE_BASE + 0xa2)
+
+extern uint32_t t20_dpc_ratio;
+extern uint32_t t20_drc_ratio;
+extern uint32_t t20_defog_floor;
+void t20_dpc_apply_ratio(void);
+
+static uint32_t t2x_defog_strength = 128;
+
+/* 0..128 off, 129..255 lower bound for the auto Iridix strength */
+static void t2x_defog_apply(uint32_t v)
+{
+	t20_defog_floor = v > 128 ? v : 0;
+}
+
+/* 1 = handled (*ret set), 0 = not one of these controls */
+static int t2x_beyond_s_ctrl(struct v4l2_control *ctrl, int *ret)
+{
+	uint8_t b;
+
+	switch (ctrl->id) {
+	case T2X_CID_DPC_RATIO:
+		if ((uint32_t)ctrl->value > 255) {
+			*ret = -EINVAL;
+			return 1;
+		}
+		t20_dpc_ratio = ctrl->value;
+		t20_dpc_apply_ratio();
+		break;
+	case T2X_CID_DRC_RATIO:
+		if ((uint32_t)ctrl->value > 255) {
+			*ret = -EINVAL;
+			return 1;
+		}
+		t20_drc_ratio = ctrl->value;
+		break;
+	case T2X_CID_DEFOG_STRENGTH:
+		if (copy_from_user(&b, (const void __user *)ctrl->value, 1)) {
+			*ret = -EFAULT;
+			return 1;
+		}
+		t2x_defog_strength = b;
+		t2x_defog_apply(b);
+		break;
+	default:
+		return 0;
+	}
+	*ret = ISP_SUCCESS;
+	return 1;
+}
+
+static int t2x_beyond_g_ctrl(struct v4l2_control *ctrl, int *ret)
+{
+	uint8_t b = t2x_defog_strength;
+
+	switch (ctrl->id) {
+	case T2X_CID_DPC_RATIO:
+		ctrl->value = t20_dpc_ratio;
+		break;
+	case T2X_CID_DRC_RATIO:
+		ctrl->value = t20_drc_ratio;
+		break;
+	case T2X_CID_DEFOG_STRENGTH:
+		/* vendor ABI: one byte through the pointer */
+		if (copy_to_user((void __user *)ctrl->value, &b, 1)) {
+			*ret = -EFAULT;
+			return 1;
+		}
+		break;
+	default:
+		return 0;
+	}
+	*ret = ISP_SUCCESS;
+	return 1;
+}
+
 static int apical_isp_core_ops_g_ctrl(struct tx_isp_core_device *core, struct v4l2_control *ctrl)
 {
 	int ret = ISP_SUCCESS;
 
+	if (t2x_beyond_g_ctrl(ctrl, &ret))
+		return ret;
 	/* printk("%s[%d] ctrl->id = 0x%08x\n", __func__, __LINE__, ctrl->id); */
 	switch(ctrl->id){
 	case V4L2_CID_AUTO_N_PRESET_WHITE_BALANCE:
@@ -3749,6 +3862,9 @@ static int apical_isp_core_ops_g_ctrl(struct tx_isp_core_device *core, struct v4
 static int apical_isp_core_ops_s_ctrl(struct tx_isp_core_device *core, struct v4l2_control *ctrl)
 {
 	int ret = ISP_SUCCESS;
+
+	if (t2x_beyond_s_ctrl(ctrl, &ret))
+		return ret;
 	switch (ctrl->id) {
 	case V4L2_CID_AUTO_N_PRESET_WHITE_BALANCE:
 	case IMAGE_TUNING_CID_AWB_ATTR:
