@@ -32,6 +32,31 @@ static uint32_t regtrace_t23_ae_rung_total_gain(
 
 int32_t system_reg_write_gib(int32_t arg1, int32_t arg2, int32_t arg3);
 
+int32_t tisp_adr_ev_update(uint32_t a0, uint32_t a1);
+int32_t *tisp_defog_ev_update(uint32_t a0, uint32_t a1, uint32_t a2,
+                              uint32_t a3);
+
+/*
+ * Stock tisp_long_ev_update, ADR / defog part: tisp_adr_ev_update when ADR
+ * is not bypassed (0xc bit 7), then tisp_defog_ev_update when defog is not
+ * bypassed (bit 11); both only store ev >> 10 for their algorithm.  This
+ * driver bypasses both blocks unless source_adr/defog_internal_enable is
+ * set, so with the defaults nothing (not even the 0xc read) happens here.
+ */
+static void regtrace_t23_ae_ev_adr_defog(uint32_t ev_lo, uint32_t ev_hi)
+{
+    uint32_t top;
+
+    if (!regtrace_t23_source_adr_internal_enable &&
+        !regtrace_t23_source_defog_internal_enable)
+        return;
+    top = (uint32_t)system_reg_read(0xc);
+    if (!(top & BIT(7)))
+        tisp_adr_ev_update(ev_lo, ev_hi);
+    if (!(top & BIT(11)))
+        tisp_defog_ev_update(ev_lo, ev_hi, 0, 0);
+}
+
 static uint32_t regtrace_t23_ae_user_max_dgain;     /* log2, Q5 (API) */
 static uint32_t regtrace_t23_ae_isp_dgain_q10 = 0x400U;   /* in hardware */
 
@@ -418,6 +443,7 @@ static void regtrace_t23_source_ae_hlil_work_body(struct work_struct *work)
                 regtrace_t23_source_ccm_last_saturation)
                 regtrace_t23_source_ccm_commit(
                     regtrace_t23_source_ccm_runtime_ct, rung->ev_q10);
+            regtrace_t23_ae_ev_adr_defog(rung->ev_q10, 0);
             if (regtrace_t23_source_bcsh_events) {
                 tisp_bcsh_ev_update(rung->ev_q10, 0);
                 regtrace_t23_source_bcsh_ev_events++;

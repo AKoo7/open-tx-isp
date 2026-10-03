@@ -572,18 +572,10 @@ static void t23_aelift_work_fn(struct work_struct *work)
 		 * order: AWB takes it as is (tisp_awb_ev_update); the CCM is
 		 * recomputed when its EV-dependent saturation moves (stock
 		 * jz_isp_ccm on an EV step; the HLIL substitute does the same
-		 * on a rung change); ADR and defog are not fed (see below);
-		 * BCSH gets tisp_bcsh_ev_update(ev, hi), gated like the HLIL
+		 * on a rung change); ADR and defog when not bypassed
+		 * (regtrace_t23_ae_ev_adr_defog); BCSH gets
+		 * tisp_bcsh_ev_update(ev, hi), gated like the HLIL
 		 * substitute's call.
-		 *
-		 * ADR / defog: stock passes ev >> 10 to them only when they are
-		 * not bypassed (0xc bits 7 / 11).  This driver bypasses both
-		 * unless source_adr/defog_internal_enable is set, and the
-		 * recovered tisp_adr_ev_update / tisp_defog_ev_update store
-		 * into the wrong objects (tevent_info + 0xfc8,
-		 * ivdc_threshold_line instead of stock ev_changed / ev_now), so
-		 * they are not called; the HLIL substitute does not call them
-		 * either.
 		 */
 		if (ev[i].id == 6U) {
 			bool changed = !t23_aelift_ev_seen ||
@@ -600,6 +592,9 @@ static void t23_aelift_work_fn(struct work_struct *work)
 				regtrace_t23_source_ccm_commit(
 					regtrace_t23_source_ccm_runtime_ct,
 					t23_aelift_ev_q10);
+			if (changed)
+				regtrace_t23_ae_ev_adr_defog(t23_aelift_ev_q10,
+							     t23_aelift_ev_hi);
 			if (changed && regtrace_t23_source_bcsh_events) {
 				tisp_bcsh_ev_update(t23_aelift_ev_q10,
 						    t23_aelift_ev_hi);

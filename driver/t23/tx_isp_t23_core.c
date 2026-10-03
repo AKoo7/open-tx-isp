@@ -3170,6 +3170,20 @@ static unsigned char adr_block_hist[960];
 static unsigned char adr_block_y[192];
 static unsigned char adr_hist[2048];
 static uintptr_t ev_changed;
+/*
+ * Stock ADR / defog statics the recovered code had mapped onto unrelated
+ * objects (tevent_info + 0xfc8..0xfd0, tiziano_clm_s_t_lut + 0x1fc/0x200,
+ * sclk_name - 1888, tiziano_gib_deir_r_h + 0x6c..0x74, ivdc_threshold_line).
+ * Stock .bss 0x13e88 ev_changed, 0x13e8c ev_now, 0x13e90 adr_wdr_en,
+ * .data 0x2f8a0 adr_ratio (0x80); .bss 0x15534 defog_frm_num,
+ * 0x15538 defog_wdr_en, 0x1553c ev_now.
+ */
+static uint32_t adr_ev_now;
+static uint32_t adr_wdr_en;
+static uint32_t adr_ratio = 0x80U;
+static uint32_t defog_frm_num;
+static uint32_t defog_wdr_en;
+static uint32_t defog_ev_now;
 static unsigned char __attribute__((aligned(4))) adr_ev_list_now[4] = {
     0x00, 0x00, 0x00, 0x00, 
 };
@@ -59459,10 +59473,10 @@ int32_t tisp_adr_ev_update(uint32_t a0, uint32_t a1)
     a0 = a0 >> 10;
 
     /* fragment 1: MemoryAccess */
-    *(uint32_t *)((char *)((char *)&tevent_info + 0xfc8)) = v1;
+    *(uint32_t *)((char *)&ev_changed) = v1;
     a0 = a1 | a0;
     v0 = (uintptr_t *)&ivdc_threshold_line;
-    *(uint32_t *)((char *)((char *)&tevent_info + 0xfcc)) = a0;
+    adr_ev_now = a0;
 
     /* fragment 2: Epilogue */
     /* function epilogue: restore registers and return */
@@ -59556,7 +59570,7 @@ int32_t tiziano_adr_algorithm(void)
     uint32_t ra;
 
     v1 = (uint32_t)&ev_changed;
-    a0 = *(uint32_t *)((char *)((char *)&tiziano_clm_s_t_lut + 0x1fc));
+    a0 = (uint32_t)ev_changed;
     var_64 = ra;
     var_60 = s7;
     var_5c = s6;
@@ -59569,8 +59583,8 @@ int32_t tiziano_adr_algorithm(void)
         goto l_2fd8;
     }
     a0 = (uintptr_t *)&adr_ev_list_now;
-    v0 = (uintptr_t *)((char *)((char *)&tiziano_clm_s_t_lut + 0x200));
-    *(uint32_t *)((char *)((char *)&tiziano_clm_s_t_lut + 0x1fc)) = 0;
+    v0 = (uintptr_t *)&adr_ev_now;
+    ev_changed = 0;
     a2 = *(uint32_t *)((char *)a0 + 0);
     v0 = *(uint32_t *)((char *)v0 + 0);
     a1 = a2;
@@ -60783,7 +60797,7 @@ int tiziano_adr_params_init(void)
     v0 = (uintptr_t *)&ivdc_threshold_line;
 
     /* fragment 1: MemoryAccess */
-    v0 = *(uint32_t *)((char *)((char *)&tevent_info + 0xfd0));
+    v0 = adr_wdr_en;
     local_20 = s3;
     local_1c = s2;
     s3 = (uintptr_t *)&adr_block_light;
@@ -61683,7 +61697,7 @@ tisp_adr_param_array_set0x24c:
     /* function epilogue: restore registers and return */
 
     /* fragment 59: MemoryAccess */
-    *(uint32_t *)((char *)((char *)&tevent_info + 0xfc8)) = v1;
+    *(uint32_t *)((char *)&ev_changed) = v1;
     v0 = 0;
 
     /* fragment 60: Epilogue */
@@ -61702,7 +61716,7 @@ uint32_t tisp_g_adr_str_internal(uint32_t a0, uintptr_t a1)
     v0 = (uintptr_t *)&sclk_name;
 
     /* fragment 1: MemoryAccess */
-    v0 = *(uint32_t *)((char *)&sclk_name + -1888);
+    v0 = adr_ratio;
 
     /* fragment 2: Epilogue */
     /* function epilogue: restore registers and return */
@@ -61750,10 +61764,10 @@ int32_t tisp_s_adr_str_internal(uint32_t a0)
     v0 = (uintptr_t *)&sclk_name;
 
     /* fragment 1: MemoryAccess */
-    *(uint32_t *)((char *)&sclk_name + -1888) = a0;
+    adr_ratio = a0;
     v0 = (uintptr_t *)&ivdc_threshold_line;
     local_1c = s2;
-    s2 = *(uint32_t *)((char *)((char *)&tevent_info + 0xfd0));
+    s2 = adr_wdr_en;
     v0 = (uintptr_t *)&tparams;
     local_2c = ra;
     local_18 = s1;
@@ -61924,7 +61938,7 @@ tisp_s_adr_str_internal0x19c:
     /* function epilogue: restore registers and return */
 
     /* fragment 22: MemoryAccess */
-    *(uint32_t *)((char *)((char *)&tevent_info + 0xfc8)) = v1;
+    *(uint32_t *)((char *)&ev_changed) = v1;
 
     /* fragment 23: Epilogue */
     /* function epilogue: restore registers and return */
@@ -62179,7 +62193,7 @@ tiziano_adr_params_refresh0x548:
     v1 = 1;
 
     /* fragment 71: MemoryAccess */
-    *(uint32_t *)((char *)((char *)&tevent_info + 0xfc8)) = v1;
+    *(uint32_t *)((char *)&ev_changed) = v1;
     v0 = 0;
 
 tiziano_adr_params_refresh0x564:
@@ -63587,9 +63601,9 @@ int32_t *tisp_defog_ev_update(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3
     a1 = a1 << 0x16;
     a0 = a0 >> 0xa;
     result = a1 | a0;
-    *(uint32_t *)&ivdc_threshold_line = result;
+    defog_ev_now = result;
 
-    return (int32_t *)&ivdc_threshold_line;
+    return (int32_t *)&defog_ev_now;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003543c origin=fragment_seed original=tiziano_defog_get_data */
@@ -64225,7 +64239,7 @@ int32_t tiziano_defog_algorithm(void)
     s0 = (uintptr_t *)&ivdc_threshold_line;
 
     /* fragment 2: MemoryAccess */
-    a0 = *(uint32_t *)((char *)((char *)&tiziano_gib_deir_r_h + 0x6c));
+    a0 = defog_frm_num;
     v0 = (uintptr_t *)&defog_rgbra_list;
     a0 = a0 < 2;
     local_64 = ra;
@@ -64295,7 +64309,7 @@ tiziano_defog_algorithm0x44:
     a1 = (uint32_t *)&ivdc_threshold_line;
 
     /* fragment 16: MemoryAccess */
-    a1 = *(uint32_t *)((char *)((char *)&tiziano_gib_deir_r_h + 0x74));
+    a1 = defog_ev_now;
     *(uint32_t *)((char *)((char *)&defog_manual_ctrl)) = a0;
     *(uint32_t *)((char *)a2 + 4) = a1;
 
@@ -64405,7 +64419,7 @@ tiziano_defog_algorithm0x1f0:
     v0 = (uintptr_t *)((uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))(uintptr_t)tisp_defog_soft_process)(*(uint32_t *)((char *)((char *)&TizianoDefogStructMe)), *(uint32_t *)((char *)(v0) + 4), *(uint32_t *)((char *)(v0) + 8), *(uint32_t *)((char *)(v0) + 12)); /* jalr target resolved by relocation */
 
     /* fragment 27: MemoryAccess */
-    v0 = *(uint32_t *)((char *)((char *)&tiziano_gib_deir_r_h + 0x6c));
+    v0 = defog_frm_num;
     a0 = 65536;
     v0 = v0 + 1;
 
@@ -64421,7 +64435,7 @@ tiziano_defog_algorithm0x224:
     /* function epilogue: restore registers and return */
 
     /* fragment 31: MemoryAccess */
-    *(uint32_t *)((char *)((char *)&tiziano_gib_deir_r_h + 0x6c)) = v0;
+    defog_frm_num = v0;
     v0 = 0;
 
     /* fragment 32: Epilogue */
@@ -65036,9 +65050,9 @@ int32_t tiziano_defog_init(uint32_t a0, uint32_t a1, uint32_t a2)
     v0 = (uintptr_t *)&ivdc_threshold_line;
 
     /* fragment 1: MemoryAccess */
-    *(uint32_t *)((char *)((char *)&tiziano_gib_deir_r_h + 0x6c)) = 0;
+    defog_frm_num = 0;
     v0 = (uintptr_t *)&ivdc_threshold_line;
-    v0 = *(uint32_t *)((char *)((char *)&tiziano_gib_deir_r_h + 0x70));
+    v0 = defog_wdr_en;
     t3 = (uint32_t *)&defog_ev_list_now;
     t2 = (uintptr_t)&defog_trsy0_list_now;
     local_3c = s7;
