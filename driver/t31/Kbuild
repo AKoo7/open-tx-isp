@@ -42,3 +42,7 @@ ccflags-$(CONFIG_TX_ISP_T31_V4L2) += -DCONFIG_TX_ISP_T31_V4L2
 
 # Build both modules - changed tx-isp.o to tx-isp-t31.o
 obj-m := tx-isp-t31.o
+
+# Rootfs size: drop local (static) symbols from the module image. The kernel
+# resolves exports through __ksymtab, so .symtab/.strtab bulk is dead weight.
+LDFLAGS_MODULE += -x
