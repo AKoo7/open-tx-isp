@@ -9886,6 +9886,15 @@ static bool regtrace_t23_source_ae_hlil = true;
 static bool regtrace_t23_source_ae_oem = false; /* tx_isp_t23_ae_oem_glue.inc */
 static uint32_t t23_aelift_stream_packed(void);  /* ditto */
 static uint regtrace_t23_source_ae_hlil_interval = 32;
+/*
+ * While the picture is over-exposed (luma above the deadband) the AE runs
+ * every source_ae_hlil_fast_interval snapshots instead (0: off), and with
+ * at least source_ae_hlil_sat_permille of the pixels clipped it may take
+ * larger steps down (tx_isp_t23_ae_runtime.inc).  Under-exposed scenes
+ * (night) keep the normal cadence and step.
+ */
+static uint regtrace_t23_source_ae_hlil_fast_interval = 8;
+static uint regtrace_t23_source_ae_hlil_sat_permille = 500;
 static uint regtrace_t23_source_ae_hlil_target = 60;
 static uint regtrace_t23_source_ae_hlil_deadband = 5;
 static uint regtrace_t23_source_ae_hlil_runs;
@@ -10225,6 +10234,10 @@ module_param_named(source_ae_hlil,
                    regtrace_t23_source_ae_hlil, bool, 0644);
 module_param_named(source_ae_hlil_interval,
                    regtrace_t23_source_ae_hlil_interval, uint, 0644);
+module_param_named(source_ae_hlil_fast_interval,
+                   regtrace_t23_source_ae_hlil_fast_interval, uint, 0644);
+module_param_named(source_ae_hlil_sat_permille,
+                   regtrace_t23_source_ae_hlil_sat_permille, uint, 0644);
 module_param_named(source_ae_hlil_target,
                    regtrace_t23_source_ae_hlil_target, uint, 0644);
 module_param_named(source_ae_hlil_deadband,
@@ -12991,6 +13004,7 @@ static __always_inline int regtrace_t23_source_clm_load_tuning(void)
 }
 
 static void regtrace_t23_source_ae_hlil_capture(uint32_t luma,
+                                               uint32_t bright_permille,
                                                uint32_t snapshot);
 /* tx_isp_t23_ae_oem_glue.inc: stock AE0 lifted from the OEM module */
 static bool t23_aelift_irq(uint32_t status);
@@ -13311,6 +13325,9 @@ static void regtrace_t23_source_ae_stats_snapshot(uint32_t status)
     luma = zone_pixels ? div64_u64(red + green + blue, zone_pixels) : 0;
     regtrace_t23_source_ae_hlil_capture(
         luma > 0xffffffffULL ? 0xffffffffU : (uint32_t)luma,
+        zone_pixels ? (uint32_t)div64_u64(
+            min_t(uint64_t, bright_pixels, zone_pixels) * 1000U,
+            zone_pixels) : 0U,
         regtrace_t23_source_ae_stats_snapshots);
     if (regtrace_t23_source_ae_stats_snapshots <= 8U ||
         !(regtrace_t23_source_ae_stats_snapshots &
@@ -13836,9 +13853,12 @@ static uint32_t regtrace_t23_source_bypass_forced_off(void)
         mask |= BIT(7);
     if (regtrace_t23_source_awb_stats_init)
         mask |= BIT(25);
-    /* DPC (bit 2) and CCM (bit 9) follow the bank flag like the OEM
-     * tisp_init / tisp_day_or_night_s_ctrl (the sc2336 night bank
-     * bypasses DPC; both banks set bit 9). */
+    /* Bit 2 and CCM (bit 9) follow the bank flag like the OEM tisp_init /
+     * tisp_day_or_night_s_ctrl.  Bit 2 is AG (AWB gain stage, 0x1800) in
+     * the T23 IMPISPModuleCtl layout, DPC is bit 4; the sc2336 night bank
+     * sets bit 2, both banks set bit 9: stock corrects colour in BCSH
+     * (bcsh_ccm_en, tisp_s_ccm_attr -> tisp_bcsh_set_attr while bit 9 is
+     * set; tisp_ct_update skips tisp_ccm_ct_update then). */
     if (regtrace_t23_source_ydns_tuning_init)
         mask |= BIT(17);
     if (regtrace_t23_source_defog_tuning_init &&
@@ -91950,10 +91970,16 @@ static void regtrace_t23_source_dn_params_refresh(const char *reason)
      * or stream start rebuilds 0xc from the bank again).  Demosaic stays:
      * without it there is no colour picture at all. */
     if (failed) {
+        /*
+         * Stock bit layout: LSC 6 (tiziano_lsc_init, tisp_ct_update), CLM
+         * 13 and BCSH 16 (tisp_ct_update, tisp_s_ccm_attr), ADR 7 and
+         * defog 11 (tisp_long_ev_update), DPC 4 (IMPISPModuleCtl; bit 2 is
+         * the AWB gain stage and must not be bypassed for a DPC failure).
+         */
         static const uint8_t block_bit[13] = {
-            5,  /* GIB */     10, /* gamma */   4,  /* LSC */
-            2,  /* DPC */     17, /* YDNS */    0xff, /* DMSC */
-            12, /* BCSH */    12, /* CLM */     16, /* MDNS */
+            5,  /* GIB */     10, /* gamma */   6,  /* LSC */
+            4,  /* DPC */     17, /* YDNS */    0xff, /* DMSC */
+            16, /* BCSH */    13, /* CLM */     16, /* MDNS */
             15, /* SDNS */    7,  /* ADR */     11, /* defog */
             14, /* sharpen */
         };
