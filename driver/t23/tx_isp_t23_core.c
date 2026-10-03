@@ -26058,10 +26058,12 @@ int32_t apical_isp_core_ops_s_ctrl(uintptr_t a0, uintptr_t a1, uint32_t a2)
         printk(KERN_INFO
                "tx_isp_t23_recovered: BCSH s_ctrl cmd=0x%x value=%u\n",
                control, value);
-    /* The BCSH controls take 0..255; the OEM truncated larger values. */
-    if ((control == 0x980900 || control == 0x980901 ||
-         control == 0x980902 || control == 0x98091b) && value > 0xffU)
-        return -EINVAL;
+    /*
+     * The BCSH controls take 0..255 and the OEM keeps only the low byte:
+     * libimp's tuning daemon sends (total_gain << 8) | contrast through
+     * V4L2_CID_CONTRAST, so larger values must not be rejected (it would
+     * re-send them forever).  The (uint8_t) casts below truncate.
+     */
     switch (control) {
     case 0x980900:
         tisp_set_brightness(0, (uint8_t)value);
