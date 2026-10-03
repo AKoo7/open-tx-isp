@@ -12491,16 +12491,16 @@ uint32_t _update_ds(uint32_t *arg1)
 				uint32_t hi_658, lo_658, hi_660, lo_660;
 				uint32_t val_65c, val_664;
 
-				if (s2v < 0x1000) {
+				if (s2 < 0x1000) {
 					hi_658 = APICAL_READ_32(0x658) & 0xff000000;
-					lo_658 = (s2v << 0x14) / s7;
+					lo_658 = (s2 << 0x14) / s7;
 				} else {
 					hi_658 = APICAL_READ_32(0x658) & 0xff000000;
-					lo_658 = ((s2v << 0x12) / s7) << 2;
+					lo_658 = ((s2 << 0x12) / s7) << 2;
 				}
 				APICAL_WRITE_32(0x658, hi_658 | (lo_658 & 0xffffff));
 
-				if (s1v < 0x1000) {
+				if (s1 < 0x1000) {
 					hi_660 = APICAL_READ_32(0x660) & 0xff000000;
 					lo_660 = ((s1 << 0x14) / s1v) & 0xffffff;
 				} else {
@@ -12510,18 +12510,18 @@ uint32_t _update_ds(uint32_t *arg1)
 				APICAL_WRITE_32(0x660, hi_660 | lo_660);
 
 				uint16_t s4v = *(uint16_t *)(crop + 0x2a);
-				if ((int32_t)s2v < (int32_t)(s4v * 3)) {
+				if ((int32_t)s2 < (int32_t)(s4v * 3)) {
 					val_65c = APICAL_READ_32(0x65c);
-					int32_t div_res = ((int32_t)(s2v << 1)) / (int32_t)s4v;
+					int32_t div_res = ((int32_t)(s2 << 1)) / (int32_t)s4v;
 					APICAL_WRITE_32(0x65c, (val_65c & 0xfffffff0) | ((div_res - 2) & 0xf));
 				} else {
 					APICAL_WRITE_32(0x65c, (APICAL_READ_32(0x65c) & 0xfffffff0) | 3);
 				}
 
 				uint16_t s2v2 = *(uint16_t *)(crop + 0x2c);
-				if ((int32_t)s1v < (int32_t)(s2v2 * 3)) {
+				if ((int32_t)s1 < (int32_t)(s2v2 * 3)) {
 					val_664 = APICAL_READ_32(0x664);
-					int32_t div_res2 = ((int32_t)(s1v << 1)) / (int32_t)s2v2;
+					int32_t div_res2 = ((int32_t)(s1 << 1)) / (int32_t)s2v2;
 					APICAL_WRITE_32(0x664, (val_664 & 0xfffffff0) | ((div_res2 - 2) & 0xf));
 				} else {
 					APICAL_WRITE_32(0x664, (APICAL_READ_32(0x664) & 0xfffffff0) | 3);
