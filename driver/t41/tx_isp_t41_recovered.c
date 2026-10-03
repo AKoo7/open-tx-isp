@@ -168207,6 +168207,16 @@ void cleanup_module(void)
 	tx_isp_t41_v4l2_exit();
 	tx_isp_sinfo_exit();
     ((void (*)(void))(uintptr_t)t9)();
+
+	/*
+	 * The ISP/VIC IRQs are freed by now, so nothing queues these static
+	 * work items any more.  Wait for one still pending on system_wq: it
+	 * would otherwise run from the freed module text after the unload.
+	 */
+	cancel_work_sync((struct work_struct *)(void *)main_fs_work);
+	cancel_work_sync(&main_fd_work);
+	cancel_work_sync(&t41_safe_awb_work);
+	cancel_work_sync(&t41_tmo_work);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000074ce0 origin=fragment_seed original=tx_isp_vic_remove */
@@ -168302,8 +168312,23 @@ int tx_isp_fs_remove(struct platform_device *pdev)
 		return 0;
 
 	channels = *(void **)((char *)fs + 0x114);
-	for (i = 0; i < *(uint32_t *)((char *)fs + 0x118); i++)
-		tx_isp_frame_chan_deinit((uintptr_t)channels + i * 820);
+	for (i = 0; i < *(uint32_t *)((char *)fs + 0x118); i++) {
+		char *channel = (char *)channels + i * 820;
+
+		/*
+		 * The framechanN misc devices live inside the channel array
+		 * (registered on the first sensor activation, flag at +0x28).
+		 * Only fs_slake_module() deregistered them; an rmmod without a
+		 * prior slake freed the array below with the devices still on
+		 * misc_list, and the next insmod oopsed in misc_register() of
+		 * /dev/tx-isp while walking that list.
+		 */
+		if (*(uint32_t *)(channel + 0x28)) {
+			private_misc_deregister(channel);
+			*(uint32_t *)(channel + 0x28) = 0;
+		}
+		tx_isp_frame_chan_deinit((uintptr_t)channel);
+	}
 
 	private_kfree(channels);
 	tx_isp_subdev_deinit(module);
