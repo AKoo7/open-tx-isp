@@ -19042,9 +19042,147 @@ int32_t awb_interrupt_static(void)
 	return (int32_t)LIFT_CALL(L_awb_interrupt_static, 0, 0, 0, 0);
 }
 
+/*
+ * Beyond vendor (both default on, 0 = stock behaviour):
+ *
+ * awb_lux_hyst: the stock JZ_Isp_Awb picks its parameter set from the AWB EV
+ * (awb_ev) against _awb_mode[0]/[1] << 10 (outdoor lux-high / outdoor
+ * lux-low / indoor) and switches register 0x828 to _awb_lowlight_rg_th
+ * above _awb_mode[2] << 10, each with a bare compare.  At dusk the EV hovers
+ * around a threshold and the parameter set flaps frame by frame.  Each
+ * threshold gets a band of +-awb_lux_hyst percent: a boundary is only
+ * crossed once the EV is past threshold + band (or below threshold - band
+ * going back).  awb_ev is read only by JZ_Isp_Awb, and only for these three
+ * compares, so the lifted code is fed an EV clamped into the interval that
+ * reproduces the held decisions; awb_ev is restored afterwards.
+ *
+ * awb_ir_freeze: in night (IR mono) mode the stock AWB keeps estimating on
+ * the IR-lit scene (~2800 K), and the first day frames start from those
+ * gains/CT.  With awb_ir_freeze the estimation is skipped while day_night
+ * is 1 (gains, _awb_ct and so CCM/LSC keep their last day values), the day
+ * gains in 0x604/0x608 are snapshotted at the day->night switch and written
+ * back at the night->day switch.  The day->night parameter switch itself
+ * writes the night parameter set's gains into 0x604/0x608, so the snapshot
+ * is taken before it and the restore after the return switch.  The
+ * night->day refresh sets first_frame, which makes the next JZ_Isp_Awb take
+ * the gains measured from that frame's statistics instead of filtering from
+ * the current ones (the restore would be overwritten at once), so the
+ * restore also clears first_frame.  The freeze is not applied while the
+ * user selected a manual/preset white balance (tisp_s_wb_mode) or froze the
+ * AWB (awb_frz): the stock AWB applies those and has to keep running.
+ */
+static uint awb_lux_hyst = 10;
+module_param(awb_lux_hyst, uint, 0644);
+MODULE_PARM_DESC(awb_lux_hyst, "T21: AWB lux/low-light threshold hysteresis band in percent (default 10, 0 = stock)");
+static uint awb_ir_freeze = 1;
+module_param(awb_ir_freeze, uint, 0644);
+MODULE_PARM_DESC(awb_ir_freeze, "T21: freeze AWB in night mode and restore the day gains on return to day (default 1, 0 = stock)");
+
+static u8 awb_hy_valid, awb_hy_above0, awb_hy_above1, awb_hy_low;
+static u32 awb_day_gain[2];
+static bool awb_day_gain_valid;
+
+static u32 t21_awb_band(u32 th)
+{
+	return (u32)div_u64((u64)th * min(awb_lux_hyst, 100u), 100);
+}
+
+/* Hysteresis step for one boundary; strict selects stock's "ev > th"
+ * (low-light) instead of "ev >= th" (parameter set). */
+static u8 t21_awb_hy_step(u8 state, u32 ev, u32 th, bool strict)
+{
+	u32 b = t21_awb_band(th);
+
+	if (state)
+		return strict ? ev > (th > b ? th - b : 0) : ev >= (th > b ? th - b : 0);
+	if (th + b < th)	/* overflow: never cross upwards */
+		return 0;
+	return strict ? ev > th + b : ev >= th + b;
+}
+
+static u32 t21_awb_hyst_ev(u32 ev)
+{
+	const u32 *m = (const u32 *)_awb_mode;
+	u32 th0 = m[0] << 10, th1 = m[1] << 10, th2 = m[2] << 10;
+	u8 a0 = ev >= th0, a1 = ev >= th1, lo = ev > th2;
+	u32 lo_ev, hi_ev;
+
+	if (awb_lux_hyst && awb_hy_valid) {
+		a0 = t21_awb_hy_step(awb_hy_above0, ev, th0, false);
+		a1 = t21_awb_hy_step(awb_hy_above1, ev, th1, false);
+		lo = t21_awb_hy_step(awb_hy_low, ev, th2, true);
+	}
+	/* interval of EVs for which stock takes exactly these decisions */
+	if (!a0) {
+		lo_ev = 0; hi_ev = th0 ? th0 - 1 : 0;
+		if (!th0)
+			goto resync;
+	} else if (!a1) {
+		lo_ev = th0; hi_ev = th1 ? th1 - 1 : 0;
+		if (th1 <= th0)
+			goto resync;
+	} else {
+		lo_ev = max(th0, th1); hi_ev = 0xffffffffu;
+	}
+	if (lo) {
+		if (th2 == 0xffffffffu)
+			goto resync;
+		lo_ev = max(lo_ev, th2 + 1);
+	} else {
+		hi_ev = min(hi_ev, th2);
+	}
+	if (lo_ev > hi_ev)
+		goto resync;
+	awb_hy_valid = 1; awb_hy_above0 = a0; awb_hy_above1 = a1; awb_hy_low = lo;
+	return clamp(ev, lo_ev, hi_ev);
+resync:
+	awb_hy_valid = 1; awb_hy_above0 = ev >= th0; awb_hy_above1 = ev >= th1;
+	awb_hy_low = ev > th2;
+	return ev;
+}
+
+/* Called by tisp_day_or_night_s_ctrl around the parameter switch. */
+static void t21_awb_dn_pre(uint32_t mode)
+{
+	if (mode == 1 && day_night == 0) {
+		awb_day_gain[0] = system_reg_read(0x604);
+		awb_day_gain[1] = system_reg_read(0x608);
+		awb_day_gain_valid = awb_day_gain[0] && awb_day_gain[1];
+	}
+}
+
+/* The user took over white balance: manual/preset mode or frozen AWB. */
+static bool t21_awb_user_wb(void)
+{
+	return ACCESS_ONCE(tisp_wb_attr.mode) != 0 || ACCESS_ONCE(awb_frz);
+}
+
+static void t21_awb_dn_post(uint32_t mode, uint32_t prev)
+{
+	if (mode == 0 && prev == 1 && awb_ir_freeze && awb_day_gain_valid &&
+	    !t21_awb_user_wb()) {
+		system_reg_write(0x604, awb_day_gain[0]);
+		system_reg_write(0x608, awb_day_gain[1]);
+		/* tiziano_awb_dn_params_refresh set first_frame: the first day
+		 * AWB frame would replace these gains by the measured ones */
+		ACCESS_ONCE(first_frame) = 0;
+	}
+}
+
 int32_t JZ_Isp_Awb(void)
 {
-	return (int32_t)LIFT_CALL(L_JZ_Isp_Awb, 0, 0, 0, 0);
+	u32 ev, eff;
+	int32_t ret;
+
+	if (awb_ir_freeze && day_night == 1 && !t21_awb_user_wb())
+		return 0;
+	ev = awb_ev;
+	eff = t21_awb_hyst_ev(ev);
+	awb_ev = eff;
+	ret = (int32_t)LIFT_CALL(L_JZ_Isp_Awb, 0, 0, 0, 0);
+	if (awb_ev == eff)
+		awb_ev = ev;
+	return ret;
 }
 
 int32_t tisp_awb_ev_update(uint32_t a0)
@@ -34269,6 +34407,9 @@ int32_t tisp_day_or_night_s_ctrl(uint32_t mode)
     uint32_t mask;
     uint32_t field_val;
 
+    uint32_t prev_dn = day_night;
+
+    t21_awb_dn_pre(mode);
     if (mode == 0) {
         memcpy(tparams, tparams_day, 0x15380);
         day_night = 0;
@@ -34310,6 +34451,7 @@ int32_t tisp_day_or_night_s_ctrl(uint32_t mode)
     T21_DN_REFRESH(tiziano_sdns_dn_params_refresh);
     T21_DN_REFRESH(tiziano_af_dn_params_refresh);
 #undef T21_DN_REFRESH
+    t21_awb_dn_post(mode, prev_dn);
 
     return 0;
 }
