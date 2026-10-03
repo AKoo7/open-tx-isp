@@ -64,6 +64,7 @@ class Side:
             'hist': 'ae0_interrupt_hist' if stock else 't23_aelift_emu_hist',
             'process': 'tisp_ae0_process' if stock else 't23_aelift_emu_process',
             'dn': 'tiziano_ae_dn_params_refresh' if stock else 't23_aelift_emu_dn',
+            'ev_attr': 'tisp_g_ev_attr' if stock else 't23_aelift_emu_g_ev_attr',
         }
         def ev(c_, R):
             a1 = R[5]
@@ -107,6 +108,16 @@ class Side:
         c.w32(self.ti + 12, self.buf); c.w32(self.ti + 24, self.buf + 0x4000)
         c.regs_hw[0xa050] = 0
         self.it, self.ag = MAXIT // 4, 0
+        self.evbuf = c.heapp; c.heapp += 0x100
+        self.evattr = []
+
+    def ev_attr(self):
+        """tisp_g_ev_attr block (0x8c bytes) as the read-back getters see it."""
+        c = self.c
+        for i in range(0x100 // 4):
+            c.w32(self.evbuf + 4 * i, 0)
+        self.call('ev_attr', (0, self.evbuf))
+        return tuple(c.r32(self.evbuf + 4 * i) for i in range(0x8c // 4))
 
     def load_bank(self, bank):
         self.c.wrbytes(self.tp + ACT, bank)
@@ -181,15 +192,22 @@ def run_scene(name, scene, night=False, flicker_amp=0.0, deflicker=None, frames=
                 s.ev.pop()
                 s.call('process')
             logs[i].append((round(y, 1), s.it, s.ag))
+            s.evattr.append(s.ev_attr())
     a, b = sides
-    same = (a.c.writes == b.c.writes and a.ev == b.ev and a.sens == b.sens)
+    same = (a.c.writes == b.c.writes and a.ev == b.ev and a.sens == b.sens and
+            a.evattr == b.evattr)
     its = sorted(set(v for n_, v in a.sens if n_ == 'set_it'))
     print('%-22s %s  writes %d/%d events %d/%d sensor %d/%d  it/ag start %s end %s luma %s->%s' % (
         name, 'SAME' if same else 'DIFF', len(a.c.writes), len(b.c.writes), len(a.ev), len(b.ev),
         len(a.sens), len(b.sens), logs[0][0][1:], logs[0][-1][1:], logs[0][0][0], logs[0][-1][0]))
     print('   integration times used:', its)
+    w = a.evattr[-1]
+    print('   ev_attr end: it %d ev %d us %d again %d ispdg %d tgain_db %d total_gain %d manual %d (%s)' % (
+        w[0], w[2], w[4], w[7], w[8], w[9], w[10], w[15],
+        'same all frames' if a.evattr == b.evattr else 'DIFF'))
     if not same:
-        for nm, A, B in (('writes', a.c.writes, b.c.writes), ('events', a.ev, b.ev), ('sensor', a.sens, b.sens)):
+        for nm, A, B in (('writes', a.c.writes, b.c.writes), ('events', a.ev, b.ev), ('sensor', a.sens, b.sens),
+                         ('ev_attr', a.evattr, b.evattr)):
             d = [(i, x, y) for i, (x, y) in enumerate(zip(A, B)) if x != y]
             if d or len(A) != len(B):
                 print('   first %s diff' % nm, d[:3], 'len', len(A), len(B))

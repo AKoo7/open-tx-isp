@@ -574,6 +574,96 @@ static void t23_aelift_halt(void)
 }
 
 /*
+ * Stock tisp_g_ev_attr on the lifted copies (tisp_ae_ctrls, sensor_info),
+ * same arithmetic through the lifted helpers.  The stock block (0x8c bytes,
+ * word 1 and 0x40..0x77 left alone):
+ *   w0 it (lines)  w2/w3 EV (64 bit Q10 >> 10)  w4/w5 exposure us
+ *   w6 log2 EV Q16  w7 again  w8 ISP dgain (log2 Q5)  w9 tgain dB (u16)
+ *   w10 total gain [24.8]  w11 max again  w12 max ISP dgain  w13 sensor
+ *   dgain  w14 max sensor dgain  w15 AE manual  u16 0x78/0x7a it min/max
+ *   u16 0x88 one line in us
+ */
+static noinline __used uint32_t t23_aelift_g_ev_attr(uint32_t *w)
+{
+	const uint32_t *c = (const uint32_t *)(void *)oem_tisp_ae_ctrls;
+	uint32_t fps = *(uint32_t *)(void *)(oem_sensor_info + 0x30);
+	uint32_t vts = *(uint16_t *)(void *)(oem_sensor_info + 0x4a);
+	uint32_t stk[8] = { 0 };
+	uint64_t num;
+
+#define T23_AELIFT_LOG2(v, in, out) \
+	((uint32_t)LA_tisp_log2_fixed_to_fixed((v), (in), (out), 0, \
+					       (uint32_t)(uintptr_t)stk))
+	w[0] = c[3];
+	w[2] = (c[11] << 22) | (c[10] >> 10);
+	w[3] = c[11] >> 10;
+	w[6] = T23_AELIFT_LOG2(c[10], 10, 16);
+	num = (uint64_t)(w[0] * 1000000U) * (fps & 0xffffU);
+	stk[4] = (fps >> 16) * vts;
+	stk[5] = 0;
+	w[4] = (uint32_t)LA_fix_point_div_64(0, 0, (uint32_t)num,
+					     (uint32_t)(num >> 32),
+					     (uint32_t)(uintptr_t)stk);
+	w[5] = 0;
+	w[7] = T23_AELIFT_LOG2(c[1], 10, 5);
+	w[8] = T23_AELIFT_LOG2(c[4], 10, 5);
+	w[9] = *(const uint16_t *)(const void *)(oem_tisp_ae_ctrls + 0x32);
+	w[10] = (uint32_t)LA_fix_point_mult2_32(10, c[1], c[4], 0,
+						(uint32_t)(uintptr_t)stk) >> 2;
+	w[11] = T23_AELIFT_LOG2(c[5] + 4U, 10, 5);
+	w[12] = T23_AELIFT_LOG2(c[8] + 4U, 10, 5);
+	w[13] = T23_AELIFT_LOG2(c[2], 10, 5);
+	w[14] = T23_AELIFT_LOG2(c[6], 10, 5);
+#undef T23_AELIFT_LOG2
+	*(uint16_t *)(void *)((uint8_t *)w + 0x78) = (uint16_t)c[32];
+	*(uint16_t *)(void *)((uint8_t *)w + 0x7a) = (uint16_t)c[7];
+	/* stock divides unchecked (no trap on MIPS divu) */
+	*(uint16_t *)(void *)((uint8_t *)w + 0x88) = (uint16_t)
+		(((fps >> 16) && vts) ?
+		 (fps & 0xffffU) * 1000000U / (fps >> 16) / vts : 0U);
+	w[15] = c[15];
+	return 0;
+}
+
+/*
+ * Read-back for GetExpr / GetEVAttr / GetTotalGain / MAX_AGAIN / MAX_DGAIN
+ * and /proc/jz/isp/isp-m0 while the lifted AE runs: its live state, as the
+ * stock getters report it (apical_isp_expr_g_ctrl, apical_isp_ev_g_attr,
+ * the 0x8000027 total gain, apical_isp_max_*_g_ctrl, isp_info_show all take
+ * tisp_g_ev_attr).  The exposure word this driver sends to the sensor is no
+ * rung of the HLIL ladder, so the substitute's read-back would report unity
+ * gain.  false: the lifted AE is not in charge (or never initialised); the
+ * caller keeps its own read-back.
+ */
+static bool t23_aelift_ev_info(struct regtrace_t23_ev_info *info)
+{
+	uint32_t w[36];
+
+	if (!regtrace_t23_source_ae_oem || !t23_aelift_inited)
+		return false;
+	memset(w, 0, sizeof(w));
+	t23_aelift_g_ev_attr(w);
+	info->valid = w[0] != 0;
+	info->manual = w[15] ? 1U : 0U;
+	info->it = w[0];
+	info->ev = w[2];
+	info->expr_us = w[4];
+	info->ev_log2 = w[6];
+	info->again = w[7];
+	info->isp_dgain = w[8];
+	info->tgain_log2 = w[9];
+	info->total_gain = w[10];
+	info->max_again = w[11];
+	info->max_isp_dgain = w[12];
+	info->sensor_dgain = w[13];
+	info->max_sensor_dgain = w[14];
+	info->it_min = *(uint16_t *)(void *)((uint8_t *)w + 0x78);
+	info->it_max = *(uint16_t *)(void *)((uint8_t *)w + 0x7a);
+	info->line_us = *(uint16_t *)(void *)((uint8_t *)w + 0x88);
+	return true;
+}
+
+/*
  * Emulator entry points (audit/aelift_emu.py drives these against the
  * stock functions of the same name); unused in the kernel.
  */
@@ -596,6 +686,12 @@ static noinline __used uint32_t t23_aelift_emu_hist(void)
 static noinline __used uint32_t t23_aelift_emu_process(void)
 {
 	return (uint32_t)T23_AELIFT_CALL(LA_tisp_ae0_process, 0, 0, 0, 0);
+}
+
+static noinline __used uint32_t t23_aelift_emu_g_ev_attr(uint32_t a0, uint32_t a1)
+{
+	(void)a0;
+	return t23_aelift_g_ev_attr((uint32_t *)(uintptr_t)a1);
 }
 
 static noinline __used uint32_t t23_aelift_emu_dn(uint32_t a0)

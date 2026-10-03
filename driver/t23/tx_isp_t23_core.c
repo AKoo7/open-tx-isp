@@ -92553,6 +92553,10 @@ static void regtrace_t23_ev_info_get(struct regtrace_t23_ev_info *info)
             (uint64_t)live.it * den * 1000000U, frame_lines);
     }
 
+    /* source_ae_oem=1: the lifted stock AE's own state (glue) */
+    if (t23_aelift_ev_info(info))
+        return;
+
     info->it = live.valid ? live.it : 0U;
     if (regtrace_t23_source_sensor_max_again) {
         max_again_q10 = tisp_math_exp2(regtrace_t23_source_sensor_max_again,
