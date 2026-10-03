@@ -2875,6 +2875,10 @@ static uint32_t tisp_BCSH_ai32C[5];
 static uint8_t bcsh_brightness = 0x80;
 static uint8_t bcsh_contrast = 0x80;
 static uint8_t bcsh_saturation = 0x80;
+/* Scene mode / colour effect (beyond vendor, see tx_isp_scene_colorfx.h) */
+#include "../common/tx_isp_scene_colorfx.h"
+static uint32_t t23_scene_mode;
+static uint32_t t23_colorfx = TX_ISP_COLORFX_AUTO;
 static uint8_t bcsh_hue_user = 0x80;
 static uint8_t s_bcsh_mjpeg_mode;
 static uint8_t s_bcsh_mjpeg_y_range_low;
@@ -45629,11 +45633,10 @@ int32_t tiziano_gamma_lut_parameter(void)
     for (i = 0; i < 128U; ++i, reg += 4U) {
         uint32_t value;
 
-        value = ((uint32_t)lut[i + 1U] << 12) | lut[i];
+        /* Colorfx NEGATIVE inverts the curve (AUTO = stock) */
+        value = tx_isp_colorfx_gamma_word(lut[i], lut[i + 1U], t23_colorfx);
         system_reg_write(reg, value);
-        value = ((uint32_t)lut[i + 1U] << 12) | lut[i];
         system_reg_write(reg + 0x8000U, value);
-        value = ((uint32_t)lut[i + 1U] << 12) | lut[i];
         system_reg_write(reg + 0x10000U, value);
     }
 
@@ -55997,6 +56000,7 @@ int32_t* tiziano_bcsh_TransitParam(void)
     uint32_t diff;
     uint32_t range;
     uint32_t mid;
+    uint8_t sat;
     int i;
 
     if (!regtrace_t23_valid_ptr((uintptr_t)sthres))
@@ -56012,17 +56016,19 @@ int32_t* tiziano_bcsh_TransitParam(void)
     offset0[1] = 0x400;
     offset0[2] = 0x400;
 
-    if (bcsh_saturation == 0x80) {
+    /* Colorfx BW/VIVID act on the saturation used here; AUTO = as set. */
+    sat = tx_isp_colorfx_sat(t23_colorfx, bcsh_saturation);
+    if (sat == 0x80) {
         memcpy(tisp_BCSH_ai32Svalue, base_s,
                sizeof(tisp_BCSH_ai32Svalue));
-    } else if ((int8_t)bcsh_saturation < 0) {
+    } else if ((int8_t)sat < 0) {
         for (i = 0; i < ARRAY_SIZE(tisp_BCSH_ai32Svalue); i++)
             tisp_BCSH_ai32Svalue[i] = tiziano_bcsh_StrenCal_part_0(
-                bcsh_saturation, 0x80, 0x100, base_s[i], 0x1800);
+                sat, 0x80, 0x100, base_s[i], 0x1800);
     } else {
         for (i = 0; i < ARRAY_SIZE(tisp_BCSH_ai32Svalue); i++)
             tisp_BCSH_ai32Svalue[i] = tiziano_bcsh_StrenCal_part_0(
-                bcsh_saturation, 0, 0x80, 0, base_s[i]);
+                sat, 0, 0x80, 0, base_s[i]);
     }
 
     brightness_scaled = (bcsh_brightness *
@@ -101679,6 +101685,8 @@ MODULE_AUTHOR("Ingenic xhshen");
 #define REGTRACE_TISP_CTRL_SENSOR_ATTR 0x08000045U
 #define REGTRACE_TISP_CTRL_DPC_STRENGTH 0x08000062U
 #define REGTRACE_TISP_CTRL_TEMPER 0x08000085U
+#define REGTRACE_TISP_CTRL_SCENE_MODE TX_ISP_CID_SCENE_MODE
+#define REGTRACE_TISP_CTRL_COLORFX TX_ISP_CID_COLORFX
 #define REGTRACE_TISP_CTRL_DRC_STRENGTH 0x080000a2U
 #define REGTRACE_TISP_CTRL_ENABLE_DRC 0x080000a3U
 #define REGTRACE_TISP_CTRL_ENABLE_DEFOG 0x080000a4U
@@ -101899,6 +101907,27 @@ static long regtrace_t23_g_sensor_attr(uint32_t uptr)
  * of the request.  Returns -ENOIOCTLCMD for ids not served here; the
  * callers turn that into -EINVAL.
  */
+/* Colorfx: AUTO/BW/VIVID through the BCSH saturation, NEGATIVE through the
+ * gamma LUT.  Before the BCSH runtime / core run only the state is stored
+ * (the first update and the gamma init pick it up). */
+static long regtrace_t23_colorfx_set(uint32_t fx)
+{
+    uint32_t old = t23_colorfx;
+
+    if (!tx_isp_colorfx_valid(fx))
+        return -EINVAL;
+    if (fx == old)
+        return 0;
+    t23_colorfx = fx;
+    if ((tx_isp_colorfx_scales_sat(fx) || tx_isp_colorfx_scales_sat(old)) &&
+        regtrace_t23_source_bcsh_runtime)
+        tiziano_bcsh_update();
+    if ((fx == TX_ISP_COLORFX_NEGATIVE || old == TX_ISP_COLORFX_NEGATIVE) &&
+        regtrace_t23_core_started)
+        tiziano_gamma_lut_parameter();
+    return 0;
+}
+
 static long regtrace_t23_tuning_cid(bool get, uint32_t id, uint32_t *value)
 {
     uint32_t v = *value;
@@ -101983,6 +102012,22 @@ static long regtrace_t23_tuning_cid(bool get, uint32_t id, uint32_t *value)
     }
     case REGTRACE_TISP_CTRL_TEMPER:
         return get ? -EINVAL : regtrace_t23_s_temper_strength(v);
+    case REGTRACE_TISP_CTRL_SCENE_MODE:
+        /* stock: no-op; here stored and reported, nothing applied */
+        if (get) {
+            *value = t23_scene_mode;
+            return 0;
+        }
+        if (!tx_isp_scene_valid(v))
+            return -EINVAL;
+        t23_scene_mode = v;
+        return 0;
+    case REGTRACE_TISP_CTRL_COLORFX:
+        if (get) {
+            *value = t23_colorfx;
+            return 0;
+        }
+        return regtrace_t23_colorfx_set(v);
     case REGTRACE_TISP_CTRL_DPC_STRENGTH:
         if (get) {
             *value = regtrace_t23_dpc_ratio;
