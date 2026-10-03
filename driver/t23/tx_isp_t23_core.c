@@ -64,6 +64,25 @@
 #endif
 #include <asm/uaccess.h>
 
+#ifdef TX_ISP_T23_NO_TRACE
+/*
+ * Kbuild TX_ISP_T23_TRACE=n (default): KERN_INFO bring-up traces are
+ * compiled out together with their format strings. The arguments are
+ * still evaluated (some read hardware registers). KERN_WARNING and
+ * KERN_ERR messages are untouched.
+ */
+#define t23_is_info_fmt(fmt) ((fmt)[0] == KERN_SOH_ASCII && (fmt)[1] == '6')
+#define printk(fmt, ...) (t23_is_info_fmt(fmt) ? \
+	((void)(0, ##__VA_ARGS__), 0) : (printk)(fmt, ##__VA_ARGS__))
+#endif
+
+/*
+ * Rootfs size: recovered functions and objects that nothing in the module
+ * references (no relocation against them in tx-isp-t23.o) are declared
+ * static, so gcc drops them together with helpers only they used. Drop the
+ * "static" again before wiring one of them up.
+ */
+
 extern void *get_driver_common_interfaces();
 extern uintptr_t __lshrdi3();
 extern uintptr_t __ashldi3();
@@ -5521,7 +5540,8 @@ static unsigned char __attribute__((aligned(4))) ae1_ev_list[40] = {
     0xf4, 0x01, 0x00, 0x00, 0xf4, 0x01, 0x00, 0x00, 
 };
 static unsigned char IspAe0WmeanParam[72];
-static unsigned char __attribute__((aligned(4))) _ae_parameter[168] = {
+/* __used: audit/bss_emu.py seeds it by name; no reachable code reads it */
+static unsigned char __used __attribute__((aligned(4))) _ae_parameter[168] = {
     0x01, 0x00, 0x00, 0x00, 0x0f, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x0f, 0x00, 0x00, 0x00, 
     0x40, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 
     0x40, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 
@@ -8675,42 +8695,42 @@ static unsigned char jump_table_6de04[32];
 #define ispcore_set_clk_parent ispcore_set_clk_parent_isra_0
 #define isp_info_show isp_info_show_isra_1
 int32_t isp_printf(uint32_t level, const char *fmt, ...);
-uint32_t get_isp_clk(void);
-uint32_t get_isp_clka(void);
-char get_clk_name(uintptr_t a0);
-char get_clka_name(uintptr_t a0);
+static uint32_t get_isp_clk(void);
+static uint32_t get_isp_clka(void);
+static char get_clk_name(uintptr_t a0);
+static char get_clka_name(uintptr_t a0);
 void *private_vmalloc(unsigned long size);
 void private_vfree(void *addr);
-ktime_t private_ktime_set(const long secs, const unsigned long nsecs);
+static ktime_t private_ktime_set(const long secs, const unsigned long nsecs);
 void private_set_current_state(unsigned int state);
 int private_schedule_hrtimeout(ktime_t *expires, const enum hrtimer_mode mode);
 bool private_schedule_work(struct work_struct *work);
 void private_do_gettimeofday(struct timeval *tv);
-void private_dma_sync_single_for_device(struct device *dev, dma_addr_t addr, size_t size, enum dma_data_direction dir);
+static void private_dma_sync_single_for_device(struct device *dev, dma_addr_t addr, size_t size, enum dma_data_direction dir);
 int64_t private_get_driver_interface(uintptr_t a0);
-int32_t tx_isp_release_device(void);
+static int32_t tx_isp_release_device(void);
 int32_t * pop_buffer_fifo(int32_t *arg1);
-int32_t tx_isp_vic_start(void* arg1);
+static int32_t tx_isp_vic_start(void* arg1);
 int ispvic_frame_channel_qbuf(void *arg1, int arg2, int **arg3);
 int32_t ispvic_frame_channel_clearbuf(void *arg1);
-int tx_isp_vic_probe(struct platform_device *pdev);
-int32_t tisp_vic_ctrl_release(int32_t arg1, int32_t arg2);
-int32_t dump_isp_vic_frd_open(uint32_t a0, uint32_t a1);
-int isp_vic_frd_show(struct seq_file *seq, void *v);
-int32_t tisp_vic_mmap(uint32_t a0, uintptr_t a1);
+static int tx_isp_vic_probe(struct platform_device *pdev);
+static int32_t tisp_vic_ctrl_release(int32_t arg1, int32_t arg2);
+static int32_t dump_isp_vic_frd_open(uint32_t a0, uint32_t a1);
+static int isp_vic_frd_show(struct seq_file *seq, void *v);
+static int32_t tisp_vic_mmap(uint32_t a0, uintptr_t a1);
 int tx_isp_vic_activate_subdev(struct tx_isp_subdev *sd);
 int32_t vic_sensor_ops_ioctl(uintptr_t a0, uint32_t a1, uintptr_t a2);
 int vic_sensor_ops_sync_sensor_attr(void *arg1, void *arg2, void *arg3);
-int32_t dump_vic_reg(void);
-void check_vic_error(void);
-void tx_vic_enable_irq(void);
-void tx_vic_disable_irq(struct tx_isp_vic_device *vic_dev);
+static int32_t dump_vic_reg(void);
+static void check_vic_error(void);
+static void tx_vic_enable_irq(void);
+static void tx_vic_disable_irq(struct tx_isp_vic_device *vic_dev);
 int32_t vic_core_s_stream(uintptr_t arg1, int32_t arg2);
 int32_t vic_core_ops_init(struct tx_isp_subdev *sd, int enable);
 int tx_isp_vic_slake_subdev(struct tx_isp_subdev *sd);
-uint32_t vic_mdma_enable(uintptr_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t arg4, uint32_t arg5);
-int32_t isp_vic_cmd_set(uintptr_t a0, uint32_t a1, uint32_t a2);
-int32_t tisp_vic_ctrl_ioctl(uintptr_t a0, uint32_t a1, uint32_t a2);
+static uint32_t vic_mdma_enable(uintptr_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t arg4, uint32_t arg5);
+static int32_t isp_vic_cmd_set(uintptr_t a0, uint32_t a1, uint32_t a2);
+static int32_t tisp_vic_ctrl_ioctl(uintptr_t a0, uint32_t a1, uint32_t a2);
 void* vic_pipo_mdma_enable(uintptr_t a0);
 int ispvic_frame_channel_s_stream(struct tx_isp_vic_device *vic_dev, int enable);
 int32_t (*vic_framedone_irq_function(void *arg1))(void);
@@ -8719,15 +8739,15 @@ int64_t isp_vic_interrupt_service_routine(uintptr_t a0, uint32_t a1);
 int64_t tx_isp_subdev_pipo(uintptr_t a0, uintptr_t a1);
 int vic_core_ops_ioctl(struct tx_isp_subdev *sd, unsigned int cmd, void *arg);
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t vic_core_ops_ioctl_1(uintptr_t a0, uint32_t a1, uint32_t a2) __asm__("vic_core_ops_ioctl");
+static int32_t vic_core_ops_ioctl_1(uintptr_t a0, uint32_t a1, uint32_t a2) __asm__("vic_core_ops_ioctl");
 #endif
-int32_t vic_core_ops_ioctl_1(uintptr_t a0, uint32_t a1, uint32_t a2);
+static int32_t vic_core_ops_ioctl_1(uintptr_t a0, uint32_t a1, uint32_t a2);
 int vin_s_stream(struct tx_isp_subdev *sd, int enable);
 int32_t tx_isp_vin_activate_subdev(void *arg1);
 int32_t tx_isp_vin_init(void *arg1, int32_t arg2);
-int32_t subdev_sensor_ops_set_input(uintptr_t a0, uintptr_t a1, uint32_t a2);
+static int32_t subdev_sensor_ops_set_input(uintptr_t a0, uintptr_t a1, uint32_t a2);
 int32_t tx_isp_vin_reset(void *arg1);
-int tx_isp_vin_probe(struct platform_device *pdev);
+static int tx_isp_vin_probe(struct platform_device *pdev);
 int video_input_cmd_open(struct inode *inode, struct file *file);
 ssize_t video_input_cmd_set(struct file *file, const char __user *buffer,
                             size_t count, loff_t *ppos);
@@ -8737,25 +8757,25 @@ int tx_isp_vin_slake_subdev(uintptr_t a0);
 int32_t isp_i2c_new_subdev_board(uint32_t a0, uintptr_t a1, uint32_t a2);
 int32_t subdev_sensor_ops_enum_input(void *arg1, int32_t *arg2);
 int32_t subdev_sensor_ops_ioctl(void *arg1, int32_t arg2, int32_t *arg3);
-int tx_isp_csi_probe(struct platform_device *pdev);
-int32_t dump_isp_csi_open(uint32_t a0, uint32_t a1);
-int32_t isp_csi_show(uintptr_t a0);
+static int tx_isp_csi_probe(struct platform_device *pdev);
+static int32_t dump_isp_csi_open(uint32_t a0, uint32_t a1);
+static int32_t isp_csi_show(uintptr_t a0);
 int csi_core_ops_init(struct tx_isp_subdev *sd, int enable);
 int32_t csi_sensor_ops_ioctl(void *arg1, int32_t arg2);
 int64_t csi_sensor_ops_sync_sensor_attr(uint32_t a0, uint32_t a1);
 int tx_isp_csi_activate_subdev(struct tx_isp_subdev *sd);
 int csi_video_s_stream(void *arg1, int arg2);
 int tx_isp_csi_slake_subdev(void *arg1);
-int32_t dump_csi_reg(void *arg1);
-void check_csi_error(void);
-int32_t csi_set_on_lanes(void *arg1, char arg2);
-int32_t isp_core_tunning_release(uint32_t a0, uintptr_t a1);
-int32_t isp_core_tunning_open(uint32_t a0, uintptr_t a1);
+static int32_t dump_csi_reg(void *arg1);
+static void check_csi_error(void);
+static int32_t csi_set_on_lanes(void *arg1, char arg2);
+static int32_t isp_core_tunning_release(uint32_t a0, uintptr_t a1);
+static int32_t isp_core_tunning_open(uint32_t a0, uintptr_t a1);
 int32_t apical_isp_sensor_hvflip_update(uintptr_t a0, uint32_t a1);
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_autozoom_s_attr_isra_28(uintptr_t a0) __asm__("apical_isp_autozoom_s_attr.isra.28");
+static int32_t apical_isp_autozoom_s_attr_isra_28(uintptr_t a0) __asm__("apical_isp_autozoom_s_attr.isra.28");
 #endif
-int32_t apical_isp_autozoom_s_attr_isra_28(uintptr_t a0);
+static int32_t apical_isp_autozoom_s_attr_isra_28(uintptr_t a0);
 #ifndef REGTRACE_KERNEL_TREE_BUILD
 int32_t apical_isp_gamma_s_attr_isra_32(uint32_t a0) __asm__("apical_isp_gamma_s_attr.isra.32");
 #endif
@@ -8765,98 +8785,98 @@ int32_t apical_isp_expr_s_ctrl_isra_33(uintptr_t a0, uint32_t a1) __asm__("apica
 #endif
 int32_t apical_isp_expr_s_ctrl_isra_33(uintptr_t a0, uint32_t a1);
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_ae_s_roi_isra_34(int32_t *arg1) __asm__("apical_isp_ae_s_roi.isra.34");
+static int32_t apical_isp_ae_s_roi_isra_34(int32_t *arg1) __asm__("apical_isp_ae_s_roi.isra.34");
 #endif
-int32_t apical_isp_ae_s_roi_isra_34(int32_t *arg1);
+static int32_t apical_isp_ae_s_roi_isra_34(int32_t *arg1);
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_ae_zone_weight_s_attr_isra_45(uintptr_t a0) __asm__("apical_isp_ae_zone_weight_s_attr.isra.45");
+static int32_t apical_isp_ae_zone_weight_s_attr_isra_45(uintptr_t a0) __asm__("apical_isp_ae_zone_weight_s_attr.isra.45");
 #endif
-int32_t apical_isp_ae_zone_weight_s_attr_isra_45(uintptr_t a0);
+static int32_t apical_isp_ae_zone_weight_s_attr_isra_45(uintptr_t a0);
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_af_hist_s_attr_isra_48(uint32_t a0) __asm__("apical_isp_af_hist_s_attr.isra.48");
+static int32_t apical_isp_af_hist_s_attr_isra_48(uint32_t a0) __asm__("apical_isp_af_hist_s_attr.isra.48");
 #endif
-int32_t apical_isp_af_hist_s_attr_isra_48(uint32_t a0);
+static int32_t apical_isp_af_hist_s_attr_isra_48(uint32_t a0);
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_af_weight_s_attr_isra_49(uintptr_t a0) __asm__("apical_isp_af_weight_s_attr.isra.49");
+static int32_t apical_isp_af_weight_s_attr_isra_49(uintptr_t a0) __asm__("apical_isp_af_weight_s_attr.isra.49");
 #endif
-int32_t apical_isp_af_weight_s_attr_isra_49(uintptr_t a0);
+static int32_t apical_isp_af_weight_s_attr_isra_49(uintptr_t a0);
 #ifndef REGTRACE_KERNEL_TREE_BUILD
 int32_t apical_isp_awb_zone_weight_s_attr_isra_68(uint32_t a0) __asm__("apical_isp_awb_zone_weight_s_attr.isra.68");
 #endif
 int32_t apical_isp_awb_zone_weight_s_attr_isra_68(uint32_t a0);
 int32_t apical_isp_core_ops_s_ctrl(uintptr_t a0, uintptr_t a1, uint32_t a2);
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_autozoom_g_attr_isra_71(uintptr_t a0) __asm__("apical_isp_autozoom_g_attr.isra.71");
+static int32_t apical_isp_autozoom_g_attr_isra_71(uintptr_t a0) __asm__("apical_isp_autozoom_g_attr.isra.71");
 #endif
-int32_t apical_isp_autozoom_g_attr_isra_71(uintptr_t a0);
+static int32_t apical_isp_autozoom_g_attr_isra_71(uintptr_t a0);
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_expr_g_ctrl_isra_75(uintptr_t a0) __asm__("apical_isp_expr_g_ctrl.isra.75");
+static int32_t apical_isp_expr_g_ctrl_isra_75(uintptr_t a0) __asm__("apical_isp_expr_g_ctrl.isra.75");
 #endif
-int32_t apical_isp_expr_g_ctrl_isra_75(uintptr_t a0);
+static int32_t apical_isp_expr_g_ctrl_isra_75(uintptr_t a0);
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_max_again_g_ctrl_isra_76(uintptr_t a0) __asm__("apical_isp_max_again_g_ctrl.isra.76");
+static int32_t apical_isp_max_again_g_ctrl_isra_76(uintptr_t a0) __asm__("apical_isp_max_again_g_ctrl.isra.76");
 #endif
-int32_t apical_isp_max_again_g_ctrl_isra_76(uintptr_t a0);
+static int32_t apical_isp_max_again_g_ctrl_isra_76(uintptr_t a0);
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_max_dgain_g_ctrl_isra_77(uintptr_t a0) __asm__("apical_isp_max_dgain_g_ctrl.isra.77");
+static int32_t apical_isp_max_dgain_g_ctrl_isra_77(uintptr_t a0) __asm__("apical_isp_max_dgain_g_ctrl.isra.77");
 #endif
-int32_t apical_isp_max_dgain_g_ctrl_isra_77(uintptr_t a0);
+static int32_t apical_isp_max_dgain_g_ctrl_isra_77(uintptr_t a0);
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_ev_g_attr_isra_78(uintptr_t a0) __asm__("apical_isp_ev_g_attr.isra.78");
+static int32_t apical_isp_ev_g_attr_isra_78(uintptr_t a0) __asm__("apical_isp_ev_g_attr.isra.78");
 #endif
-int32_t apical_isp_ev_g_attr_isra_78(uintptr_t a0);
+static int32_t apical_isp_ev_g_attr_isra_78(uintptr_t a0);
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_gamma_g_attr_isra_79(uintptr_t a0) __asm__("apical_isp_gamma_g_attr.isra.79");
+static int32_t apical_isp_gamma_g_attr_isra_79(uintptr_t a0) __asm__("apical_isp_gamma_g_attr.isra.79");
 #endif
-int32_t apical_isp_gamma_g_attr_isra_79(uintptr_t a0);
+static int32_t apical_isp_gamma_g_attr_isra_79(uintptr_t a0);
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_ae_g_roi_isra_80(uintptr_t arg1) __asm__("apical_isp_ae_g_roi.isra.80");
+static int32_t apical_isp_ae_g_roi_isra_80(uintptr_t arg1) __asm__("apical_isp_ae_g_roi.isra.80");
 #endif
-int32_t apical_isp_ae_g_roi_isra_80(uintptr_t arg1);
+static int32_t apical_isp_ae_g_roi_isra_80(uintptr_t arg1);
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_ae_zone_g_ctrl_isra_87(int32_t *arg1) __asm__("apical_isp_ae_zone_g_ctrl.isra.87");
+static int32_t apical_isp_ae_zone_g_ctrl_isra_87(int32_t *arg1) __asm__("apical_isp_ae_zone_g_ctrl.isra.87");
 #endif
-int32_t apical_isp_ae_zone_g_ctrl_isra_87(int32_t *arg1);
+static int32_t apical_isp_ae_zone_g_ctrl_isra_87(int32_t *arg1);
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_af_zone_g_ctrl_isra_88(uintptr_t a0) __asm__("apical_isp_af_zone_g_ctrl.isra.88");
+static int32_t apical_isp_af_zone_g_ctrl_isra_88(uintptr_t a0) __asm__("apical_isp_af_zone_g_ctrl.isra.88");
 #endif
-int32_t apical_isp_af_zone_g_ctrl_isra_88(uintptr_t a0);
+static int32_t apical_isp_af_zone_g_ctrl_isra_88(uintptr_t a0);
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_ae_zone_weight_g_attr_isra_92(uintptr_t arg1) __asm__("apical_isp_ae_zone_weight_g_attr.isra.92");
+static int32_t apical_isp_ae_zone_weight_g_attr_isra_92(uintptr_t arg1) __asm__("apical_isp_ae_zone_weight_g_attr.isra.92");
 #endif
-int32_t apical_isp_ae_zone_weight_g_attr_isra_92(uintptr_t arg1);
+static int32_t apical_isp_ae_zone_weight_g_attr_isra_92(uintptr_t arg1);
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_ae_hist_origin_g_attr_isra_95(uintptr_t a0) __asm__("apical_isp_ae_hist_origin_g_attr.isra.95");
+static int32_t apical_isp_ae_hist_origin_g_attr_isra_95(uintptr_t a0) __asm__("apical_isp_ae_hist_origin_g_attr.isra.95");
 #endif
-int32_t apical_isp_ae_hist_origin_g_attr_isra_95(uintptr_t a0);
+static int32_t apical_isp_ae_hist_origin_g_attr_isra_95(uintptr_t a0);
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_awb_zone_statis_g_attr_isra_97(uintptr_t a0) __asm__("apical_isp_awb_zone_statis_g_attr.isra.97");
+static int32_t apical_isp_awb_zone_statis_g_attr_isra_97(uintptr_t a0) __asm__("apical_isp_awb_zone_statis_g_attr.isra.97");
 #endif
-int32_t apical_isp_awb_zone_statis_g_attr_isra_97(uintptr_t a0);
+static int32_t apical_isp_awb_zone_statis_g_attr_isra_97(uintptr_t a0);
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_af_hist_g_attr_isra_98(int32_t *arg1) __asm__("apical_isp_af_hist_g_attr.isra.98");
+static int32_t apical_isp_af_hist_g_attr_isra_98(int32_t *arg1) __asm__("apical_isp_af_hist_g_attr.isra.98");
 #endif
-int32_t apical_isp_af_hist_g_attr_isra_98(int32_t *arg1);
+static int32_t apical_isp_af_hist_g_attr_isra_98(int32_t *arg1);
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_af_weight_g_attr_isra_99(uintptr_t a0) __asm__("apical_isp_af_weight_g_attr.isra.99");
+static int32_t apical_isp_af_weight_g_attr_isra_99(uintptr_t a0) __asm__("apical_isp_af_weight_g_attr.isra.99");
 #endif
-int32_t apical_isp_af_weight_g_attr_isra_99(uintptr_t a0);
+static int32_t apical_isp_af_weight_g_attr_isra_99(uintptr_t a0);
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t tiziano_isp_ae_manual_attr_g_ctrl_isra_106(uintptr_t a0) __asm__("tiziano_isp_ae_manual_attr_g_ctrl.isra.106");
+static int32_t tiziano_isp_ae_manual_attr_g_ctrl_isra_106(uintptr_t a0) __asm__("tiziano_isp_ae_manual_attr_g_ctrl.isra.106");
 #endif
-int32_t tiziano_isp_ae_manual_attr_g_ctrl_isra_106(uintptr_t a0);
+static int32_t tiziano_isp_ae_manual_attr_g_ctrl_isra_106(uintptr_t a0);
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_awb_zone_weight_g_attr_isra_115(uintptr_t a0) __asm__("apical_isp_awb_zone_weight_g_attr.isra.115");
+static int32_t apical_isp_awb_zone_weight_g_attr_isra_115(uintptr_t a0) __asm__("apical_isp_awb_zone_weight_g_attr.isra.115");
 #endif
-int32_t apical_isp_awb_zone_weight_g_attr_isra_115(uintptr_t a0);
-int isp_frame_done_wait(int timeout_ms, uint64_t *frame_count);
+static int32_t apical_isp_awb_zone_weight_g_attr_isra_115(uintptr_t a0);
+static int isp_frame_done_wait(int timeout_ms, uint64_t *frame_count);
 int32_t apical_isp_core_ops_g_ctrl(uintptr_t a0, uintptr_t a1, uint32_t a2);
 static long isp_core_tunning_unlocked_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
-void isp_frame_done_wakeup(void);
-int32_t isp_core_tuning_event(void *arg1, int32_t arg2);
-int32_t* isp_core_tuning_init(uint32_t a0);
-void isp_core_tuning_deinit(int32_t arg1);
-uint32_t private_math_exp2(uint32_t a0, uint32_t a1, uint32_t a2);
+static void isp_frame_done_wakeup(void);
+static int32_t isp_core_tuning_event(void *arg1, int32_t arg2);
+static int32_t* isp_core_tuning_init(uint32_t a0);
+static void isp_core_tuning_deinit(int32_t arg1);
+static uint32_t private_math_exp2(uint32_t a0, uint32_t a1, uint32_t a2);
 int private_clk_enable(struct clk *clk);
 void private_clk_disable(struct clk *clk);
 void private_clk_put(struct clk *clk);
@@ -8869,22 +8889,22 @@ int private_i2c_add_driver(struct i2c_driver *driver);
 int private_gpio_request(unsigned int gpio, const char *label);
 void private_gpio_free(unsigned int gpio);
 int private_gpio_direction_output(unsigned int gpio, int value);
-int private_jzgpio_set_func(enum gpio_port port, enum gpio_function func, unsigned long pins);
+static int private_jzgpio_set_func(enum gpio_port port, enum gpio_function func, unsigned long pins);
 void private_msleep(unsigned int msecs);
 bool private_capable(int cap);
 int32_t private_driver_get_interface(void);
-int32_t private_leading_one_position(uint32_t arg1);
-int32_t private_log2_int_to_fixed(uint32_t arg1);
-int32_t private_log2_fixed_to_fixed(uint32_t a0);
-int32_t private_leading_one_position_64(uint32_t arg1, uint32_t arg2);
-int32_t private_log2_int_to_fixed_64(uint32_t arg1, uint32_t arg2, char arg3, char arg4);
-int32_t private_log2_fixed_to_fixed_64(uint32_t arg1, uint32_t arg2, int32_t arg3, char arg4);
-int private_platform_driver_register(struct platform_driver *drv);
-void private_platform_driver_unregister(struct platform_driver *drv);
-void private_platform_set_drvdata(struct platform_device *pdev, void *data);
-void *private_platform_get_drvdata(const struct platform_device *pdev);
-int private_platform_device_register(struct platform_device *pdev);
-void private_platform_device_unregister(struct platform_device *pdev);
+static int32_t private_leading_one_position(uint32_t arg1);
+static int32_t private_log2_int_to_fixed(uint32_t arg1);
+static int32_t private_log2_fixed_to_fixed(uint32_t a0);
+static int32_t private_leading_one_position_64(uint32_t arg1, uint32_t arg2);
+static int32_t private_log2_int_to_fixed_64(uint32_t arg1, uint32_t arg2, char arg3, char arg4);
+static int32_t private_log2_fixed_to_fixed_64(uint32_t arg1, uint32_t arg2, int32_t arg3, char arg4);
+static int private_platform_driver_register(struct platform_driver *drv);
+static void private_platform_driver_unregister(struct platform_driver *drv);
+static void private_platform_set_drvdata(struct platform_device *pdev, void *data);
+static void *private_platform_get_drvdata(const struct platform_device *pdev);
+static int private_platform_device_register(struct platform_device *pdev);
+static void private_platform_device_unregister(struct platform_device *pdev);
 struct resource *private_platform_get_resource(struct platform_device *pdev, unsigned int type, unsigned int num);
 int private_dev_set_drvdata(struct device *dev, void *data);
 void *private_dev_get_drvdata(const struct device *dev);
@@ -8894,28 +8914,28 @@ void private_release_mem_region(resource_size_t start, resource_size_t n);
 void __iomem *private_ioremap(phys_addr_t offset, unsigned long size);
 void private_iounmap(const volatile void __iomem *addr);
 int private_request_threaded_irq(unsigned int irq, irq_handler_t handler, irq_handler_t thread_fn, unsigned long flags, const char *name, void *dev);
-void private_enable_irq(unsigned int irq);
-void private_disable_irq(unsigned int irq);
+static void private_enable_irq(unsigned int irq);
+static void private_disable_irq(unsigned int irq);
 void private_free_irq(unsigned int irq, void *dev_id);
 void __private_spin_lock_irqsave(spinlock_t *lock, unsigned long *flags);
 void private_spin_unlock_irqrestore(spinlock_t *lock, unsigned long flags);
-void private_spin_lock_init(spinlock_t *lock);
+static void private_spin_lock_init(spinlock_t *lock);
 void private_mutex_lock(struct mutex *lock);
 void private_mutex_unlock(struct mutex *lock);
 void private_raw_mutex_init(struct mutex *lock, const char *name, struct lock_class_key *key);
-struct clk *private_clk_get(struct device *dev, const char *id);
+static struct clk *private_clk_get(struct device *dev, const char *id);
 int private_clk_is_enabled(struct clk *clk);
 unsigned long private_clk_get_rate(struct clk *clk);
-struct i2c_adapter *private_i2c_get_adapter(int nr);
+static struct i2c_adapter *private_i2c_get_adapter(int nr);
 void private_i2c_put_adapter(struct i2c_adapter *adap);
 int private_i2c_register_driver(struct module *owner, struct i2c_driver *driver);
-struct i2c_client *private_i2c_new_device(struct i2c_adapter *adap, const struct i2c_board_info *info);
+static struct i2c_client *private_i2c_new_device(struct i2c_adapter *adap, const struct i2c_board_info *info);
 void private_i2c_unregister_device(struct i2c_client *client);
 int private_gpio_direction_input(unsigned int gpio);
 int private_gpio_set_debounce(unsigned int gpio, unsigned int debounce);
 int private_jzgpio_ctrl_pull(enum gpio_port port, int enable_pull, unsigned long pins);
 unsigned long long private_sched_clock(void);
-bool private_try_module_get(struct module *module);
+static bool private_try_module_get(struct module *module);
 int private_request_module(bool wait, const char *fmt, ...);
 void private_module_put(struct module *module);
 void private_init_completion(struct completion *x);
@@ -8927,14 +8947,14 @@ void private_wake_up(wait_queue_head_t *q);
 void private_init_waitqueue_head(wait_queue_head_t *q);
 unsigned long private_wait_for_completion_timeout(struct completion *x, unsigned long timeout);
 int private_misc_register(struct miscdevice *mdev);
-int private_misc_deregister(struct miscdevice *mdev);
+static int private_misc_deregister(struct miscdevice *mdev);
 struct proc_dir_entry *private_proc_create_data(const char *name, umode_t mode, struct proc_dir_entry *parent, const struct file_operations *proc_fops, void *data);
 ssize_t private_seq_read(struct file *file, char __user *buf, size_t size, loff_t *ppos);
-loff_t private_seq_lseek(struct file *file, loff_t offset, int whence);
-int private_single_release(struct inode *inode, struct file *file);
-int private_single_open_size(struct file *file, int (*show)(struct seq_file *, void *), void *data, size_t size);
+static loff_t private_seq_lseek(struct file *file, loff_t offset, int whence);
+static int private_single_release(struct inode *inode, struct file *file);
+static int private_single_open_size(struct file *file, int (*show)(struct seq_file *, void *), void *data, size_t size);
 struct proc_dir_entry *private_jz_proc_mkdir(char *s);
-void private_proc_remove(struct proc_dir_entry *de);
+static void private_proc_remove(struct proc_dir_entry *de);
 int private_seq_printf(struct seq_file *m, const char *f, ...);
 unsigned long long private_simple_strtoull(const char *cp, char **endp, unsigned int base);
 bool private_kthread_should_stop(void);
@@ -8944,213 +8964,213 @@ void *private_kmalloc(size_t size, gfp_t flags);
 void private_kfree(void *p);
 long private_copy_from_user(void *to, const void __user *from, long size);
 long private_copy_to_user(void __user *to, const void *from, long size);
-struct sk_buff *private_nlmsg_new(size_t payload, gfp_t flags);
-struct nlmsghdr *private_nlmsg_put(struct sk_buff *skb, u32 portid, u32 seq, int type, int payload, int flags);
-int private_netlink_unicast(struct sock *ssk, struct sk_buff *skb, u32 portid, int nonblock);
-struct sock *private_netlink_kernel_create(struct net *net, int unit, struct netlink_kernel_cfg *cfg);
-void private_sock_release(struct socket *sock);
-struct file *private_filp_open(const char *filename, int flags, umode_t mode);
+static struct sk_buff *private_nlmsg_new(size_t payload, gfp_t flags);
+static struct nlmsghdr *private_nlmsg_put(struct sk_buff *skb, u32 portid, u32 seq, int type, int payload, int flags);
+static int private_netlink_unicast(struct sock *ssk, struct sk_buff *skb, u32 portid, int nonblock);
+static struct sock *private_netlink_kernel_create(struct net *net, int unit, struct netlink_kernel_cfg *cfg);
+static void private_sock_release(struct socket *sock);
+static struct file *private_filp_open(const char *filename, int flags, umode_t mode);
 int private_filp_close(struct file *filp, fl_owner_t id);
-ssize_t private_vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos);
-ssize_t private_vfs_write(struct file *file, const char __user *buf, size_t count, loff_t *pos);
-loff_t private_vfs_llseek(struct file *file, loff_t offset, int whence);
+static ssize_t private_vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos);
+static ssize_t private_vfs_write(struct file *file, const char __user *buf, size_t count, loff_t *pos);
+static loff_t private_vfs_llseek(struct file *file, loff_t offset, int whence);
 mm_segment_t private_get_fs(void);
 void private_set_fs(mm_segment_t val);
 void private_dma_cache_sync(struct device *dev, void *vaddr, size_t size, enum dma_data_direction direction);
-void private_getrawmonotonic(struct timespec *ts);
-struct net *private_get_init_net(void);
-void private_get_isp_priv_mem(unsigned int *phyaddr, unsigned int *size);
-int32_t find_new_buffer(uintptr_t a0, uint32_t a1, uint32_t a2);
-void* isp_mem_init(void);
-int32_t isp_malloc_buffer(int32_t arg1);
-int32_t isp_free_buffer(int32_t arg1);
-int32_t sub_ae30(int32_t a2, int32_t a3);
-int32_t sub_ae40(void);
-int32_t sub_ae48(void);
-int32_t sub_ae50(void);
-int32_t sub_ae58(void);
-int32_t sub_ae60(void);
-int sub_ae68(void);
-int32_t * sub_ae70(int32_t *arg1);
-int sub_ae88(void);
-int32_t sub_ae90(void);
-int32_t sub_ae98(void);
-int sub_aea0(void);
-int sub_aea8(void);
-int32_t sub_aeb0(void);
-int sub_aeb8(void);
-int sub_aec0(void);
-int32_t sub_aec8(void);
-int32_t sub_aed0(void);
-int32_t sub_aed8(void);
-void sub_aee0(void);
-int sub_aee8(void);
-int sub_aef0(void);
-int sub_aef8(void);
-int sub_af00(void);
-int32_t sub_af08(void);
-int32_t sub_af10(void);
-int32_t sub_af18(void);
-int32_t sub_af20(void);
-int32_t sub_af28(void);
-int32_t sub_af34(void);
-int32_t * sub_af3c(int32_t *arg1);
-int32_t sub_af80(void);
-int sub_af88(void);
-int sub_af90(void);
-int32_t sub_af98(void);
-int32_t sub_afa0(void);
-int sub_afa8(void);
-int32_t sub_afb0(void);
-int32_t sub_afb8(void);
-int32_t sub_afc0(void);
-int sub_afc8(void);
-int32_t sub_afd0(void);
-int32_t sub_afd8(void);
-int32_t sub_afe0(void);
-int32_t sub_afe8(void);
-int32_t sub_aff0(void);
-int sub_aff8(void);
-int32_t sub_b000(void);
-int sub_b008(void);
-int32_t sub_b010(void);
-int sub_b018(void);
-int sub_b020(void);
-int32_t sub_b028(void);
-int sub_b030(void);
-int sub_b038(void);
-int sub_b040(void);
-int32_t sub_b048(void);
-int32_t sub_b050(void);
-int32_t sub_b058(void);
-int32_t sub_b060(void);
-int sub_b068(void);
-int32_t sub_b070(void);
-struct clk *private_devm_clk_get(struct device *dev, const char *id);
-int private_clk_prepare_enable(struct clk *clk);
-void private_clk_disable_unprepare(struct clk *clk);
-void private_devm_clk_put(struct device *dev, struct clk *clk);
-int32_t sub_b098(void);
-int32_t sub_b0a0(void);
-int32_t sub_b0a8(void);
-int sub_b0b0(void);
-int32_t sub_b0b8(void);
-int32_t sub_b0c0(void);
-int sub_b0c8(void);
-int32_t sub_b0d0(void);
-int sub_b0d8(void);
-int32_t sub_b0e0(void);
-int32_t sub_b0e8(void);
-int32_t sub_b0f0(void);
-int32_t sub_b0f8(void);
-int sub_b100(void);
-int32_t sub_b108(void);
-int32_t sub_b114(void);
-int32_t sub_b11c(void);
-int32_t sub_b124(int32_t arg_8, int32_t arg_c);
-int sub_b134(void);
-int32_t sub_b13c(void);
-int32_t sub_b144(void);
-int32_t sub_b14c(void);
-int32_t sub_b154(void);
-int32_t sub_b160(void);
-int32_t sub_b168(void);
-int32_t sub_b170(void);
-int32_t sub_b178(void);
-int sub_b180(void);
-int32_t sub_b188(int32_t arg_8, int32_t arg_c);
-int32_t sub_b19c(void);
-int32_t sub_b1a4(void);
-int32_t sub_b1ac(void);
-int32_t sub_b1b4(void);
-int32_t sub_b1bc(void);
-int sub_b1c4(void);
-int32_t sub_b1cc(void);
-int32_t sub_b1d4(void);
-int sub_b1dc(void);
-int32_t sub_b1e4(void);
+static void private_getrawmonotonic(struct timespec *ts);
+static struct net *private_get_init_net(void);
+static void private_get_isp_priv_mem(unsigned int *phyaddr, unsigned int *size);
+static int32_t find_new_buffer(uintptr_t a0, uint32_t a1, uint32_t a2);
+static void* isp_mem_init(void);
+static int32_t isp_malloc_buffer(int32_t arg1);
+static int32_t isp_free_buffer(int32_t arg1);
+static int32_t sub_ae30(int32_t a2, int32_t a3);
+static int32_t sub_ae40(void);
+static int32_t sub_ae48(void);
+static int32_t sub_ae50(void);
+static int32_t sub_ae58(void);
+static int32_t sub_ae60(void);
+static int sub_ae68(void);
+static int32_t * sub_ae70(int32_t *arg1);
+static int sub_ae88(void);
+static int32_t sub_ae90(void);
+static int32_t sub_ae98(void);
+static int sub_aea0(void);
+static int sub_aea8(void);
+static int32_t sub_aeb0(void);
+static int sub_aeb8(void);
+static int sub_aec0(void);
+static int32_t sub_aec8(void);
+static int32_t sub_aed0(void);
+static int32_t sub_aed8(void);
+static void sub_aee0(void);
+static int sub_aee8(void);
+static int sub_aef0(void);
+static int sub_aef8(void);
+static int sub_af00(void);
+static int32_t sub_af08(void);
+static int32_t sub_af10(void);
+static int32_t sub_af18(void);
+static int32_t sub_af20(void);
+static int32_t sub_af28(void);
+static int32_t sub_af34(void);
+static int32_t * sub_af3c(int32_t *arg1);
+static int32_t sub_af80(void);
+static int sub_af88(void);
+static int sub_af90(void);
+static int32_t sub_af98(void);
+static int32_t sub_afa0(void);
+static int sub_afa8(void);
+static int32_t sub_afb0(void);
+static int32_t sub_afb8(void);
+static int32_t sub_afc0(void);
+static int sub_afc8(void);
+static int32_t sub_afd0(void);
+static int32_t sub_afd8(void);
+static int32_t sub_afe0(void);
+static int32_t sub_afe8(void);
+static int32_t sub_aff0(void);
+static int sub_aff8(void);
+static int32_t sub_b000(void);
+static int sub_b008(void);
+static int32_t sub_b010(void);
+static int sub_b018(void);
+static int sub_b020(void);
+static int32_t sub_b028(void);
+static int sub_b030(void);
+static int sub_b038(void);
+static int sub_b040(void);
+static int32_t sub_b048(void);
+static int32_t sub_b050(void);
+static int32_t sub_b058(void);
+static int32_t sub_b060(void);
+static int sub_b068(void);
+static int32_t sub_b070(void);
+static struct clk *private_devm_clk_get(struct device *dev, const char *id);
+static int private_clk_prepare_enable(struct clk *clk);
+static void private_clk_disable_unprepare(struct clk *clk);
+static void private_devm_clk_put(struct device *dev, struct clk *clk);
+static int32_t sub_b098(void);
+static int32_t sub_b0a0(void);
+static int32_t sub_b0a8(void);
+static int sub_b0b0(void);
+static int32_t sub_b0b8(void);
+static int32_t sub_b0c0(void);
+static int sub_b0c8(void);
+static int32_t sub_b0d0(void);
+static int sub_b0d8(void);
+static int32_t sub_b0e0(void);
+static int32_t sub_b0e8(void);
+static int32_t sub_b0f0(void);
+static int32_t sub_b0f8(void);
+static int sub_b100(void);
+static int32_t sub_b108(void);
+static int32_t sub_b114(void);
+static int32_t sub_b11c(void);
+static int32_t sub_b124(int32_t arg_8, int32_t arg_c);
+static int sub_b134(void);
+static int32_t sub_b13c(void);
+static int32_t sub_b144(void);
+static int32_t sub_b14c(void);
+static int32_t sub_b154(void);
+static int32_t sub_b160(void);
+static int32_t sub_b168(void);
+static int32_t sub_b170(void);
+static int32_t sub_b178(void);
+static int sub_b180(void);
+static int32_t sub_b188(int32_t arg_8, int32_t arg_c);
+static int32_t sub_b19c(void);
+static int32_t sub_b1a4(void);
+static int32_t sub_b1ac(void);
+static int32_t sub_b1b4(void);
+static int32_t sub_b1bc(void);
+static int sub_b1c4(void);
+static int32_t sub_b1cc(void);
+static int32_t sub_b1d4(void);
+static int sub_b1dc(void);
+static int32_t sub_b1e4(void);
 int32_t isp_irq_handle(int32_t arg1, void *arg2);
 int32_t isp_irq_thread_handle(int32_t arg1, void *arg2);
 int32_t tx_isp_enable_irq(uintptr_t a0);
 int32_t tx_isp_disable_irq(uintptr_t a0);
 int tx_isp_request_irq(struct platform_device *pdev, struct tx_isp_irq_info *irq_info);
-void tx_isp_free_irq(int32_t *arg1);
+static void tx_isp_free_irq(int32_t *arg1);
 int32_t ivdc_core_ops_ioctl(uintptr_t a0, uint32_t a1, uint32_t a2);
 int32_t ivdc_video_s_stream(void);
 int32_t ivdc_link_setup(void);
-int32_t ivdc_misc_release(void);
-int32_t ivdc_misc_read(void);
-int tx_isp_ivdc_probe(struct platform_device *pdev);
+static int32_t ivdc_misc_release(void);
+static int32_t ivdc_misc_read(void);
+static int tx_isp_ivdc_probe(struct platform_device *pdev);
 static long ivdc_misc_unlocked_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
-int32_t proc_ivdc_open(uint32_t a0, uint32_t a1);
-int32_t tx_isp_ivdc_show(uintptr_t a0);
-int32_t proc_ivdc_writel(uintptr_t a0, uint32_t a1, uint32_t a2);
+static int32_t proc_ivdc_open(uint32_t a0, uint32_t a1);
+static int32_t tx_isp_ivdc_show(uintptr_t a0);
+static int32_t proc_ivdc_writel(uintptr_t a0, uint32_t a1, uint32_t a2);
 int32_t ivdc_core_interrupt_service_routine(uintptr_t a0, uintptr_t a1);
 uint32_t ivdc_core_ops_init(uintptr_t a0, uint32_t a1, uint32_t a2);
-int32_t ivdc_misc_open(void);
+static int32_t ivdc_misc_open(void);
 int32_t ivdc_slake_module(uintptr_t a0);
 int ivdc_activate_module(void* arg1);
-int32_t dump_ivdc_regs(uint32_t a0);
-int32_t ivdc_enable_irq(uintptr_t a0);
-int32_t ivdc_disable_irq(uintptr_t a0);
-int32_t ivdc_pad_event_handle(uintptr_t a0, uint32_t a1, uintptr_t a2);
+static int32_t dump_ivdc_regs(uint32_t a0);
+static int32_t ivdc_enable_irq(uintptr_t a0);
+static int32_t ivdc_disable_irq(uintptr_t a0);
+static int32_t ivdc_pad_event_handle(uintptr_t a0, uint32_t a1, uintptr_t a2);
 int32_t fs_activate_module(void *arg1);
 int32_t __enqueue_in_driver(uintptr_t a0);
 void __vb2_queue_cancel(uintptr_t a0);
 int32_t __frame_channel_vb2_streamoff(void *arg1, int32_t arg2, int32_t arg3);
 int32_t __vb2_queue_free(uintptr_t a0, uint32_t a1);
 int fs_slake_module(struct tx_isp_subdev *sd);
-int32_t frame_channel_release(uint32_t a0, uintptr_t a1);
-int32_t dump_isp_framesource_open(uint32_t a0, uint32_t a1);
-int32_t isp_framesource_show(uintptr_t a0);
+static int32_t frame_channel_release(uint32_t a0, uintptr_t a1);
+static int32_t dump_isp_framesource_open(uint32_t a0, uint32_t a1);
+static int32_t isp_framesource_show(uintptr_t a0);
 int32_t __fill_v4l2_buffer(void *arg1, void *arg2);
-int32_t frame_chan_event(uintptr_t a0, uint32_t a1, uintptr_t a2);
-int frame_channel_open(struct inode *inode, struct file *file);
-int32_t frame_channel_vidioc_set_fmt(uintptr_t a0, uint32_t a1);
-int32_t frame_channel_vidioc_get_fmt(uintptr_t a0, uint32_t a1);
+static int32_t frame_chan_event(uintptr_t a0, uint32_t a1, uintptr_t a2);
+static int frame_channel_open(struct inode *inode, struct file *file);
+static int32_t frame_channel_vidioc_set_fmt(uintptr_t a0, uint32_t a1);
+static int32_t frame_channel_vidioc_get_fmt(uintptr_t a0, uint32_t a1);
 static long frame_channel_unlocked_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
-int32_t check_state(void *arg1);
-void tx_isp_frame_chan_deinit(struct tx_isp_frame_channel *chan);
-int tx_isp_fs_probe(struct platform_device *pdev);
-int sensor_alloc_analog_gain(int gain, void *arg2);
-int32_t sensor_alloc_analog_gain_short(int32_t arg1, int32_t *arg2);
-int32_t sensor_alloc_digital_gain(int32_t arg1, void *arg2);
-int32_t sensor_alloc_integration_time(uint32_t a0, void *a1);
-int32_t sensor_alloc_integration_time_short(int32_t arg1, void *arg2);
-uint32_t sensor_set_integration_time(uint32_t a0);
-uint32_t sensor_set_integration_time_short(uint32_t a0);
-uint32_t sensor_set_analog_gain(uint32_t a0);
-uint32_t sensor_set_analog_gain_short(uint32_t a0);
-uint32_t sensor_set_digital_gain(uint32_t a0);
-uint32_t sensor_get_normal_fps(void);
-int32_t sensor_read_black_pedestal(void);
-int sensor_end_changes(void);
-uint32_t sensor_get_id(void);
-int sensor_set_wdr_mode(void);
-int64_t sensor_fps_control(uint32_t a0, uintptr_t a1);
-int sensor_disable_isp(void);
-int32_t sensor_get_lines_per_second(void);
-uint32_t sensor_set_mode(uint32_t arg1, uint32_t arg2);
-int sensor_start_changes(void);
-int sensor_hw_reset_enable(void);
-int sensor_hw_reset_disable(void);
-int32_t sensor_init(uintptr_t a0);
+static int32_t check_state(void *arg1);
+static void tx_isp_frame_chan_deinit(struct tx_isp_frame_channel *chan);
+static int tx_isp_fs_probe(struct platform_device *pdev);
+static int sensor_alloc_analog_gain(int gain, void *arg2);
+static int32_t sensor_alloc_analog_gain_short(int32_t arg1, int32_t *arg2);
+static int32_t sensor_alloc_digital_gain(int32_t arg1, void *arg2);
+static int32_t sensor_alloc_integration_time(uint32_t a0, void *a1);
+static int32_t sensor_alloc_integration_time_short(int32_t arg1, void *arg2);
+static uint32_t sensor_set_integration_time(uint32_t a0);
+static uint32_t sensor_set_integration_time_short(uint32_t a0);
+static uint32_t sensor_set_analog_gain(uint32_t a0);
+static uint32_t sensor_set_analog_gain_short(uint32_t a0);
+static uint32_t sensor_set_digital_gain(uint32_t a0);
+static uint32_t sensor_get_normal_fps(void);
+static int32_t sensor_read_black_pedestal(void);
+static int sensor_end_changes(void);
+static uint32_t sensor_get_id(void);
+static int sensor_set_wdr_mode(void);
+static int64_t sensor_fps_control(uint32_t a0, uintptr_t a1);
+static int sensor_disable_isp(void);
+static int32_t sensor_get_lines_per_second(void);
+static uint32_t sensor_set_mode(uint32_t arg1, uint32_t arg2);
+static int sensor_start_changes(void);
+static int sensor_hw_reset_enable(void);
+static int sensor_hw_reset_disable(void);
+static int32_t sensor_init(uintptr_t a0);
 int32_t sensor_early_init(uint32_t arg1);
 int32_t tx_isp_video_s_stream(void *arg1, int32_t arg2);
-int32_t tx_isp_video_link_stream(void *arg1, int32_t arg2);
-int32_t tx_isp_open(int32_t arg1, void *arg2);
+static int32_t tx_isp_video_link_stream(void *arg1, int32_t arg2);
+static int32_t tx_isp_open(int32_t arg1, void *arg2);
 int tx_isp_notify(void *module, unsigned int notification, void *data);
-int64_t find_subdev_link_pad(uintptr_t arg1, uintptr_t arg2);
-int32_t isp_subdev_release_clks(void *arg1);
+static int64_t find_subdev_link_pad(uintptr_t arg1, uintptr_t arg2);
+static int32_t isp_subdev_release_clks(void *arg1);
 int isp_subdev_init_clks(void * arg1, int32_t * arg2);
-int32_t tx_isp_unregister_platforms(uintptr_t a0);
-int32_t tx_isp_exit(void);
-int32_t subdev_video_destroy_link(uintptr_t a0);
+static int32_t tx_isp_unregister_platforms(uintptr_t a0);
+static int32_t tx_isp_exit(void);
+static int32_t subdev_video_destroy_link(uintptr_t a0);
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t tx_isp_video_link_destroy_isra_9(uintptr_t a0) __asm__("tx_isp_video_link_destroy.isra.9");
+static int32_t tx_isp_video_link_destroy_isra_9(uintptr_t a0) __asm__("tx_isp_video_link_destroy.isra.9");
 #endif
-int32_t tx_isp_video_link_destroy_isra_9(uintptr_t a0);
-int32_t tx_isp_release(uint32_t a0, uintptr_t a1);
+static int32_t tx_isp_video_link_destroy_isra_9(uintptr_t a0);
+static int32_t tx_isp_release(uint32_t a0, uintptr_t a1);
 int32_t tx_isp_init(void);
 static long tx_isp_unlocked_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
 int private_reset_tx_isp_module(int arg);
@@ -9163,12 +9183,12 @@ int32_t tx_isp_subdev_deinit(uintptr_t arg1);
 #ifdef REGTRACE_KERNEL_TREE_BUILD
 char __bss_start[4096];
 
-int private_platform_driver_register(struct platform_driver *drv) { return platform_driver_register(drv); }
-void private_platform_driver_unregister(struct platform_driver *drv) { platform_driver_unregister(drv); }
-void private_platform_set_drvdata(struct platform_device *pdev, void *data) { platform_set_drvdata(pdev, data); }
-void *private_platform_get_drvdata(const struct platform_device *pdev) { return platform_get_drvdata((struct platform_device *)pdev); }
-int private_platform_device_register(struct platform_device *pdev) { return platform_device_register(pdev); }
-void private_platform_device_unregister(struct platform_device *pdev) { platform_device_unregister(pdev); }
+static int private_platform_driver_register(struct platform_driver *drv) { return platform_driver_register(drv); }
+static void private_platform_driver_unregister(struct platform_driver *drv) { platform_driver_unregister(drv); }
+static void private_platform_set_drvdata(struct platform_device *pdev, void *data) { platform_set_drvdata(pdev, data); }
+static void *private_platform_get_drvdata(const struct platform_device *pdev) { return platform_get_drvdata((struct platform_device *)pdev); }
+static int private_platform_device_register(struct platform_device *pdev) { return platform_device_register(pdev); }
+static void private_platform_device_unregister(struct platform_device *pdev) { platform_device_unregister(pdev); }
 struct resource *private_platform_get_resource(struct platform_device *pdev, unsigned int type, unsigned int num)
 {
     struct resource *res = platform_get_resource(pdev, type, num);
@@ -9234,30 +9254,30 @@ int private_request_threaded_irq(unsigned int irq, irq_handler_t handler, irq_ha
            irq, name ? name : "(null)", flags, dev, ret);
     return ret;
 }
-void private_enable_irq(unsigned int irq) { enable_irq(irq); }
-void private_disable_irq(unsigned int irq) { disable_irq(irq); }
+static void private_enable_irq(unsigned int irq) { enable_irq(irq); }
+static void private_disable_irq(unsigned int irq) { disable_irq(irq); }
 void __private_spin_lock_irqsave(spinlock_t *lock, unsigned long *flags) { if (lock && flags) spin_lock_irqsave(lock, *flags); else if (flags) *flags = 0; }
 void private_spin_unlock_irqrestore(spinlock_t *lock, unsigned long flags) { if (lock) spin_unlock_irqrestore(lock, flags); }
-void private_spin_lock_init(spinlock_t *lock) { if (lock) spin_lock_init(lock); }
+static void private_spin_lock_init(spinlock_t *lock) { if (lock) spin_lock_init(lock); }
 void private_mutex_lock(struct mutex *lock) { if (lock) mutex_lock(lock); }
 void private_mutex_unlock(struct mutex *lock) { if (lock) mutex_unlock(lock); }
 void private_raw_mutex_init(struct mutex *lock, const char *name, struct lock_class_key *key) { if (lock) __mutex_init(lock, name ? name : "regtrace_mutex", key); }
-struct clk *private_clk_get(struct device *dev, const char *id) { return clk_get(dev, id); }
+static struct clk *private_clk_get(struct device *dev, const char *id) { return clk_get(dev, id); }
 unsigned long private_clk_get_rate(struct clk *clk) { return clk ? clk_get_rate(clk) : 0; }
-struct i2c_adapter *private_i2c_get_adapter(int nr) { return i2c_get_adapter(nr); }
+static struct i2c_adapter *private_i2c_get_adapter(int nr) { return i2c_get_adapter(nr); }
 void private_i2c_put_adapter(struct i2c_adapter *adap) { if (adap) i2c_put_adapter(adap); }
-struct i2c_client *private_i2c_new_device(struct i2c_adapter *adap, const struct i2c_board_info *info) { return i2c_new_device(adap, info); }
+static struct i2c_client *private_i2c_new_device(struct i2c_adapter *adap, const struct i2c_board_info *info) { return i2c_new_device(adap, info); }
 void private_i2c_unregister_device(struct i2c_client *client) { if (client) i2c_unregister_device(client); }
-bool private_try_module_get(struct module *module) { return try_module_get(module); }
+static bool private_try_module_get(struct module *module) { return try_module_get(module); }
 int private_request_module(bool wait, const char *fmt, ...) { return (fmt && fmt[0]) ? __request_module(wait, "%s", fmt) : 0; }
 void private_module_put(struct module *module) { if (module) module_put(module); }
 void private_init_completion(struct completion *x) { if (x) init_completion(x); }
 void private_complete(struct completion *x) { if (x) complete(x); }
-int private_misc_deregister(struct miscdevice *mdev) { return misc_deregister(mdev); }
-loff_t private_seq_lseek(struct file *file, loff_t offset, int whence) { return seq_lseek(file, offset, whence); }
-int private_single_release(struct inode *inode, struct file *file) { return single_release(inode, file); }
-int private_single_open_size(struct file *file, int (*show)(struct seq_file *, void *), void *data, size_t size) { return single_open_size(file, show, data, size); }
-void private_proc_remove(struct proc_dir_entry *de) { if (de) proc_remove(de); }
+static int private_misc_deregister(struct miscdevice *mdev) { return misc_deregister(mdev); }
+static loff_t private_seq_lseek(struct file *file, loff_t offset, int whence) { return seq_lseek(file, offset, whence); }
+static int private_single_release(struct inode *inode, struct file *file) { return single_release(inode, file); }
+static int private_single_open_size(struct file *file, int (*show)(struct seq_file *, void *), void *data, size_t size) { return single_open_size(file, show, data, size); }
+static void private_proc_remove(struct proc_dir_entry *de) { if (de) proc_remove(de); }
 int private_seq_printf(struct seq_file *m, const char *f, ...)
 {
     va_list args;
@@ -9274,11 +9294,11 @@ long private_copy_from_user(void *to, const void __user *from, long size) { retu
 
 uintptr_t __divdi3(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3) { (void)a0; (void)a1; (void)a2; (void)a3; return 0; }
 uintptr_t __moddi3(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3) { (void)a0; (void)a1; (void)a2; (void)a3; return 0; }
-void call_text_func(void) {}
+static void call_text_func(void) {}
 #define REGTRACE_T23_COMMON_IFACE_ISPMEM_OFFSET 476U
 #define REGTRACE_T23_COMMON_IFACE_FLAGS1_OFFSET 480U
 
-void get_isp_priv_mem(unsigned int *phyaddr, unsigned int *size)
+static void get_isp_priv_mem(unsigned int *phyaddr, unsigned int *size)
 {
     unsigned char *interfaces;
     void (*getter)(unsigned int *, unsigned int *);
@@ -9775,10 +9795,10 @@ static int regtrace_t23_sensor_registered;
 int32_t tisp_cust_mode_s_ctrl(uint32_t arg1, uint32_t arg2);
 uint32_t tisp_cust_mode_g_ctrl(void);
 int32_t tisp_ae_s_comp(uint32_t a0);
-char tisp_ae_g_comp(uint32_t a0, char *arg2);
+static char tisp_ae_g_comp(uint32_t a0, char *arg2);
 uint8_t tisp_ae_g_luma(uint8_t *arg1);
 int64_t tisp_day_or_night_s_ctrl(uintptr_t a0, uint32_t a1);
-int32_t tisp_day_or_night_g_ctrl(uint32_t a0);
+static int32_t tisp_day_or_night_g_ctrl(uint32_t a0);
 int32_t system_reg_write(uint32_t a0, uint32_t a1);
 int32_t system_reg_read(uint32_t a0);
 int32_t tisp_simple_intp(int32_t arg1, int32_t arg2, void *arg3);
@@ -9792,7 +9812,7 @@ static void regtrace_t23_sdns_ratio_snapshot(void);
 int tiziano_sdns_init(void);
 int32_t tiziano_adr_init(uint32_t arg0, uint32_t width, uint32_t height);
 int32_t tisp_gib_gain_interpolation(uint32_t gain_q16);
-int32_t tisp_ydns_refresh(uint32_t gain_q16);
+static int32_t tisp_ydns_refresh(uint32_t gain_q16);
 uint32_t tisp_math_exp2(uint32_t value, uint32_t input_precision,
                         uint32_t output_precision);
 int32_t tisp_log2_fixed_to_fixed(uint32_t a0, uint32_t a1, uint32_t a2);
@@ -9804,7 +9824,7 @@ int32_t tiziano_defog_params_init(void);
 int32_t defog_3x3_5x5_params_init(uint32_t width, uint32_t height);
 int32_t tisp_hldc_con_par_cfg(void);
 int32_t tisp_hldc_par_refresh_part_1(void);
-int32_t tiziano_hldc_init(void);
+static int32_t tiziano_hldc_init(void);
 int tisp_dmsc_sharpness_set(uint32_t a0, uint32_t a1);
 int32_t tisp_msca_addr_fifo_write(char arg1, int32_t arg2, int32_t arg3);
 int32_t tisp_channel_start(int32_t arg1);
@@ -13060,7 +13080,7 @@ int32_t tisp_bcsh_ct_update(uintptr_t ignored, uint32_t ct);
 int32_t tiziano_bcsh_init(void);
 int32_t tisp_lsc_ct_update(uint32_t ct);
 int32_t tisp_lsc_write_lut_datas(void);
-int32_t tisp_lsc_gain_update(uint32_t a0);
+static int32_t tisp_lsc_gain_update(uint32_t a0);
 int32_t tisp_lsc_mirror_flip(uint32_t unused, uint32_t width,
                              uint32_t height, uint32_t flip,
                              uint32_t mirror);
@@ -16808,168 +16828,168 @@ EXPORT_SYMBOL(tx_isp_subdev_init);
 EXPORT_SYMBOL(tx_isp_subdev_deinit);
 
 int32_t tx_isp_create_graph_and_nodes(uintptr_t a0);
-int tx_isp_probe(struct platform_device *pdev);
-int sub_13060(void);
-int32_t sub_13068(void);
-int32_t sub_13078(void);
-int32_t get_isp_memopt(void);
-int32_t sub_13088(void);
-int sub_13090(void);
-int sub_13098(void);
-int sub_130a0(void);
-int32_t sub_130a8(void);
-int32_t sub_130b0(void);
-int32_t sub_130b8(void);
-int sub_130c0(void);
-int sub_130c8(void);
-int sub_130d0(void);
-int32_t sub_130d8(void);
-int32_t sub_130e0(void);
-int32_t sub_130e8(void);
-int32_t sub_130f0(void);
-int32_t sub_130fc(void);
-int32_t* sub_13104(int32_t* arg1);
-int sub_13148(void);
-int sub_13150(void);
-int sub_13158(void);
-int32_t sub_13160(void);
-int sub_13168(void);
-int sub_13170(void);
-int sub_13178(void);
-int sub_13180(void);
-int sub_13188(void);
-int32_t sub_13190(void);
-int32_t sub_13198(void);
-int32_t sub_131a4(void);
-int32_t sub_131ac(void);
-int32_t sub_131b4(void);
-int32_t sub_131bc(void);
-int sub_131c4(void);
-int32_t sub_131cc(void);
-int32_t sub_131e0(void);
-int32_t sub_131e8(void);
-int32_t sub_131f0(void);
-int sub_131f8(void);
-int32_t sub_13200(void);
-int32_t sub_13208(void);
-int32_t sub_13210(void);
-int32_t sub_13218(void);
+static int tx_isp_probe(struct platform_device *pdev);
+static int sub_13060(void);
+static int32_t sub_13068(void);
+static int32_t sub_13078(void);
+static int32_t get_isp_memopt(void);
+static int32_t sub_13088(void);
+static int sub_13090(void);
+static int sub_13098(void);
+static int sub_130a0(void);
+static int32_t sub_130a8(void);
+static int32_t sub_130b0(void);
+static int32_t sub_130b8(void);
+static int sub_130c0(void);
+static int sub_130c8(void);
+static int sub_130d0(void);
+static int32_t sub_130d8(void);
+static int32_t sub_130e0(void);
+static int32_t sub_130e8(void);
+static int32_t sub_130f0(void);
+static int32_t sub_130fc(void);
+static int32_t* sub_13104(int32_t* arg1);
+static int sub_13148(void);
+static int sub_13150(void);
+static int sub_13158(void);
+static int32_t sub_13160(void);
+static int sub_13168(void);
+static int sub_13170(void);
+static int sub_13178(void);
+static int sub_13180(void);
+static int sub_13188(void);
+static int32_t sub_13190(void);
+static int32_t sub_13198(void);
+static int32_t sub_131a4(void);
+static int32_t sub_131ac(void);
+static int32_t sub_131b4(void);
+static int32_t sub_131bc(void);
+static int sub_131c4(void);
+static int32_t sub_131cc(void);
+static int32_t sub_131e0(void);
+static int32_t sub_131e8(void);
+static int32_t sub_131f0(void);
+static int sub_131f8(void);
+static int32_t sub_13200(void);
+static int32_t sub_13208(void);
+static int32_t sub_13210(void);
+static int32_t sub_13218(void);
 uint32_t tisp_math_exp2(uint32_t a0, uint32_t a1, uint32_t a2);
-int32_t fix_point_mult2(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5, int32_t arg6);
-int32_t fix_point_mult3(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5, int32_t arg6, int32_t arg7, int32_t arg8);
-int32_t fix_point_mult2_64(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t arg4, uint32_t arg5);
-int32_t fix_point_mult3_64(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t arg4, uint32_t arg5, uint32_t arg6, uint32_t arg7);
-int32_t fix_point_div_64(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t arg4, uint32_t arg5);
-int32_t fix_point_div(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t arg4, uint32_t arg5);
+static int32_t fix_point_mult2(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5, int32_t arg6);
+static int32_t fix_point_mult3(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5, int32_t arg6, int32_t arg7, int32_t arg8);
+static int32_t fix_point_mult2_64(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t arg4, uint32_t arg5);
+static int32_t fix_point_mult3_64(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t arg4, uint32_t arg5, uint32_t arg6, uint32_t arg7);
+static int32_t fix_point_div_64(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t arg4, uint32_t arg5);
+static int32_t fix_point_div(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t arg4, uint32_t arg5);
 int32_t fix_point_add_32(uint32_t a0, uint32_t a1, uint32_t a2);
 int32_t fix_point_sub_32(int32_t arg1, int32_t arg2, int32_t arg3);
 int32_t fix_point_mult2_32(int32_t arg1, int32_t arg2, int32_t arg3);
-int32_t fix_point_mult3_32(int32_t arg1, int32_t arg2, int32_t arg3);
+static int32_t fix_point_mult3_32(int32_t arg1, int32_t arg2, int32_t arg3);
 int fix_point_div_32(int arg1, int arg2, int arg3);
-int32_t fix_point_intp(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5);
-int32_t table_intp(int32_t arg1, int32_t *arg2, int32_t arg3, int32_t arg4);
+static int32_t fix_point_intp(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5);
+static int32_t table_intp(int32_t arg1, int32_t *arg2, int32_t arg3, int32_t arg4);
 int32_t tisp_simple_intp(int32_t arg1, int32_t arg2, void *arg3);
 int32_t tisp_log2_int_to_fixed(uint32_t arg1, char arg2, char arg3);
 int32_t tisp_log2_fixed_to_fixed(uint32_t a0, uint32_t a1, uint32_t a2);
 int32_t tisp_log2_int_to_fixed_64(uint32_t arg1, uint32_t arg2, char arg3, char arg4);
 int32_t tisp_log2_fixed_to_fixed_64(uint32_t arg1, uint32_t arg2, int32_t arg3, char arg4);
-int32_t ISPAWBInterpolation1(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5, int32_t arg6);
-int32_t ISPAWBInterpolation2(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5, int32_t arg6);
-int32_t func_zone_ct_weight(uint32_t a0, uintptr_t a1, uintptr_t a2, uint32_t a3, uint32_t arg4);
-int32_t* Tiziano_Awb_Ct_Detect(uintptr_t a0, uintptr_t a1, uintptr_t a2, uint32_t a3, uintptr_t arg4, uintptr_t arg5, uintptr_t arg6, uint32_t arg7, uint32_t arg8, uintptr_t arg9, uintptr_t arg10, uintptr_t arg11, uintptr_t arg12, uintptr_t arg13, uintptr_t arg14, uintptr_t arg15, uintptr_t arg16, uintptr_t arg17, uintptr_t arg18, uintptr_t arg19);
-int32_t crc32(uint32_t a0, uint32_t a1);
-int32_t tisp_long_tgain_update(uint32_t a0, uint32_t a1, uint32_t a2);
-int32_t tisp_ct_update(int32_t arg1, int32_t arg2, uint32_t arg3);
-int32_t tisp_ae_ir_update(uint32_t a0, uint32_t a1, uint32_t a2);
-int32_t tisp_long_ev_update(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3);
-int32_t tisp_long_again_update(void);
-int32_t tisp_short_tgain_update(void);
-int32_t tisp_short_ev_update(void);
-int32_t tisp_ipc_triger(void *arg1);
-int32_t tisp_stream_on(uintptr_t a0);
-int32_t tisp_process_init(void);
-int32_t tisp_process_deinit(uint32_t a0);
-int tisp_activate_all(void);
-int tisp_slake_all(void);
-int32_t tisp_function_clear(void);
-int tisp_deinit(int arg1);
-int32_t tisp_fw_process(void);
+static int32_t ISPAWBInterpolation1(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5, int32_t arg6);
+static int32_t ISPAWBInterpolation2(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5, int32_t arg6);
+static int32_t func_zone_ct_weight(uint32_t a0, uintptr_t a1, uintptr_t a2, uint32_t a3, uint32_t arg4);
+static int32_t* Tiziano_Awb_Ct_Detect(uintptr_t a0, uintptr_t a1, uintptr_t a2, uint32_t a3, uintptr_t arg4, uintptr_t arg5, uintptr_t arg6, uint32_t arg7, uint32_t arg8, uintptr_t arg9, uintptr_t arg10, uintptr_t arg11, uintptr_t arg12, uintptr_t arg13, uintptr_t arg14, uintptr_t arg15, uintptr_t arg16, uintptr_t arg17, uintptr_t arg18, uintptr_t arg19);
+static int32_t crc32(uint32_t a0, uint32_t a1);
+static int32_t tisp_long_tgain_update(uint32_t a0, uint32_t a1, uint32_t a2);
+static int32_t tisp_ct_update(int32_t arg1, int32_t arg2, uint32_t arg3);
+static int32_t tisp_ae_ir_update(uint32_t a0, uint32_t a1, uint32_t a2);
+static int32_t tisp_long_ev_update(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3);
+static int32_t tisp_long_again_update(void);
+static int32_t tisp_short_tgain_update(void);
+static int32_t tisp_short_ev_update(void);
+static int32_t tisp_ipc_triger(void *arg1);
+static int32_t tisp_stream_on(uintptr_t a0);
+static int32_t tisp_process_init(void);
+static int32_t tisp_process_deinit(uint32_t a0);
+static int tisp_activate_all(void);
+static int tisp_slake_all(void);
+static int32_t tisp_function_clear(void);
+static int tisp_deinit(int arg1);
+static int32_t tisp_fw_process(void);
 int32_t tisp_channel_start(int32_t arg1);
-int32_t tisp_channel_main_stop(int32_t arg1);
-int32_t tisp_channel_main_fifo_clear(int32_t arg1);
+static int32_t tisp_channel_main_stop(int32_t arg1);
+static int32_t tisp_channel_main_fifo_clear(int32_t arg1);
 int64_t tisp_channel_main_attr_set(uint32_t a0, uintptr_t a1);
-void tiziano_reserve_reg_write(void);
-int32_t tiziano_load_parameters(uint32_t a0);
-int32_t tisp_init(uint32_t arg1, uintptr_t arg2);
-int32_t tiziano_sync_sensor_attr(uintptr_t a0);
+static void tiziano_reserve_reg_write(void);
+static int32_t tiziano_load_parameters(uint32_t a0);
+static int32_t tisp_init(uint32_t arg1, uintptr_t arg2);
+static int32_t tiziano_sync_sensor_attr(uintptr_t a0);
 int32_t tisp_core_switch_bin(uint32_t a0);
-int tisp_event_init(uint32_t channel);
+static int tisp_event_init(uint32_t channel);
 int tisp_event_set_cb(uint32_t channel, uint32_t event_id, void *callback);
 int32_t tisp_event_push(uint32_t channel, const void *event);
-int32_t tisp_event_exit(uint32_t channel);
-int tisp_event_process(uint32_t channel);
-int32_t tisp_msca_normalized(uintptr_t a0, uint32_t a1, uintptr_t a2);
-int32_t tisp_sin(uint32_t a0, uint32_t a1, uintptr_t a2);
+static int32_t tisp_event_exit(uint32_t channel);
+static int tisp_event_process(uint32_t channel);
+static int32_t tisp_msca_normalized(uintptr_t a0, uint32_t a1, uintptr_t a2);
+static int32_t tisp_sin(uint32_t a0, uint32_t a1, uintptr_t a2);
 int32_t tisp_msca_para_calc(uint32_t a0, uint32_t a1, uintptr_t a2);
 int32_t tisp_msca_init_chx_cfg(uint32_t a0, uint32_t a1, uintptr_t a2);
 int32_t tisp_msca_ch_curve_write(uint32_t a0, uintptr_t a1);
 int32_t tisp_msca_ch_curve_write_ctrl(uint32_t a0);
-int32_t tisp_msca_scaling_algorithm(void);
-int32_t tisp_msca_write_reg(void);
+static int32_t tisp_msca_scaling_algorithm(void);
+static int32_t tisp_msca_write_reg(void);
 int32_t tisp_msca_curve_calc(uint32_t a0, uint32_t a1);
 int32_t tisp_msca_chx_cfg_load(uint32_t a0, uint32_t a1, uintptr_t a2);
-int32_t tisp_msca_params_refresh(void);
-int32_t tisp_msca_init(uint32_t a0, uint32_t a1, uint32_t a2);
-void* tisp_msca_deinit(void);
-int32_t tisp_msca_params_update(uint32_t a0);
-int32_t tisp_msca_crop_api(int32_t arg1, char arg2, void *arg3);
-int32_t tisp_msca_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2);
-int32_t tisp_msca_param_array_set(uint32_t a0, uint32_t a1);
+static int32_t tisp_msca_params_refresh(void);
+static int32_t tisp_msca_init(uint32_t a0, uint32_t a1, uint32_t a2);
+static void* tisp_msca_deinit(void);
+static int32_t tisp_msca_params_update(uint32_t a0);
+static int32_t tisp_msca_crop_api(int32_t arg1, char arg2, void *arg3);
+static int32_t tisp_msca_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2);
+static int32_t tisp_msca_param_array_set(uint32_t a0, uint32_t a1);
 int32_t tisp_msca_addr_fifo_write(char arg1, int32_t arg2, int32_t arg3);
-int32_t tisp_msca_addr_fifo_read(char arg1, int32_t *arg2, int32_t *arg3);
-int32_t tisp_msca_ir_init(void);
-int tisp_msca_addr_ir_fifo_read(void);
-int tisp_msca_addr_ir_fifo_write(void);
+static int32_t tisp_msca_addr_fifo_read(char arg1, int32_t *arg2, int32_t *arg3);
+static int32_t tisp_msca_ir_init(void);
+static int tisp_msca_addr_ir_fifo_read(void);
+static int tisp_msca_addr_ir_fifo_write(void);
 int32_t tisp_msca_api_set_osd(uint32_t a0, uintptr_t a1, uintptr_t a2);
 int32_t tisp_msca_api_set_mask(uint32_t a0, uintptr_t a1, uintptr_t a2);
-int32_t tisp_msca_api_set_line(int32_t arg1, int16_t *arg2, void *arg3);
+static int32_t tisp_msca_api_set_line(int32_t arg1, int16_t *arg2, void *arg3);
 int32_t tisp_msca_set_omi_api(uint32_t a0, uintptr_t a1);
 int32_t tisp_msca_api_set_mirr_flip(int32_t arg1, void *arg2);
 int32_t tisp_msca_api_get_fcrop(uint32_t a0, uintptr_t a1);
 int32_t tisp_msca_api_set_fcrop(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t arg4, uint32_t arg5);
-int32_t tisp_msca_api_set_scaler_level_control(uint32_t a0, uintptr_t a1, uint32_t a2);
+static int32_t tisp_msca_api_set_scaler_level_control(uint32_t a0, uintptr_t a1, uint32_t a2);
 int tisp_set_csc_version(uint32_t a0, uint32_t a1);
 int32_t tisp_set_user_csc(uint32_t a0, uint32_t a1);
 int32_t tisp_get_current_csc(int32_t arg1, uint32_t *version,
                              int32_t *params);
 int32_t tiziano_gamma_lut_parameter(void);
 int32_t tiziano_gamma_params_refresh(void);
-int tisp_gamma_wdr_en(int enable);
+static int tisp_gamma_wdr_en(int enable);
 int32_t tiziano_gamma_dn_params_refresh(void);
 int32_t tiziano_gamma_init(void);
 int32_t tisp_gamma_param_array_get(int32_t arg1, int32_t *arg2, int32_t *arg3);
-int32_t tisp_gamma_param_array_set(int32_t arg1, const void *arg2);
-int32_t tisp_api_gamma_param_set(const void *src);
-int32_t tisp_api_gamma_param_get(int32_t arg1, int32_t *arg2, int32_t *arg3);
+static int32_t tisp_gamma_param_array_set(int32_t arg1, const void *arg2);
+static int32_t tisp_api_gamma_param_set(const void *src);
+static int32_t tisp_api_gamma_param_get(int32_t arg1, int32_t *arg2, int32_t *arg3);
 int tiziano_adr_gamma_refresh(void);
-int32_t isp_tunning_poll(uint32_t a0, uintptr_t a1);
-int32_t isp_tunning_read(uint32_t a0, uint32_t a1, uint32_t a2);
-int tisp_code_tuning_release(struct inode *inode, struct file *file);
-int32_t tisp_code_tuning_open(void);
-int32_t tisp_top_param_array_get(uint32_t a0, uintptr_t a1);
-int32_t tisp_comn_param_array_get(uint32_t a0, uintptr_t a1);
-int32_t tisp_comn_param_array_set(uint32_t a0, uint32_t a1);
-int32_t tisp_top_param_array_set(int32_t arg1);
-int32_t tisp_get_ae_info(uintptr_t a0);
-int32_t tisp_set_ae_info(uintptr_t a0);
-int32_t tisp_get_awb_info(uintptr_t a0);
-int32_t tisp_set_awb_info(uintptr_t a0);
-int32_t tisp_set_ae_minmax(void *arg1);
-int32_t tisp_reg_map_get(uint32_t a0, uint32_t a1, uintptr_t a2);
-int32_t tisp_reg_map_set(int32_t arg1);
-int32_t tisp_code_tuning_ioctl(int32_t arg1, int32_t arg2, int32_t arg3);
-int32_t tisp_code_create_tuning_node(void);
-int32_t tisp_code_destroy_tuning_node(void);
+static int32_t isp_tunning_poll(uint32_t a0, uintptr_t a1);
+static int32_t isp_tunning_read(uint32_t a0, uint32_t a1, uint32_t a2);
+static int tisp_code_tuning_release(struct inode *inode, struct file *file);
+static int32_t tisp_code_tuning_open(void);
+static int32_t tisp_top_param_array_get(uint32_t a0, uintptr_t a1);
+static int32_t tisp_comn_param_array_get(uint32_t a0, uintptr_t a1);
+static int32_t tisp_comn_param_array_set(uint32_t a0, uint32_t a1);
+static int32_t tisp_top_param_array_set(int32_t arg1);
+static int32_t tisp_get_ae_info(uintptr_t a0);
+static int32_t tisp_set_ae_info(uintptr_t a0);
+static int32_t tisp_get_awb_info(uintptr_t a0);
+static int32_t tisp_set_awb_info(uintptr_t a0);
+static int32_t tisp_set_ae_minmax(void *arg1);
+static int32_t tisp_reg_map_get(uint32_t a0, uint32_t a1, uintptr_t a2);
+static int32_t tisp_reg_map_set(int32_t arg1);
+static int32_t tisp_code_tuning_ioctl(int32_t arg1, int32_t arg2, int32_t arg3);
+static int32_t tisp_code_create_tuning_node(void);
+static int32_t tisp_code_destroy_tuning_node(void);
 int32_t system_reg_write_gib(int32_t arg1, int32_t arg2, int32_t arg3);
 int32_t tisp_gib_gain_interpolation(uint32_t a0);
 int32_t tiziano_gib_lut_parameter(void);
@@ -16984,18 +17004,18 @@ uint32_t tiziano_gib_deir_interpolate(uint32_t *out, uint32_t sample,
                                       const uint32_t *low);
 uint32_t tiziano_gib_deir_ir_interpolation(uint32_t ir_value);
 int32_t tisp_gib_deir_ir_update(uint32_t ir_value);
-int32_t tiziano_gib_init(void);
-int32_t tisp_gib_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2);
-int32_t tisp_gib_param_array_set(uint32_t a0, uint32_t a1);
-int32_t JZ_Isp_Awb_Reg2par(int32_t *arg1, int32_t *arg2);
-int64_t JZ_Isp_Awb_Awbg2reg(uintptr_t a0, uintptr_t a1);
-uint32_t JZ_Isp_Get_Awb_Statistics(uintptr_t a0, uint32_t a1);
+static int32_t tiziano_gib_init(void);
+static int32_t tisp_gib_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2);
+static int32_t tisp_gib_param_array_set(uint32_t a0, uint32_t a1);
+static int32_t JZ_Isp_Awb_Reg2par(int32_t *arg1, int32_t *arg2);
+static int64_t JZ_Isp_Awb_Awbg2reg(uintptr_t a0, uintptr_t a1);
+static uint32_t JZ_Isp_Get_Awb_Statistics(uintptr_t a0, uint32_t a1);
 int32_t tisp_awb_ev_update(uint32_t a0);
 int32_t tiziano_awb_params_refresh(void);
-int32_t tiziano_awb_dump(void);
+static int32_t tiziano_awb_dump(void);
 int32_t system_reg_write_awb(int32_t arg1, int32_t arg2, int32_t arg3);
-int Tiziano_awb_set_gain(void *mf_para, uint32_t point_pos, const uint32_t *arg3);
-uint32_t Tiziano_awb_fpga(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t arg4, uintptr_t arg5, uintptr_t arg6, uint32_t arg7, uintptr_t arg8, uintptr_t arg9, uintptr_t arg10, uintptr_t arg11, uint32_t arg12);
+static int Tiziano_awb_set_gain(void *mf_para, uint32_t point_pos, const uint32_t *arg3);
+static uint32_t Tiziano_awb_fpga(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t arg4, uintptr_t arg5, uintptr_t arg6, uint32_t arg7, uintptr_t arg8, uintptr_t arg9, uintptr_t arg10, uintptr_t arg11, uint32_t arg12);
 int32_t JZ_Isp_Awb(void);
 int32_t tiziano_awb_set_lum_th_freq(void);
 int32_t awb_interrupt_static(void);
@@ -17003,17 +17023,17 @@ int32_t tiziano_awb_set_hardware_param(void);
 int32_t tiziano_awb_dn_params_refresh(void);
 int32_t tiziano_awb_init(uint32_t a0, uint32_t a1);
 int32_t tisp_g_wb_mode(void *arg1);
-int32_t tisp_awb_set_frz(uint32_t a0, uint32_t a1);
-int32_t tisp_awb_get_frz(uint32_t a0, uintptr_t a1);
+static int32_t tisp_awb_set_frz(uint32_t a0, uint32_t a1);
+static int32_t tisp_awb_get_frz(uint32_t a0, uintptr_t a1);
 int32_t tisp_s_wb_mode(uint32_t a0, uint32_t a1, uint32_t a2);
-uint32_t tisp_awb_get_ct(uint32_t a0, uintptr_t a1);
-int64_t tisp_awb_set_ct(uint32_t a0, uintptr_t a1);
-int tisp_api_awb_zone_weight_set(const void *src);
-int32_t tisp_api_awb_zone_weight_get(int32_t arg1, int32_t *arg2, int32_t *arg3);
+static uint32_t tisp_awb_get_ct(uint32_t a0, uintptr_t a1);
+static int64_t tisp_awb_set_ct(uint32_t a0, uintptr_t a1);
+static int tisp_api_awb_zone_weight_set(const void *src);
+static int32_t tisp_api_awb_zone_weight_get(int32_t arg1, int32_t *arg2, int32_t *arg3);
 int32_t tiziano_s_awb_start(int32_t arg1, int32_t arg2, int32_t arg3);
 int32_t tiziano_g_awb_start(int32_t arg0, int32_t *arg2);
-int32_t tiziano_s_wb_algo(int32_t arg1, int32_t arg2);
-int32_t tisp_awb_get_zone(uint32_t a0, uint32_t a1);
+static int32_t tiziano_s_wb_algo(int32_t arg1, int32_t arg2);
+static int32_t tisp_awb_get_zone(uint32_t a0, uint32_t a1);
 int32_t tisp_awb_set_cluster_awb_params(int32_t arg1,
                                         uint32_t arg2, uint32_t arg3,
                                         uint32_t arg4, uint32_t arg5,
@@ -17023,26 +17043,26 @@ int32_t tisp_awb_set_cluster_awb_params(int32_t arg1,
 int32_t tisp_awb_get_cluster_awb_params(uint32_t a0, uintptr_t a1);
 int32_t tisp_awb_set_ct_trend(uint32_t a0, uint32_t a1);
 int32_t tisp_awb_get_ct_trend(uint32_t a0, uintptr_t a1);
-int32_t tisp_awb_param_array_get(int32_t arg1, void *arg2, int32_t *arg3);
-int32_t tisp_awb_param_array_set(uint32_t a0, uint32_t a1);
-int32_t * tisp_awb_algo_init(int32_t arg1, int32_t arg2, int32_t arg3);
-int32_t tisp_awb_algo_handle(uint32_t a0, uintptr_t a1);
-int32_t tisp_awb_deinit(void);
+static int32_t tisp_awb_param_array_get(int32_t arg1, void *arg2, int32_t *arg3);
+static int32_t tisp_awb_param_array_set(uint32_t a0, uint32_t a1);
+static int32_t * tisp_awb_algo_init(int32_t arg1, int32_t arg2, int32_t arg3);
+static int32_t tisp_awb_algo_handle(uint32_t a0, uintptr_t a1);
+static int32_t tisp_awb_deinit(void);
 int32_t tisp_lsc_lut_valid_judge(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t arg4);
-int tisp_lsc_wdr_en(int arg1);
+static int tisp_lsc_wdr_en(int arg1);
 int32_t tisp_lsc_ct_update(uint32_t a0);
-int32_t tisp_lsc_gain_update(uint32_t a0);
+static int32_t tisp_lsc_gain_update(uint32_t a0);
 int32_t tiziano_lsc_dn_params_refresh(void);
-int tisp_lsc_param_array_get(int param_id, void *out_buf, int *size_buf);
-int32_t tisp_lsc_judge_ct_update_flag(void);
+static int tisp_lsc_param_array_get(int param_id, void *out_buf, int *size_buf);
+static int32_t tisp_lsc_judge_ct_update_flag(void);
 int32_t tisp_lsc_judge_gain_update_flag(void);
 int32_t tisp_lsc_write_lut_datas(void);
 int32_t tiziano_lsc_init(uint32_t arg1, uint32_t arg2);
-int tisp_lsc_param_array_set(int param_id, void *in_buf, int *size_buf);
+static int tisp_lsc_param_array_set(int param_id, void *in_buf, int *size_buf);
 int tisp_lsc_upside_down_lut(uint32_t *lut, int rows, int cols_padded);
 int32_t tisp_lsc_lut_mirror_exchange(void *arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5);
 int32_t tisp_lsc_mirror_flip(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t arg4);
-int32_t tisp_lsc_deinit(void);
+static int32_t tisp_lsc_deinit(void);
 int32_t cm_control(int32_t *arg1, int32_t arg2, int32_t *arg3);
 int32_t tisp_ccm_sort_ct_list(int32_t *arg1);
 int32_t tiziano_ccm_lut_parameter(void *arg1);
@@ -17051,21 +17071,21 @@ void* jz_isp_ccm_para2reg(uintptr_t a0, uintptr_t a1);
 int32_t jz_isp_ccm_parameter_convert(void);
 uint32_t tiziano_ct_ccm_interpolation(int32_t arg1);
 int32_t jz_isp_ccm(void);
-int tisp_ccm_ev_update(void);
-int tisp_ccm_ct_update(uint32_t arg1);
+static int tisp_ccm_ev_update(void);
+static int tisp_ccm_ct_update(uint32_t arg1);
 int tiziano_ccm_params_refresh(void);
-int32_t tisp_ccm_wdr_en(void);
+static int32_t tisp_ccm_wdr_en(void);
 int32_t tiziano_ccm_dn_params_refresh(void);
-int32_t tiziano_ccm_init(void);
-int32_t tisp_ccm_get_attr(void *a0, void *a1, void *a2, void *a3, void *a4, void *a5);
-char * tisp_ccm_set_attr(uint32_t a0, uint32_t a1);
-int32_t tisp_ccm_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2);
-int32_t tisp_ccm_param_array_set(uint32_t a0, uint32_t a1);
+static int32_t tiziano_ccm_init(void);
+static int32_t tisp_ccm_get_attr(void *a0, void *a1, void *a2, void *a3, void *a4, void *a5);
+static char * tisp_ccm_set_attr(uint32_t a0, uint32_t a1);
+static int32_t tisp_ccm_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2);
+static int32_t tisp_ccm_param_array_set(uint32_t a0, uint32_t a1);
 #ifndef REGTRACE_KERNEL_TREE_BUILD
 uint32_t tiziano_bcsh_StrenCal_part_0(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5) __asm__("tiziano_bcsh_StrenCal.part.0");
 #endif
 uint32_t tiziano_bcsh_StrenCal_part_0(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5);
-int32_t tiziano_bcsh_dump2(int32_t *arg1, int32_t *arg2, int32_t *arg3, int32_t *arg4, int32_t *arg5, int32_t *arg6, int32_t *arg7, int32_t *arg8, int32_t *arg9, int32_t *arg10, int32_t *arg11, int32_t *arg12, int32_t *arg13, int32_t *arg14, int32_t *arg15, int32_t *arg16, int32_t *arg17);
+static int32_t tiziano_bcsh_dump2(int32_t *arg1, int32_t *arg2, int32_t *arg3, int32_t *arg4, int32_t *arg5, int32_t *arg6, int32_t *arg7, int32_t *arg8, int32_t *arg9, int32_t *arg10, int32_t *arg11, int32_t *arg12, int32_t *arg13, int32_t *arg14, int32_t *arg15, int32_t *arg16, int32_t *arg17);
 int32_t tisp_bcsh_sort_ct_list(int32_t *arg1);
 int32_t tiziano_bcsh_lut_parameter(int32_t *clip0, int32_t *clip1,
                                   int32_t *clip2, int32_t *offset0);
@@ -17073,7 +17093,7 @@ int32_t tiziano_bcsh_reg2para(uintptr_t a0, uintptr_t a1);
 void* tiziano_bcsh_para2reg(uintptr_t a0, uintptr_t a1);
 int32_t tiziano_bcsh_Tccm_Comp2Orig(void);
 uint32_t tiziano_ct_bcsh_interpolation(uint32_t a0);
-int32_t tisp_bcsh_wdr_en(void);
+static int32_t tisp_bcsh_wdr_en(void);
 void* tiziano_bcsh_Tccm_RGBYUV(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3, uint32_t arg4);
 void* tiziano_bcsh_Tccm_RGB2YUV(uintptr_t a0, uintptr_t a1);
 int32_t tiziano_bcsh_Toffset_RGBYUV(int32_t *arg1, int32_t *arg2, int32_t *arg3);
@@ -17083,24 +17103,24 @@ int32_t* tiziano_bcsh_TransitParam(void);
 int32_t tiziano_bcsh_update(void);
 int32_t tisp_bcsh_ev_update(uintptr_t a0, uintptr_t a1);
 int32_t tisp_bcsh_ct_update(uintptr_t a0, uint32_t a1);
-int32_t tiziano_bcsh_dump(void);
+static int32_t tiziano_bcsh_dump(void);
 void tiziano_bcsh_params_refresh(void);
 int32_t tiziano_bcsh_dn_params_refresh(void);
 int32_t tiziano_bcsh_init(void);
-int32_t tisp_bcsh_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2);
-int32_t tisp_bcsh_param_array_set(uint32_t a0, uint32_t a1);
-int tisp_bcsh_set_mjpeg_contrast(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3);
+static int32_t tisp_bcsh_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2);
+static int32_t tisp_bcsh_param_array_set(uint32_t a0, uint32_t a1);
+static int tisp_bcsh_set_mjpeg_contrast(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3);
 int32_t tisp_bcsh_contrast(uint32_t a0, uint32_t a1);
 int32_t tisp_bcsh_saturation(uint32_t a0, uint32_t a1);
 int32_t tisp_bcsh_brightness(uint32_t a0, uint32_t a1);
 int32_t tisp_bcsh_s_hue(int32_t arg1, char arg2);
 uint8_t tisp_bcsh_g_hue(uint32_t a0, uintptr_t a1);
-uint32_t tisp_bcsh_g_brightness(void);
-uint32_t tisp_bcsh_g_saturation(void);
-uint32_t tisp_bcsh_g_contrast(void);
+static uint32_t tisp_bcsh_g_brightness(void);
+static uint32_t tisp_bcsh_g_saturation(void);
+static uint32_t tisp_bcsh_g_contrast(void);
 int32_t tisp_bcsh_get_attr(uintptr_t context, void *out);
-int32_t tisp_bcsh_set_attr(uintptr_t context, const void *in);
-int32_t tisp_bcsh_s_rgb_coefft(int32_t arg1, int16_t *arg2);
+static int32_t tisp_bcsh_set_attr(uintptr_t context, const void *in);
+static int32_t tisp_bcsh_s_rgb_coefft(int32_t arg1, int16_t *arg2);
 int16_t tisp_bcsh_g_rgb_coefft(uint32_t a0, uintptr_t a1);
 int32_t tisp_ctr_md_np_cfg(void);
 int32_t tisp_ctr_std_np_cfg(void);
@@ -17116,36 +17136,36 @@ int32_t tisp_dpc_all_reg_refresh(int32_t arg1);
 int32_t tisp_dpc_intp_reg_refresh(int32_t arg1);
 int tisp_dpc_par_refresh(uint32_t ev_value, uint32_t threshold, int enable_write);
 int32_t tisp_dpc_refresh(uint32_t arg1);
-int32_t tisp_dpc_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2);
-int32_t tisp_dpc_param_array_set(uint32_t a0, uint32_t a1);
+static int32_t tisp_dpc_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2);
+static int32_t tisp_dpc_param_array_set(uint32_t a0, uint32_t a1);
 int32_t tisp_s_dpc_str_internal(uint32_t a0);
 int32_t tiziano_dpc_params_refresh(void);
 int32_t tiziano_dpc_dn_params_refresh(void);
 int tiziano_dpc_init(void);
-uint32_t tisp_g_dpc_str_internal(uint32_t a0, uintptr_t a1);
+static uint32_t tisp_g_dpc_str_internal(uint32_t a0, uintptr_t a1);
 int32_t tisp_ydns_param_cfg(void);
 int32_t tisp_ydns_intp(uint32_t a0);
-int32_t tisp_ydns_all_reg_refresh(int32_t arg1);
-int32_t tisp_ydns_intp_reg_refresh(int32_t arg1);
+static int32_t tisp_ydns_all_reg_refresh(int32_t arg1);
+static int32_t tisp_ydns_intp_reg_refresh(int32_t arg1);
 int32_t tisp_ydns_par_refresh(uint32_t gain_q16);
-int32_t tisp_ydns_gain_update(uint32_t arg1);
+static int32_t tisp_ydns_gain_update(uint32_t arg1);
 int32_t tiziano_ydns_params_refresh(void);
 int32_t tiziano_ydns_dn_params_refresh(void);
 int32_t tiziano_ydns_init(void);
-int32_t tisp_ydns_refresh(uint32_t arg1);
-int32_t tisp_ydns_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2);
-int32_t tisp_ydns_param_array_set(uint32_t a0, uint32_t a1);
-int32_t subsection_map(int32_t target, int32_t mapped_value,
+static int32_t tisp_ydns_refresh(uint32_t arg1);
+static int32_t tisp_ydns_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2);
+static int32_t tisp_ydns_param_array_set(uint32_t a0, uint32_t a1);
+static int32_t subsection_map(int32_t target, int32_t mapped_value,
                        int32_t blend_percent, int16_t *gamma_x,
                        int16_t *gamma_y, int32_t *lookup,
                        int32_t bins, int32_t output_precision,
                        int32_t internal_precision, int32_t blend_mode);
-int32_t subsection(int32_t *arg1, int32_t arg2, int16_t *arg3, int16_t *arg4, int32_t *arg5, int32_t arg6, int32_t arg7, int32_t arg8, int32_t arg9);
-int32_t subsection_up(int32_t *output, const uint32_t *targets,
+static int32_t subsection(int32_t *arg1, int32_t arg2, int16_t *arg3, int16_t *arg4, int32_t *arg5, int32_t arg6, int32_t arg7, int32_t arg8, int32_t arg9);
+static int32_t subsection_up(int32_t *output, const uint32_t *targets,
                       const int32_t *lookup, int32_t scale);
-int32_t subsection_light(void *arg1, void *arg2, int32_t arg3, int32_t *arg4);
-int32_t Tiziano_adr_fpga(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t arg4, uintptr_t arg5, uintptr_t arg6, uintptr_t arg7, uintptr_t arg8, uintptr_t arg9, uintptr_t arg10, uintptr_t arg11, uintptr_t arg12, uintptr_t arg13, uintptr_t arg14, uintptr_t arg15);
-int32_t interpolate_adr_x8_y12(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5);
+static int32_t subsection_light(void *arg1, void *arg2, int32_t arg3, int32_t *arg4);
+static int32_t Tiziano_adr_fpga(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t arg4, uintptr_t arg5, uintptr_t arg6, uintptr_t arg7, uintptr_t arg8, uintptr_t arg9, uintptr_t arg10, uintptr_t arg11, uintptr_t arg12, uintptr_t arg13, uintptr_t arg14, uintptr_t arg15);
+static int32_t interpolate_adr_x8_y12(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5);
 int32_t tisp_adr_ev_update(uint32_t a0, uint32_t a1);
 int32_t tiziano_adr_get_data(int32_t *arg1);
 int32_t tiziano_adr_algorithm(void);
@@ -17165,13 +17185,13 @@ int32_t tiziano_adr_dn_params_refresh(void);
 int32_t tisp_adr_wdr_en(uint32_t arg1);
 int32_t tiziano_adr_init(uint32_t a0, uint32_t a1, uint32_t a2);
 int32_t * tisp_defog_ev_update(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3);
-int32_t* tiziano_defog_get_data(uintptr_t a0);
+static int32_t* tiziano_defog_get_data(uintptr_t a0);
 int32_t tiziano_defog_set_reg_params(void);
 int32_t tiziano_defog_interrupt_static(void);
-char tisp_defog_max_filter3(uintptr_t a0, uint32_t a1);
-char tisp_defog_img_filter5(uintptr_t a0, uint32_t a1, uintptr_t a2);
-int32_t tisp_defog_soft_process(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t arg4, uintptr_t arg5, uintptr_t arg6, uintptr_t arg7, uintptr_t arg8, uintptr_t arg9, uintptr_t arg10, uintptr_t arg11, uintptr_t arg12, uintptr_t arg13, uintptr_t arg14, uintptr_t arg15, uintptr_t arg16, uintptr_t arg17, uintptr_t arg18, uintptr_t arg19, uintptr_t arg20, uintptr_t arg21, uintptr_t arg22, uintptr_t arg23);
-int32_t tiziano_defog_algorithm(void);
+static char tisp_defog_max_filter3(uintptr_t a0, uint32_t a1);
+static char tisp_defog_img_filter5(uintptr_t a0, uint32_t a1, uintptr_t a2);
+static int32_t tisp_defog_soft_process(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t arg4, uintptr_t arg5, uintptr_t arg6, uintptr_t arg7, uintptr_t arg8, uintptr_t arg9, uintptr_t arg10, uintptr_t arg11, uintptr_t arg12, uintptr_t arg13, uintptr_t arg14, uintptr_t arg15, uintptr_t arg16, uintptr_t arg17, uintptr_t arg18, uintptr_t arg19, uintptr_t arg20, uintptr_t arg21, uintptr_t arg22, uintptr_t arg23);
+static int32_t tiziano_defog_algorithm(void);
 int32_t tisp_defog_process(void);
 int32_t tiziano_defog_params_init(void);
 void tiziano_defog_params_refresh(void);
@@ -17182,13 +17202,13 @@ int32_t defog_3x3_5x5_params_init(uint32_t a0, uint32_t a1);
 int32_t tiziano_defog_init(uint32_t a0, uint32_t a1, uint32_t a2);
 int tisp_defog_param_array_get(int param_id, void *out_buf, int *size_buf);
 int32_t tisp_defog_param_array_set(int32_t arg1, int32_t arg2);
-int32_t defog_itp(int32_t arg1, int32_t arg2, int32_t arg3);
+static int32_t defog_itp(int32_t arg1, int32_t arg2, int32_t arg3);
 uint8_t tisp_g_defog_str_internal(uint32_t a0, uintptr_t a1);
 int32_t tisp_s_defog_str_internal(uint32_t a0, uintptr_t a1);
 /* MIPS O32 word view of the SDK tisp_round_int64(s64, s32) ABI. */
 int64_t tisp_round_int64(int32_t value_low, int32_t value_high,
 			 int32_t precision);
-int32_t tisp_clm_sort_ct_list(int32_t *arg1);
+static int32_t tisp_clm_sort_ct_list(int32_t *arg1);
 int32_t system_reg_write_clm(int32_t arg1, int32_t arg2, int32_t arg3);
 int32_t clm_lut2reg(int16_t *arg1, uint8_t *arg2, void *arg3, int32_t arg4);
 int32_t tiziano_set_parameter_clm(void);
@@ -17197,47 +17217,47 @@ int32_t tiziano_clm_dn_params_refresh(void);
 int32_t tisp_clm_itp(uint32_t a0, uint32_t a1, uint32_t a2);
 int32_t tisp_clm_interp_by_ct(int32_t ignored, uint32_t ct, uint8_t force);
 int32_t tisp_clm_ct_update(int32_t ignored, uint32_t ct);
-int32_t tiziano_clm_init(void);
-int32_t tisp_clm_param_array_get(int32_t arg1, int32_t *arg2, int32_t *arg3);
-int32_t tisp_clm_param_array_set(uint32_t a0, uint32_t a1);
-int32_t tisp_sdns_grad_thres_opt_cfg(void);
-int32_t tisp_sdns_h_mv_wei_opt_cfg(void);
-int32_t tisp_sdns_mv_seg_number_num_thres_cfg(void);
-int32_t tisp_sdns_g_det_val_div_cfg(void);
-int32_t tisp_sdns_r_s_mv_cfg(void);
-int32_t tisp_sdns_h_s_cfg(void);
-int32_t tisp_sdns_h_mv_cfg(void);
-int32_t tisp_sdns_dark_light_tt_opt_cfg(void);
-int32_t tisp_sdns_d_s1_thres_cfg(void);
-int32_t tisp_sdns_w_thres_cfg(void);
-int32_t tisp_sdns_hls_en_ave_filter_cfg(void);
-int32_t tisp_sdns_gaussian_y_cfg(void);
-int32_t tisp_sdns_gaussian_x_cfg(void);
-int32_t tisp_sdns_gaussian_k_cfg(void);
-int32_t tisp_sdns_h_line_cfg(void);
-int32_t tisp_sdns_sp_std_en_seg_opt_cfg(void);
-int32_t tisp_sdns_sp_uu_cfg(void);
-int32_t tisp_sdns_sp_v2_d_w_b_ll_hl_flat_cfg(void);
-int32_t tisp_sdns_sp_ud_v2_v1_coef_w_wei_opt_cfg(void);
-int32_t tisp_sdns_sp_ud_w_stren_cfg(void);
-int32_t tisp_sdns_sp_ud_w_limit_b_wei_opt_cfg(void);
-int32_t tisp_sdns_sp_ud_b_stren_cfg(void);
-int32_t tisp_sdns_sp_ud_b_limit_srd_ll_hl_flat_cfg(void);
-int32_t tisp_sdns_sp_ud_stren_shift_opt_cfg(void);
-int32_t tisp_sdns_sp_uu_np_array_cfg(void);
-int32_t tisp_sdns_sp_d_w_wei_np_array_cfg(void);
-int32_t tisp_sdns_sp_d_b_wei_np_array_cfg(void);
-int32_t tisp_sdns_sp_ud_w_wei_np_array_cfg(void);
-int32_t tisp_sdns_sp_ud_b_wei_np_array_cfg(void);
+static int32_t tiziano_clm_init(void);
+static int32_t tisp_clm_param_array_get(int32_t arg1, int32_t *arg2, int32_t *arg3);
+static int32_t tisp_clm_param_array_set(uint32_t a0, uint32_t a1);
+static int32_t tisp_sdns_grad_thres_opt_cfg(void);
+static int32_t tisp_sdns_h_mv_wei_opt_cfg(void);
+static int32_t tisp_sdns_mv_seg_number_num_thres_cfg(void);
+static int32_t tisp_sdns_g_det_val_div_cfg(void);
+static int32_t tisp_sdns_r_s_mv_cfg(void);
+static int32_t tisp_sdns_h_s_cfg(void);
+static int32_t tisp_sdns_h_mv_cfg(void);
+static int32_t tisp_sdns_dark_light_tt_opt_cfg(void);
+static int32_t tisp_sdns_d_s1_thres_cfg(void);
+static int32_t tisp_sdns_w_thres_cfg(void);
+static int32_t tisp_sdns_hls_en_ave_filter_cfg(void);
+static int32_t tisp_sdns_gaussian_y_cfg(void);
+static int32_t tisp_sdns_gaussian_x_cfg(void);
+static int32_t tisp_sdns_gaussian_k_cfg(void);
+static int32_t tisp_sdns_h_line_cfg(void);
+static int32_t tisp_sdns_sp_std_en_seg_opt_cfg(void);
+static int32_t tisp_sdns_sp_uu_cfg(void);
+static int32_t tisp_sdns_sp_v2_d_w_b_ll_hl_flat_cfg(void);
+static int32_t tisp_sdns_sp_ud_v2_v1_coef_w_wei_opt_cfg(void);
+static int32_t tisp_sdns_sp_ud_w_stren_cfg(void);
+static int32_t tisp_sdns_sp_ud_w_limit_b_wei_opt_cfg(void);
+static int32_t tisp_sdns_sp_ud_b_stren_cfg(void);
+static int32_t tisp_sdns_sp_ud_b_limit_srd_ll_hl_flat_cfg(void);
+static int32_t tisp_sdns_sp_ud_stren_shift_opt_cfg(void);
+static int32_t tisp_sdns_sp_uu_np_array_cfg(void);
+static int32_t tisp_sdns_sp_d_w_wei_np_array_cfg(void);
+static int32_t tisp_sdns_sp_d_b_wei_np_array_cfg(void);
+static int32_t tisp_sdns_sp_ud_w_wei_np_array_cfg(void);
+static int32_t tisp_sdns_sp_ud_b_wei_np_array_cfg(void);
 int32_t tisp_sdns_intp(int32_t arg1);
 int32_t tisp_sdns_all_reg_refresh(int32_t arg1);
 int32_t tisp_sdns_intp_reg_refresh(int32_t arg1);
 int32_t tisp_sdns_par_refresh(uint32_t a0, uint32_t a1, uint32_t a2);
 int32_t tisp_sdns_refresh(uint32_t arg1);
-int32_t tisp_sdns_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2);
-int32_t tisp_sdns_param_array_set(uint32_t a0, uint32_t a1);
+static int32_t tisp_sdns_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2);
+static int32_t tisp_sdns_param_array_set(uint32_t a0, uint32_t a1);
 int32_t tisp_s_sdns_ratio(uint32_t a0);
-int tisp_sdns_wdr_en(int enable);
+static int tisp_sdns_wdr_en(int enable);
 void tiziano_sdns_params_refresh(void);
 int tiziano_sdns_init(void);
 int32_t tiziano_sdns_dn_params_refresh(void);
@@ -17259,378 +17279,378 @@ int32_t tiziano_sharpen_params_refresh(void);
 int32_t tiziano_sharpen_init(void);
 int32_t tisp_sharpen_refresh(uint32_t arg1);
 int32_t tiziano_sharpen_dn_params_refresh(void);
-int32_t tisp_sharpen_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2);
-int32_t tisp_sharpen_param_array_set(uint32_t a0, uint32_t a1);
+static int32_t tisp_sharpen_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2);
+static int32_t tisp_sharpen_param_array_set(uint32_t a0, uint32_t a1);
 #ifndef REGTRACE_KERNEL_TREE_BUILD
 int32_t tisp_hldc_par_refresh_part_1(void) __asm__("tisp_hldc_par_refresh.part.1");
 #endif
 int32_t tisp_hldc_par_refresh_part_1(void);
 int32_t tisp_hldc_con_par_cfg(void);
-int16_t tisp_hldc_strength_adjust_k(char arg1, int16_t *arg2, int16_t *arg3);
-int32_t tisp_hldc_para_validity_judge(int32_t arg1, int32_t arg2);
-int32_t tisp_hldc_quadratic_func(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5, int32_t arg6);
-int32_t tisp_hldc_calc_para(int32_t k1, int32_t k2, int32_t width,
+static int16_t tisp_hldc_strength_adjust_k(char arg1, int16_t *arg2, int16_t *arg3);
+static int32_t tisp_hldc_para_validity_judge(int32_t arg1, int32_t arg2);
+static int32_t tisp_hldc_quadratic_func(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5, int32_t arg6);
+static int32_t tisp_hldc_calc_para(int32_t k1, int32_t k2, int32_t width,
                             int32_t height, int32_t center_x,
                             int32_t center_y, int32_t out[4]);
-int32_t tisp_hldc_par_refresh(uint32_t a0);
-int32_t tisp_hldc_set_attr(int32_t arg1, const void *arg2);
-int32_t tisp_hldc_get_attr(int32_t arg1, void *arg2);
-int32_t tiziano_hldc_params_refresh(void);
-int32_t tiziano_hldc_init(void);
-int32_t tisp_hldc_param_array_get(int32_t arg1, int32_t *arg2, int32_t *arg3);
-int32_t tisp_hldc_param_array_set(int32_t arg1, const void *arg2);
-void tisp_set_sensor_integration_time(uint32_t arg1);
-int32_t tisp_set_sensor_integration_time_short(uint32_t a0);
-uint32_t tisp_set_sensor_analog_gain(int32_t arg1);
-uint32_t tisp_set_sensor_analog_gain_short(uint32_t arg1);
-uint32_t tisp_set_sensor_digital_gain_short(uint32_t arg1);
-uint32_t tisp_set_sensor_digital_gain(int32_t arg1);
-int32_t JZ_Isp_Ae_Reg2par(int32_t *arg1, int32_t *arg2);
-int32_t JZ_Isp_Ae_Dg2reg(int32_t arg1, int32_t *arg2, int32_t arg3, int32_t *arg4);
-int32_t printf_func0(uint32_t a0, uint32_t a1);
+static int32_t tisp_hldc_par_refresh(uint32_t a0);
+static int32_t tisp_hldc_set_attr(int32_t arg1, const void *arg2);
+static int32_t tisp_hldc_get_attr(int32_t arg1, void *arg2);
+static int32_t tiziano_hldc_params_refresh(void);
+static int32_t tiziano_hldc_init(void);
+static int32_t tisp_hldc_param_array_get(int32_t arg1, int32_t *arg2, int32_t *arg3);
+static int32_t tisp_hldc_param_array_set(int32_t arg1, const void *arg2);
+static void tisp_set_sensor_integration_time(uint32_t arg1);
+static int32_t tisp_set_sensor_integration_time_short(uint32_t a0);
+static uint32_t tisp_set_sensor_analog_gain(int32_t arg1);
+static uint32_t tisp_set_sensor_analog_gain_short(uint32_t arg1);
+static uint32_t tisp_set_sensor_digital_gain_short(uint32_t arg1);
+static uint32_t tisp_set_sensor_digital_gain(int32_t arg1);
+static int32_t JZ_Isp_Ae_Reg2par(int32_t *arg1, int32_t *arg2);
+static int32_t JZ_Isp_Ae_Dg2reg(int32_t arg1, int32_t *arg2, int32_t arg3, int32_t *arg4);
+static int32_t printf_func0(uint32_t a0, uint32_t a1);
 int printf_func1(uint32_t arg1, uint32_t arg2);
-int tisp_ae0_get_statistics(void *buffer, uint32_t flags);
+static int tisp_ae0_get_statistics(void *buffer, uint32_t flags);
 int32_t ae0_interrupt_static(void);
-int32_t tisp_ae1_get_statistics(int32_t *arg1, int32_t arg2);
-void* tisp_ae1_get_hist(uintptr_t a0);
-int tisp_ae0_get_hist(void *buffer, int mode, int flag);
+static int32_t tisp_ae1_get_statistics(int32_t *arg1, int32_t arg2);
+static void* tisp_ae1_get_hist(uintptr_t a0);
+static int tisp_ae0_get_hist(void *buffer, int mode, int flag);
 int32_t ae0_interrupt_hist(void);
-int32_t tisp_ae_get_hist_custome(uint32_t a0);
+static int32_t tisp_ae_get_hist_custome(uint32_t a0);
 int32_t tisp_ae_set_hist_custome(void);
-int32_t AePweightCalculate(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3);
-int32_t ae0_weight_mean2(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t arg4, uintptr_t arg5, uint32_t arg6, uintptr_t arg7, uintptr_t arg8, uintptr_t arg9, uintptr_t arg10, uintptr_t arg11, uintptr_t arg12, uint32_t arg13, uint32_t arg14, uintptr_t arg15, uint32_t arg16, uint32_t arg17, uintptr_t arg18, uintptr_t arg19, uintptr_t arg20, uintptr_t arg21, uintptr_t arg22);
-int32_t tisp_ae_tune(int32_t *arg1, int32_t *arg2, int32_t *arg3, int32_t arg4, int32_t arg5, int32_t arg6);
-int32_t tisp_ae_target(int32_t arg1, int32_t *arg2, int32_t *arg3, int32_t arg4);
-int64_t ae0_tune2(uintptr_t a0, uint32_t a1, uintptr_t a2, uintptr_t a3, uintptr_t arg4, uintptr_t arg5, uintptr_t arg6, uintptr_t arg7, uintptr_t arg8, uintptr_t arg9, uintptr_t arg10, uintptr_t arg11, uintptr_t arg12, uintptr_t arg13, uintptr_t arg14, uintptr_t arg15, uintptr_t arg16, uintptr_t arg17, uintptr_t arg18, uintptr_t arg19, uintptr_t arg20, uintptr_t arg21, uintptr_t arg22, uintptr_t arg23, uintptr_t arg24, uint32_t arg25, uintptr_t arg26, uint32_t arg27, uint32_t arg28, uint32_t arg29, uint32_t arg30, uint32_t arg31, uint32_t arg32);
-int32_t tisp_ae_g_min(int32_t arg1, int32_t *arg2);
-int32_t tisp_ae_s_min(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3);
-uint32_t* Tiziano_ae0_fpga(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t arg4, uintptr_t arg5, uintptr_t arg6, uint32_t arg7, uintptr_t arg8, uintptr_t arg9, uintptr_t arg10, uintptr_t arg11);
-uint32_t tisp_set_ae0_ag(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3);
-uint32_t tisp_set_ae1_ag(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3);
-int32_t tisp_ae1_expt(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t arg4, uintptr_t arg5, uintptr_t arg6, uintptr_t arg7, uintptr_t arg8, uintptr_t arg9, uintptr_t arg10);
+static int32_t AePweightCalculate(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3);
+static int32_t ae0_weight_mean2(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t arg4, uintptr_t arg5, uint32_t arg6, uintptr_t arg7, uintptr_t arg8, uintptr_t arg9, uintptr_t arg10, uintptr_t arg11, uintptr_t arg12, uint32_t arg13, uint32_t arg14, uintptr_t arg15, uint32_t arg16, uint32_t arg17, uintptr_t arg18, uintptr_t arg19, uintptr_t arg20, uintptr_t arg21, uintptr_t arg22);
+static int32_t tisp_ae_tune(int32_t *arg1, int32_t *arg2, int32_t *arg3, int32_t arg4, int32_t arg5, int32_t arg6);
+static int32_t tisp_ae_target(int32_t arg1, int32_t *arg2, int32_t *arg3, int32_t arg4);
+static int64_t ae0_tune2(uintptr_t a0, uint32_t a1, uintptr_t a2, uintptr_t a3, uintptr_t arg4, uintptr_t arg5, uintptr_t arg6, uintptr_t arg7, uintptr_t arg8, uintptr_t arg9, uintptr_t arg10, uintptr_t arg11, uintptr_t arg12, uintptr_t arg13, uintptr_t arg14, uintptr_t arg15, uintptr_t arg16, uintptr_t arg17, uintptr_t arg18, uintptr_t arg19, uintptr_t arg20, uintptr_t arg21, uintptr_t arg22, uintptr_t arg23, uintptr_t arg24, uint32_t arg25, uintptr_t arg26, uint32_t arg27, uint32_t arg28, uint32_t arg29, uint32_t arg30, uint32_t arg31, uint32_t arg32);
+static int32_t tisp_ae_g_min(int32_t arg1, int32_t *arg2);
+static int32_t tisp_ae_s_min(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3);
+static uint32_t* Tiziano_ae0_fpga(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t arg4, uintptr_t arg5, uintptr_t arg6, uint32_t arg7, uintptr_t arg8, uintptr_t arg9, uintptr_t arg10, uintptr_t arg11);
+static uint32_t tisp_set_ae0_ag(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3);
+static uint32_t tisp_set_ae1_ag(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3);
+static int32_t tisp_ae1_expt(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t arg4, uintptr_t arg5, uintptr_t arg6, uintptr_t arg7, uintptr_t arg8, uintptr_t arg9, uintptr_t arg10);
 int32_t tisp_ae_mean_update(uintptr_t a0, uintptr_t a1);
-void ae1_weight_mean2(void* arg1, void* arg2, void* arg3, void* arg4, void* arg5);
-int32_t Tiziano_ae1_fpga(void *arg1, void *arg2, void *arg3, void *arg4);
-int32_t tisp_ae0_ctrls_update(void);
-int32_t tisp_ae1_ctrls_update(void);
-int32_t ae1_interrupt_static(void);
-int32_t ae1_interrupt_hist(void);
-int32_t tiziano_ae_dump(void);
-int32_t tiziano_ae_params_refresh(void);
-int tiziano_ae_s_max_again(uint32_t value);
-int32_t tiziano_ae_s_max_isp_dgain(uint32_t a0, uint32_t a1);
-int tisp_ae_s_at_list(uint32_t *in);
+static void ae1_weight_mean2(void* arg1, void* arg2, void* arg3, void* arg4, void* arg5);
+static int32_t Tiziano_ae1_fpga(void *arg1, void *arg2, void *arg3, void *arg4);
+static int32_t tisp_ae0_ctrls_update(void);
+static int32_t tisp_ae1_ctrls_update(void);
+static int32_t ae1_interrupt_static(void);
+static int32_t ae1_interrupt_hist(void);
+static int32_t tiziano_ae_dump(void);
+static int32_t tiziano_ae_params_refresh(void);
+static int tiziano_ae_s_max_again(uint32_t value);
+static int32_t tiziano_ae_s_max_isp_dgain(uint32_t a0, uint32_t a1);
+static int tisp_ae_s_at_list(uint32_t *in);
 int tisp_ae_g_at_list(int arg1, int arg2);
-int tiziano_deflicker_expt(uint32_t flicker_t, uint32_t param2, uint32_t param3, uint32_t param4, uint32_t *lut_array, uint32_t *nodes_count);
-int32_t tiziano_deflicker_expt_tune(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4);
-int32_t system_reg_write_ae(int32_t arg1, int32_t arg2, int32_t arg3);
-int tisp_ae1_process_impl(void);
-int32_t tiziano_ae_set_hardware_param(uint32_t arg1, uint32_t *arg2, uint32_t arg3);
-int64_t tiziano_ae_para_addr(void);
+static int tiziano_deflicker_expt(uint32_t flicker_t, uint32_t param2, uint32_t param3, uint32_t param4, uint32_t *lut_array, uint32_t *nodes_count);
+static int32_t tiziano_deflicker_expt_tune(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4);
+static int32_t system_reg_write_ae(int32_t arg1, int32_t arg2, int32_t arg3);
+static int tisp_ae1_process_impl(void);
+static int32_t tiziano_ae_set_hardware_param(uint32_t arg1, uint32_t *arg2, uint32_t arg3);
+static int64_t tiziano_ae_para_addr(void);
 int32_t tiziano_ae_init_exp_th(void);
-int tisp_ae_wdr_en(int enable);
+static int tisp_ae_wdr_en(int enable);
 int32_t tiziano_ae_init(uint32_t arg1, uint32_t arg2, uint32_t arg3);
-int32_t tisp_ae_min_max_set(int32_t arg0, int32_t arg1);
-int32_t tiziano_ae_s_ev_start(int32_t arg1, uint32_t arg2);
+static int32_t tisp_ae_min_max_set(int32_t arg0, int32_t arg1);
+static int32_t tiziano_ae_s_ev_start(int32_t arg1, uint32_t arg2);
 int32_t tisp_ae_state_get(uint32_t a0, uintptr_t a1);
-int32_t tisp_ae_manual_get(uint32_t a0, uint32_t a1);
-int tisp_ae_manual_set(int arg1, int arg2, int arg3, int arg4, int arg5, int arg6, int arg7, int arg8, int arg9, int arg10, int arg11, int arg12, int arg13, int arg14, int arg15, int arg16, int arg17, int arg18, int arg19, int arg20);
-int32_t tisp_ae_get_y_zone(uint32_t a0, uint32_t a1);
+static int32_t tisp_ae_manual_get(uint32_t a0, uint32_t a1);
+static int tisp_ae_manual_set(int arg1, int arg2, int arg3, int arg4, int arg5, int arg6, int arg7, int arg8, int arg9, int arg10, int arg11, int arg12, int arg13, int arg14, int arg15, int arg16, int arg17, int arg18, int arg19, int arg20);
+static int32_t tisp_ae_get_y_zone(uint32_t a0, uint32_t a1);
 int32_t tisp_ae_s_comp(uint32_t a0);
 int32_t tiziano_ae_dn_params_refresh(void);
-char tisp_ae_g_comp(uint32_t a0, char *arg2);
+static char tisp_ae_g_comp(uint32_t a0, char *arg2);
 uint8_t tisp_ae_g_luma(uint8_t *arg1);
-int tisp_ae_g_scene_luma(uint32_t *arg1);
-int32_t tisp_ae0_process_impl(void);
+static int tisp_ae_g_scene_luma(uint32_t *arg1);
+static int32_t tisp_ae0_process_impl(void);
 int32_t tisp_ae0_process(void);
-int32_t tisp_ae1_process(void);
-int32_t tisp_ae_get_antiflicker_step(int32_t arg1, void *arg2, uint32_t *arg3);
-int tisp_ae_param_array_get(int param_id, void *out_buf, int *size_buf);
-int tisp_ae_param_array_set(int a0, void *a1, int *a2);
+static int32_t tisp_ae1_process(void);
+static int32_t tisp_ae_get_antiflicker_step(int32_t arg1, void *arg2, uint32_t *arg3);
+static int tisp_ae_param_array_get(int param_id, void *out_buf, int *size_buf);
+static int tisp_ae_param_array_set(int a0, void *a1, int *a2);
 int32_t tisp_ae_trig(void);
-void* tisp_ae_deinit(void);
-int32_t tisp_ae_algo_init(uint32_t arg1, void *arg2);
-int32_t tisp_ae_algo_handle(uintptr_t arg1);
-int16_t tisp_ae_get_converge_step(uint32_t a0, uintptr_t a1);
-int64_t tisp_ae_set_converge_step(uint32_t a0, uintptr_t a1);
-int tisp_api_ae_deflick_para_set(void);
-int tisp_api_ae_flick_t_set(void *a1);
+static void* tisp_ae_deinit(void);
+static int32_t tisp_ae_algo_init(uint32_t arg1, void *arg2);
+static int32_t tisp_ae_algo_handle(uintptr_t arg1);
+static int16_t tisp_ae_get_converge_step(uint32_t a0, uintptr_t a1);
+static int64_t tisp_ae_set_converge_step(uint32_t a0, uintptr_t a1);
+static int tisp_api_ae_deflick_para_set(void);
+static int tisp_api_ae_flick_t_set(void *a1);
 int32_t tisp_api_ae_scene_pare_set(uint32_t context, const void *params);
 int32_t tisp_api_ae_scene_pare_get(uint32_t a0, uint32_t a1, uintptr_t a2);
-int32_t tisp_api_ae_roi_weight_set(uint32_t context, const void *src);
-int32_t tisp_api_ae_roi_weight_get(uint32_t a0, uint32_t a1, uintptr_t a2);
-int32_t tisp_api_ae_roui_weight_set(uint32_t context, const void *src);
-int32_t tisp_api_ae_zone_weight_set(uint32_t context, const void *src);
-int32_t tisp_api_ae_zone_weight_get(uint32_t a0, uint32_t a1, uintptr_t a2);
-int32_t tisp_af_get_statistics(void *arg1, int32_t *arg2, int32_t arg3, char arg4);
-int32_t Tiziano_af_fpga(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t arg4, uintptr_t arg5, uintptr_t arg6, uintptr_t arg7, uintptr_t arg8);
-int32_t tisp_af_process_impl(void);
-int af_interrupt_static(void);
+static int32_t tisp_api_ae_roi_weight_set(uint32_t context, const void *src);
+static int32_t tisp_api_ae_roi_weight_get(uint32_t a0, uint32_t a1, uintptr_t a2);
+static int32_t tisp_api_ae_roui_weight_set(uint32_t context, const void *src);
+static int32_t tisp_api_ae_zone_weight_set(uint32_t context, const void *src);
+static int32_t tisp_api_ae_zone_weight_get(uint32_t a0, uint32_t a1, uintptr_t a2);
+static int32_t tisp_af_get_statistics(void *arg1, int32_t *arg2, int32_t arg3, char arg4);
+static int32_t Tiziano_af_fpga(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t arg4, uintptr_t arg5, uintptr_t arg6, uintptr_t arg7, uintptr_t arg8);
+static int32_t tisp_af_process_impl(void);
+static int af_interrupt_static(void);
 int32_t tiziano_af_params_refresh(void);
-int32_t tiziano_af_dump(void);
+static int32_t tiziano_af_dump(void);
 int32_t system_reg_write_af(int32_t arg1, int32_t arg2, int32_t arg3);
 void tiziano_af_set_hardware_param(void);
-int32_t tiziano_af_init(uint32_t a0, uint32_t a1);
-int tisp_af_get_metric(uint32_t *v);
-int32_t tisp_af_get_attr(uint32_t a0, uintptr_t a1);
-int32_t tisp_af_set_attr_refresh(void);
-int32_t tisp_af_set_attr(uint32_t a0, uint32_t a1);
+static int32_t tiziano_af_init(uint32_t a0, uint32_t a1);
+static int tisp_af_get_metric(uint32_t *v);
+static int32_t tisp_af_get_attr(uint32_t a0, uintptr_t a1);
+static int32_t tisp_af_set_attr_refresh(void);
+static int32_t tisp_af_set_attr(uint32_t a0, uint32_t a1);
 int32_t tiziano_af_dn_params_refresh(void);
-int tisp_af_param_array_get(int param_id, void *out_buf, int *size_buf);
-int32_t tisp_af_param_array_set(uint32_t arg1, uint32_t arg2);
-int32_t tisp_af_get_zone(void);
-int tisp_api_af_weight_set(void);
-int32_t tisp_api_af_weight_get(uint32_t a0, uint32_t a1, uintptr_t a2);
-int tisp_csccr_print_para(void);
-int32_t tisp_csccr_para_refresh_by_mode(uint32_t a0, uint32_t a1, uintptr_t a2);
-int32_t tisp_csccr_write_reg(void);
-int64_t tisp_csccr_update_para(void);
-int32_t tisp_csccr_sync_api_para(uint32_t a0);
-int32_t tiziano_csccr_init(void);
-int32_t tisp_csccr_param_array_get(uint32_t a0, uintptr_t a1, uintptr_t a2);
-int32_t tisp_csccr_param_array_set(uint32_t a0, uintptr_t a1);
-int tisp_csccr_api_set(int32_t * arg1);
-int32_t tisp_csccr_api_get(uint32_t a0);
+static int tisp_af_param_array_get(int param_id, void *out_buf, int *size_buf);
+static int32_t tisp_af_param_array_set(uint32_t arg1, uint32_t arg2);
+static int32_t tisp_af_get_zone(void);
+static int tisp_api_af_weight_set(void);
+static int32_t tisp_api_af_weight_get(uint32_t a0, uint32_t a1, uintptr_t a2);
+static int tisp_csccr_print_para(void);
+static int32_t tisp_csccr_para_refresh_by_mode(uint32_t a0, uint32_t a1, uintptr_t a2);
+static int32_t tisp_csccr_write_reg(void);
+static int64_t tisp_csccr_update_para(void);
+static int32_t tisp_csccr_sync_api_para(uint32_t a0);
+static int32_t tiziano_csccr_init(void);
+static int32_t tisp_csccr_param_array_get(uint32_t a0, uintptr_t a1, uintptr_t a2);
+static int32_t tisp_csccr_param_array_set(uint32_t a0, uintptr_t a1);
+static int tisp_csccr_api_set(int32_t * arg1);
+static int32_t tisp_csccr_api_get(uint32_t a0);
 int32_t tisp_dmsc_noref_reg_cfg(void);
 int32_t tisp_dmsc_ref_reg_cfg(void);
 int32_t tisp_dmsc_intp(uint32_t a0);
 int32_t tisp_dmsc_all_reg_refresh(int32_t arg1);
 int32_t tisp_dmsc_intp_reg_refresh(uint32_t a0);
 int32_t tisp_dmsc_par_refresh(uint32_t arg1, uint32_t arg2, uint32_t arg3);
-int32_t tisp_dmsc_refresh(int32_t arg1);
-int32_t tisp_dmsc_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2);
-int32_t tisp_dmsc_param_array_set(uint32_t a0, uint32_t a1);
+static int32_t tisp_dmsc_refresh(int32_t arg1);
+static int32_t tisp_dmsc_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2);
+static int32_t tisp_dmsc_param_array_set(uint32_t a0, uint32_t a1);
 int tisp_dmsc_sharpness_set(uint32_t a0, uint32_t a1);
 int32_t tiziano_dmsc_params_refresh(void);
 int32_t tiziano_dmsc_dn_params_refresh(void);
 int32_t tiziano_dmsc_init(void);
-uint32_t tisp_dmsc_sharpness_get(void);
+static uint32_t tisp_dmsc_sharpness_get(void);
 int32_t tisp_mdns_top_func_cfg(int32_t arg1);
-int32_t tisp_mdns_y_3d_param_cfg(void);
-int32_t tisp_mdns_y_2d_param_cfg(void);
-int32_t tisp_mdns_c_3d_param_cfg(void);
-int32_t tisp_mdns_c_2d_param_cfg(void);
+static int32_t tisp_mdns_y_3d_param_cfg(void);
+static int32_t tisp_mdns_y_2d_param_cfg(void);
+static int32_t tisp_mdns_c_3d_param_cfg(void);
+static int32_t tisp_mdns_c_2d_param_cfg(void);
 int32_t tisp_mdns_intp(uint32_t a0);
-int tisp_mdns_wdr_en(void);
+static int tisp_mdns_wdr_en(void);
 int32_t tisp_mdns_all_reg_refresh(int32_t arg1);
 int32_t tisp_mdns_top_func_refresh(void);
 int32_t tisp_mdns_reg_trigger(void);
 int32_t tisp_mdns_intp_reg_refresh(int32_t arg1);
 int32_t tisp_mdns_par_refresh(uint32_t a0, uint32_t a1);
 int32_t tisp_mdns_bypass(int32_t arg1);
-int32_t tisp_mdns_get_malloc_cfg(uint32_t a0, uint32_t a1, uint32_t a2);
+static int32_t tisp_mdns_get_malloc_cfg(uint32_t a0, uint32_t a1, uint32_t a2);
 int32_t tisp_mdns_set_malloc_cfg(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3);
 int32_t tisp_mdns_malloc_reflash(void);
-int32_t tisp_mdns_refresh(uint32_t a0);
-int32_t tisp_mdns_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2);
-int32_t tisp_mdns_param_array_set(uint32_t a0, uint32_t a1);
+static int32_t tisp_mdns_refresh(uint32_t a0);
+static int32_t tisp_mdns_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2);
+static int32_t tisp_mdns_param_array_set(uint32_t a0, uint32_t a1);
 int32_t tisp_s_mdns_ratio(uint32_t a0);
 int32_t tiziano_mdns_params_refresh(void);
 void tiziano_mdns_dn_params_refresh(void);
 int32_t tiziano_mdns_init(uint32_t arg1, uint32_t arg2);
 int32_t tisp_api_mdns_y_filter_get(int32_t arg1, uint32_t *arg2);
 int32_t tisp_api_mdns_y_filter_set(int32_t arg1, const uint32_t *arg2);
-int32_t tisp_api_mdns_share_mem(uintptr_t a0);
-int32_t tisp_api_mdns_share_mem_en(uint32_t a0);
-int32_t tisp_ipc_frame_done_interrupt_static(void);
-int32_t tisp_top_init(int32_t arg1);
-int32_t lib_tisp_debug_info(int32_t arg1);
-int32_t tisp_enable_tuning(void);
-void tisp_disable_tuning(void);
-uint32_t tisp_get_tuning(void);
+static int32_t tisp_api_mdns_share_mem(uintptr_t a0);
+static int32_t tisp_api_mdns_share_mem_en(uint32_t a0);
+static int32_t tisp_ipc_frame_done_interrupt_static(void);
+static int32_t tisp_top_init(int32_t arg1);
+static int32_t lib_tisp_debug_info(int32_t arg1);
+static int32_t tisp_enable_tuning(void);
+static void tisp_disable_tuning(void);
+static uint32_t tisp_get_tuning(void);
 int64_t tisp_day_or_night_s_ctrl(uintptr_t a0, uint32_t a1);
 int32_t tisp_cust_mode_s_ctrl(uint32_t arg1, uint32_t arg2);
 uint32_t tisp_cust_mode_g_ctrl(void);
-int32_t tisp_day_or_night_g_ctrl(uint32_t a0);
+static int32_t tisp_day_or_night_g_ctrl(uint32_t a0);
 uint32_t tisp_switch_bin(uint32_t a0);
-int32_t tisp_mirror_enable(int32_t arg1, char arg2);
+static int32_t tisp_mirror_enable(int32_t arg1, char arg2);
 int32_t tisp_hv_flip_enable(int32_t arg1, char arg2);
-int tisp_hv_flip_get(void);
-int32_t tisp_flip_enable(void);
+static int tisp_hv_flip_get(void);
+static int32_t tisp_flip_enable(void);
 uint32_t tisp_set_fps(uint32_t a0, uint32_t a1);
-int32_t tisp_set_brightness(int32_t arg1, uint8_t arg2);
-int32_t tisp_set_ae_comp(uint32_t a0, uint32_t a1);
-char tisp_get_ae_comp(int32_t arg1, char *arg2);
-int32_t tisp_get_ae_luma(uint32_t a0, uintptr_t a1);
+static int32_t tisp_set_brightness(int32_t arg1, uint8_t arg2);
+static int32_t tisp_set_ae_comp(uint32_t a0, uint32_t a1);
+static char tisp_get_ae_comp(int32_t arg1, char *arg2);
+static int32_t tisp_get_ae_luma(uint32_t a0, uintptr_t a1);
 int32_t tisp_set_sharpness(uint32_t a0, uint32_t a1);
 int32_t tisp_set_saturation(int32_t arg1, uint8_t arg2);
 int32_t tisp_set_contrast(int32_t arg1, uint8_t arg2);
-int32_t tisp_set_bcsh_hue(int32_t arg1, char arg2);
-uint32_t tisp_get_brightness(void);
-uint32_t tisp_get_sharpness(void);
-uint32_t tisp_get_saturation(void);
-uint32_t tisp_get_contrast(void);
+static int32_t tisp_set_bcsh_hue(int32_t arg1, char arg2);
+static uint32_t tisp_get_brightness(void);
+static uint32_t tisp_get_sharpness(void);
+static uint32_t tisp_get_saturation(void);
+static uint32_t tisp_get_contrast(void);
 uint8_t tisp_get_bcsh_hue(int32_t arg1, uint8_t *arg2);
 int32_t tisp_top_sel(void);
-int32_t tisp_top_read(void);
+static int32_t tisp_top_read(void);
 int32_t tisp_g_ncuinfo(uint32_t a0);
-int64_t tisp_s_antiflick(uint32_t a0, uintptr_t a1, uint32_t a2);
+static int64_t tisp_s_antiflick(uint32_t a0, uintptr_t a1, uint32_t a2);
 int32_t tisp_s_Hilightdepress(uint32_t a0, uint32_t a1);
 int tisp_g_Hilightdepress(uint32_t *out);
 int32_t tisp_s_BacklightComp(uint32_t a0, uint32_t a1);
 int tisp_g_BacklightComp(uint32_t *out);
-int32_t tisp_s_Gamma(uint32_t a0, uint32_t a1);
-int32_t tisp_g_Gamma(uint32_t a0, uint32_t a1);
-int32_t tisp_s_aeroi_weight(uint32_t a0, uintptr_t a1);
-int32_t tisp_g_aeroi_weight(uint32_t a0, uint32_t a1);
-int32_t tisp_s_aezone_weight(uint32_t a0, uint32_t a1);
-int32_t tisp_g_aezone_weight(uint32_t a0, uint32_t a1);
-int32_t tisp_s_af_weight(uint32_t a0, uint32_t a1);
-int32_t tisp_g_af_weight(uint32_t a0, uint32_t a1);
+static int32_t tisp_s_Gamma(uint32_t a0, uint32_t a1);
+static int32_t tisp_g_Gamma(uint32_t a0, uint32_t a1);
+static int32_t tisp_s_aeroi_weight(uint32_t a0, uintptr_t a1);
+static int32_t tisp_g_aeroi_weight(uint32_t a0, uint32_t a1);
+static int32_t tisp_s_aezone_weight(uint32_t a0, uint32_t a1);
+static int32_t tisp_g_aezone_weight(uint32_t a0, uint32_t a1);
+static int32_t tisp_s_af_weight(uint32_t a0, uint32_t a1);
+static int32_t tisp_g_af_weight(uint32_t a0, uint32_t a1);
 int32_t tisp_g_ev_attr(uint32_t arg1, uint32_t *arg2);
-int32_t tisp_g_wb_attr(uint32_t a0, uintptr_t a1);
-int32_t tisp_s_wb_attr(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t arg4, uint32_t arg5, uint32_t arg6);
-int32_t tisp_g_wb_zone(uint32_t a0, uint32_t a1);
-int32_t tisp_g_wb_ct(uint32_t a0, uintptr_t a1);
-int32_t tisp_s_wb_ct(uint32_t a0, uintptr_t a1);
+static int32_t tisp_g_wb_attr(uint32_t a0, uintptr_t a1);
+static int32_t tisp_s_wb_attr(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t arg4, uint32_t arg5, uint32_t arg6);
+static int32_t tisp_g_wb_zone(uint32_t a0, uint32_t a1);
+static int32_t tisp_g_wb_ct(uint32_t a0, uintptr_t a1);
+static int32_t tisp_s_wb_ct(uint32_t a0, uintptr_t a1);
 int32_t tisp_s_awb_cluster(int32_t arg1,
                            uint32_t arg2, uint32_t arg3, uint32_t arg4,
                            uint32_t arg5, uint32_t arg6, uint32_t arg7,
                            uint32_t arg8, uint32_t arg9, uint32_t arg10,
                            uint32_t arg11);
-int32_t tisp_g_awb_cluster(uint32_t a0, uintptr_t a1);
-int32_t tisp_s_awb_ct_trend(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5);
-int32_t tisp_g_awb_ct_trend(uint32_t a0, uintptr_t a1);
+static int32_t tisp_g_awb_cluster(uint32_t a0, uintptr_t a1);
+static int32_t tisp_s_awb_ct_trend(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5);
+static int32_t tisp_g_awb_ct_trend(uint32_t a0, uintptr_t a1);
 int tisp_g_ccm_attr(uint32_t a0, void *a1);
-int tisp_s_ccm_attr(uintptr_t context, const void *in);
-int32_t tisp_s_ae_converge_step(uint32_t a0, uintptr_t a1);
-int32_t tisp_g_ae_converge_step(char arg1, int16_t *arg2);
-int32_t tisp_g_ae_hist(uint32_t a0, uint32_t a1);
-int32_t tisp_s_ae_hist(void);
-int32_t tisp_s_ae_at_list(uint32_t a0, uint32_t a1);
+static int tisp_s_ccm_attr(uintptr_t context, const void *in);
+static int32_t tisp_s_ae_converge_step(uint32_t a0, uintptr_t a1);
+static int32_t tisp_g_ae_converge_step(char arg1, int16_t *arg2);
+static int32_t tisp_g_ae_hist(uint32_t a0, uint32_t a1);
+static int32_t tisp_s_ae_hist(void);
+static int32_t tisp_s_ae_at_list(uint32_t a0, uint32_t a1);
 int32_t tisp_g_ae_at_list(uint32_t a0, uint32_t a1);
-int32_t tisp_s_3dns_ratio(int32_t arg1, int32_t arg2);
-int32_t tisp_s_2dns_ratio(int32_t arg1, uint32_t arg2);
-int32_t tisp_s_ae_attr(int32_t arg1, int32_t arg2, int32_t arg3);
-int32_t tisp_g_ae_attr(int32_t arg1, int32_t *arg2);
-int32_t tisp_g_ae_min(uint32_t a0, uintptr_t a1);
-int32_t tisp_s_ae_min(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5);
-int32_t tisp_g_ae_zone(uint32_t a0, uint32_t a1);
-int32_t tisp_g_af_zone(void);
-int32_t tisp_g_af_metric(uint32_t a0, uintptr_t a1);
-int32_t tisp_g_af_attr(uint32_t a0, uintptr_t a1);
-int32_t tisp_s_af_attr(uint32_t a0, uint32_t a1);
-int32_t tisp_s_wb_frz(int32_t arg1, char arg2);
-int tisp_g_wb_frz(void *out_buf);
+static int32_t tisp_s_3dns_ratio(int32_t arg1, int32_t arg2);
+static int32_t tisp_s_2dns_ratio(int32_t arg1, uint32_t arg2);
+static int32_t tisp_s_ae_attr(int32_t arg1, int32_t arg2, int32_t arg3);
+static int32_t tisp_g_ae_attr(int32_t arg1, int32_t *arg2);
+static int32_t tisp_g_ae_min(uint32_t a0, uintptr_t a1);
+static int32_t tisp_s_ae_min(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5);
+static int32_t tisp_g_ae_zone(uint32_t a0, uint32_t a1);
+static int32_t tisp_g_af_zone(void);
+static int32_t tisp_g_af_metric(uint32_t a0, uintptr_t a1);
+static int32_t tisp_g_af_attr(uint32_t a0, uintptr_t a1);
+static int32_t tisp_s_af_attr(uint32_t a0, uint32_t a1);
+static int32_t tisp_s_wb_frz(int32_t arg1, char arg2);
+static int tisp_g_wb_frz(void *out_buf);
 int32_t tisp_s_module_control(int32_t arg1, int32_t arg2);
 int32_t tisp_g_module_control(int32_t arg1, int32_t *arg2);
-int32_t tisp_s_autozoom_control(int32_t arg1, int32_t *arg2);
-int32_t tisp_g_autozoom_control(int32_t arg1, uint32_t *arg2);
-int32_t tisp_s_scaler_level_control(int32_t arg1, int32_t arg2, int32_t arg3);
+static int32_t tisp_s_autozoom_control(int32_t arg1, int32_t *arg2);
+static int32_t tisp_g_autozoom_control(int32_t arg1, uint32_t *arg2);
+static int32_t tisp_s_scaler_level_control(int32_t arg1, int32_t arg2, int32_t arg3);
 int32_t tisp_g_fcrop_control(uint32_t a0, uintptr_t a1);
-int32_t tisp_s_fcrop_control(uint32_t a0);
-int32_t tisp_s_wdr_en(void);
-int32_t tisp_s_wdr_init_en(void);
-int32_t tisp_g_wdr_en(void);
-int32_t tisp_s_max_again(int32_t arg1, int32_t arg2);
-int32_t tisp_s_max_isp_dgain(int32_t arg1, int32_t arg2);
+static int32_t tisp_s_fcrop_control(uint32_t a0);
+static int32_t tisp_s_wdr_en(void);
+static int32_t tisp_s_wdr_init_en(void);
+static int32_t tisp_g_wdr_en(void);
+static int32_t tisp_s_max_again(int32_t arg1, int32_t arg2);
+static int32_t tisp_s_max_isp_dgain(int32_t arg1, int32_t arg2);
 int32_t tisp_g_dpc_strength(uint32_t a0, uintptr_t a1);
-int32_t tisp_s_dpc_strength(int32_t arg1, uint32_t arg2);
-int32_t tisp_g_drc_strength(uint32_t a0, uintptr_t a1);
-int32_t tisp_s_drc_strength(int32_t arg1, uint32_t arg2);
-int32_t tisp_mscaler_mask_change(void);
-int32_t tisp_mscaler_mask_setreg(int32_t arg1, int32_t arg2, int32_t arg3);
-int tisp_s_mscaler_mask_attr(void);
-int32_t tisp_g_mscaler_mask_attr(void);
-int tisp_s_mscaler_hvflip_mask(void);
-int32_t tisp_s_ev_start(int32_t arg1, uint32_t arg2);
-int32_t tisp_s_awb_start(int32_t arg1, int32_t arg2, int32_t arg3);
-int32_t tisp_g_awb_start(int arg1, int32_t * arg2);
-int32_t tisp_s_awb_algo(uint32_t a0, uint32_t a1);
-int32_t isp_tlib_api_s_awb_zone_weight(uint32_t a0, uint32_t a1);
-int32_t isp_tlib_api_g_awb_zone_weight(uint32_t a0, uint32_t a1);
-int32_t tisp_deinit_free(void);
+static int32_t tisp_s_dpc_strength(int32_t arg1, uint32_t arg2);
+static int32_t tisp_g_drc_strength(uint32_t a0, uintptr_t a1);
+static int32_t tisp_s_drc_strength(int32_t arg1, uint32_t arg2);
+static int32_t tisp_mscaler_mask_change(void);
+static int32_t tisp_mscaler_mask_setreg(int32_t arg1, int32_t arg2, int32_t arg3);
+static int tisp_s_mscaler_mask_attr(void);
+static int32_t tisp_g_mscaler_mask_attr(void);
+static int tisp_s_mscaler_hvflip_mask(void);
+static int32_t tisp_s_ev_start(int32_t arg1, uint32_t arg2);
+static int32_t tisp_s_awb_start(int32_t arg1, int32_t arg2, int32_t arg3);
+static int32_t tisp_g_awb_start(int arg1, int32_t * arg2);
+static int32_t tisp_s_awb_algo(uint32_t a0, uint32_t a1);
+static int32_t isp_tlib_api_s_awb_zone_weight(uint32_t a0, uint32_t a1);
+static int32_t isp_tlib_api_g_awb_zone_weight(uint32_t a0, uint32_t a1);
+static int32_t tisp_deinit_free(void);
 int32_t tisp_s_ae_it_max(void);
-int32_t tisp_g_ae_it_max(uint32_t a0, uintptr_t a1);
-int tisp_s_adr_enable(int arg1, int arg2);
-int tisp_s_defog_enable(int arg1, int arg2);
-int32_t tisp_set_ae_freeze(uint32_t a0, uint32_t a1);
-int32_t tisp_get_antiflicker_step(int32_t arg1, int32_t arg2, uint32_t *arg3);
-int32_t tisp_set_ae_attr(int32_t arg1, int32_t *arg2);
-int32_t tisp_get_ae_attr(int32_t arg1, int32_t arg2);
-int32_t tisp_get_ae_state(int32_t arg1, char *arg2);
-int32_t tisp_get_blc_attr(void);
-int32_t tisp_set_defog_strength(uint32_t a0, uintptr_t a1);
-int32_t tisp_get_defog_strength(uint32_t a0, uintptr_t a1);
-int32_t tisp_set_csc_attr(int32_t arg1, int32_t *arg2);
+static int32_t tisp_g_ae_it_max(uint32_t a0, uintptr_t a1);
+static int tisp_s_adr_enable(int arg1, int arg2);
+static int tisp_s_defog_enable(int arg1, int arg2);
+static int32_t tisp_set_ae_freeze(uint32_t a0, uint32_t a1);
+static int32_t tisp_get_antiflicker_step(int32_t arg1, int32_t arg2, uint32_t *arg3);
+static int32_t tisp_set_ae_attr(int32_t arg1, int32_t *arg2);
+static int32_t tisp_get_ae_attr(int32_t arg1, int32_t arg2);
+static int32_t tisp_get_ae_state(int32_t arg1, char *arg2);
+static int32_t tisp_get_blc_attr(void);
+static int32_t tisp_set_defog_strength(uint32_t a0, uintptr_t a1);
+static int32_t tisp_get_defog_strength(uint32_t a0, uintptr_t a1);
+static int32_t tisp_set_csc_attr(int32_t arg1, int32_t *arg2);
 int32_t tisp_get_csc_attr(int32_t arg1, uint32_t *arg2);
-void * tisp_ae_algo_deinit(void);
-int32_t tisp_awb_algo_deinit(void);
-int32_t tisp_set_wdr_output_mode(void);
-int32_t tisp_get_wdr_output_mode(void);
-int32_t tisp_set_bcsh_fixed_contrast(int32_t arg1, char *arg2);
+static void * tisp_ae_algo_deinit(void);
+static int32_t tisp_awb_algo_deinit(void);
+static int32_t tisp_set_wdr_output_mode(void);
+static int32_t tisp_get_wdr_output_mode(void);
+static int32_t tisp_set_bcsh_fixed_contrast(int32_t arg1, char *arg2);
 int64_t tisp_set_frame_drop(uint32_t arg1, uint32_t arg2, unsigned long arg3);
-int32_t tisp_get_frame_drop(int32_t arg1, int32_t arg2, int32_t *arg3);
-int32_t tisp_s_rgb_coefft(int32_t arg1, int16_t *arg2);
-int tisp_g_rgb_coefft(int32_t *out);
+static int32_t tisp_get_frame_drop(int32_t arg1, int32_t arg2, int32_t *arg3);
+static int32_t tisp_s_rgb_coefft(int32_t arg1, int16_t *arg2);
+static int tisp_g_rgb_coefft(int32_t *out);
 int32_t tisp_lsc_hvflip(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t arg4);
 int32_t tisp_s_mscaler_mask_block_attr(uint32_t a0, uintptr_t a1);
 int32_t tisp_g_mscaler_mask_block_attr(uint32_t a0, uintptr_t a1);
-int32_t tisp_s_osd_attr(int32_t arg1, uint8_t *arg2);
+static int32_t tisp_s_osd_attr(int32_t arg1, uint8_t *arg2);
 int32_t tisp_g_osd_attr(int32_t arg0, uint32_t *arg2);
-int32_t tisp_s_osd_block_attr(uint32_t a0, uintptr_t a1);
+static int32_t tisp_s_osd_block_attr(uint32_t a0, uintptr_t a1);
 int32_t tisp_g_osd_block_attr(int32_t arg1, char *arg2);
 int32_t tisp_s_draw_block_attr(uint32_t a0, uintptr_t a1);
-int32_t tisp_msca_state(void);
-int32_t tisp_g_draw_block_attr(uint32_t a0, uintptr_t a1);
+static int32_t tisp_msca_state(void);
+static int32_t tisp_g_draw_block_attr(uint32_t a0, uintptr_t a1);
 int32_t tisp_msca_Shd_ctrl(char arg1);
-int32_t tisp_s_hldc_attr(int32_t arg1, int16_t *arg2);
-int32_t tisp_g_hldc_attr(int32_t a0, int32_t a1);
+static int32_t tisp_s_hldc_attr(int32_t arg1, int16_t *arg2);
+static int32_t tisp_g_hldc_attr(int32_t a0, int32_t a1);
 int32_t ispcore_sensor_ops_release_all_sensor(void *arg1);
 int32_t ispcore_sensor_ops_ioctl(void *arg1);
 char* ispcore_irq_fs_work(void);
 int32_t ispcore_link_setup(void);
 int32_t isp_pre_frame_dequeue(void);
 int32_t isp_ch1_frame_dequeue_delay(void);
-int32_t ispcore_frame_channel_dqbuf(void *arg1, int32_t arg2);
+static int32_t ispcore_frame_channel_dqbuf(void *arg1, int32_t arg2);
 int32_t ispcore_core_ops_ioctl(uintptr_t a0, uint32_t a1);
-int32_t isp_fw_process(void);
-int32_t ispcore_frame_channel_streamoff(int32_t *arg1);
-int32_t dump_isp_info_open(uint32_t a0, uint32_t a1);
-int32_t isp_core_cmd_set(uint32_t a0, uint32_t a1, uint32_t a2);
+static int32_t isp_fw_process(void);
+static int32_t ispcore_frame_channel_streamoff(int32_t *arg1);
+static int32_t dump_isp_info_open(uint32_t a0, uint32_t a1);
+static int32_t isp_core_cmd_set(uint32_t a0, uint32_t a1, uint32_t a2);
 int ispcore_sync_sensor_attr(struct tx_isp_subdev *sd, struct tx_isp_sensor_attribute *attr);
 int32_t ispcore_irq_thread_handle(uintptr_t a0);
-int32_t sub_68e08(uint32_t a0, uintptr_t a1, uintptr_t a2, uint32_t a3, uintptr_t arg4, uint32_t arg5, uint32_t arg6, uint32_t arg7, uintptr_t arg8);
-int sub_68f3c(int arg1, int arg2, int arg3, int arg4, int arg5, int arg6, int arg7, int arg8, int arg9);
+static int32_t sub_68e08(uint32_t a0, uintptr_t a1, uintptr_t a2, uint32_t a3, uintptr_t arg4, uint32_t arg5, uint32_t arg6, uint32_t arg7, uintptr_t arg8);
+static int sub_68f3c(int arg1, int arg2, int arg3, int arg4, int arg5, int arg6, int arg7, int arg8, int arg9);
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t ispcore_set_clk_parent_isra_0(char* arg1, char* arg2) __asm__("ispcore_set_clk_parent.isra.0");
+static int32_t ispcore_set_clk_parent_isra_0(char* arg1, char* arg2) __asm__("ispcore_set_clk_parent.isra.0");
 #endif
-int32_t ispcore_set_clk_parent_isra_0(char* arg1, char* arg2);
+static int32_t ispcore_set_clk_parent_isra_0(char* arg1, char* arg2);
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t isp_info_show_isra_1(uintptr_t a0) __asm__("isp_info_show.isra.1");
+static int32_t isp_info_show_isra_1(uintptr_t a0) __asm__("isp_info_show.isra.1");
 #endif
-int32_t isp_info_show_isra_1(uintptr_t a0);
-int isp_core_debug_show(void *arg1);
-int32_t ispcore_pad_event_handle(uintptr_t a0, uint32_t a1, uintptr_t a2);
+static int32_t isp_info_show_isra_1(uintptr_t a0);
+static int isp_core_debug_show(void *arg1);
+static int32_t ispcore_pad_event_handle(uintptr_t a0, uint32_t a1, uintptr_t a2);
 int ispcore_activate_module(void *arg1);
-int dump_msca_regs(void);
+static int dump_msca_regs(void);
 int32_t system_reg_write(uint32_t a0, uint32_t a1);
 int32_t system_reg_read(uint32_t a0);
 int32_t exception_handle(void);
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t tx_isp_enable_irq_1(uintptr_t a0) __asm__("tx_isp_enable_irq");
+static int32_t tx_isp_enable_irq_1(uintptr_t a0) __asm__("tx_isp_enable_irq");
 #endif
-int32_t tx_isp_enable_irq_1(uintptr_t a0);
+static int32_t tx_isp_enable_irq_1(uintptr_t a0);
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t tx_isp_disable_irq_1(void *arg1) __asm__("tx_isp_disable_irq");
+static int32_t tx_isp_disable_irq_1(void *arg1) __asm__("tx_isp_disable_irq");
 #endif
-int32_t tx_isp_disable_irq_1(void *arg1);
+static int32_t tx_isp_disable_irq_1(void *arg1);
 int32_t ispcore_video_s_stream(void *arg1, int32_t arg2);
 int32_t ispcore_core_ops_init(uintptr_t a0, uint32_t a1);
 int32_t ispcore_slake_module(uintptr_t arg1);
-int tx_isp_core_probe(struct platform_device *pdev);
+static int tx_isp_core_probe(struct platform_device *pdev);
 int32_t system_irq_func_set(int32_t arg1, int32_t arg2, int32_t arg3);
 int32_t mbus_to_bayer_write(uint32_t a0);
 int32_t ispcore_interrupt_service_routine(uintptr_t a0);
 int32_t init_module(void);
 void cleanup_module(void);
-int tx_isp_vic_remove(struct platform_device *pdev);
-int tx_isp_vin_remove(struct platform_device *pdev);
-int tx_isp_csi_remove(struct platform_device *pdev);
-int tx_isp_ivdc_remove(struct platform_device *pdev);
-int tx_isp_fs_remove(struct platform_device *pdev);
-int tx_isp_remove(struct platform_device *pdev);
-int tx_isp_core_remove(struct platform_device *pdev);
+static int tx_isp_vic_remove(struct platform_device *pdev);
+static int tx_isp_vin_remove(struct platform_device *pdev);
+static int tx_isp_csi_remove(struct platform_device *pdev);
+static int tx_isp_ivdc_remove(struct platform_device *pdev);
+static int tx_isp_fs_remove(struct platform_device *pdev);
+static int tx_isp_remove(struct platform_device *pdev);
+static int tx_isp_core_remove(struct platform_device *pdev);
 
 #ifdef REGTRACE_KERNEL_TREE_BUILD
 struct regtrace_tx_isp_device_descriptor {
@@ -19134,7 +19154,7 @@ int32_t isp_printf(uint32_t level, const char *fmt, ...)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000000084 origin=fragment_seed original=get_isp_clk */
-uint32_t get_isp_clk(void)
+static uint32_t get_isp_clk(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -19152,7 +19172,7 @@ uint32_t get_isp_clk(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000000090 origin=fragment_seed original=get_isp_clka */
-uint32_t get_isp_clka(void)
+static uint32_t get_isp_clka(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -19170,7 +19190,7 @@ uint32_t get_isp_clka(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000009c origin=fragment_seed original=get_clk_name */
-char get_clk_name(uintptr_t a0)
+static char get_clk_name(uintptr_t a0)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -19188,7 +19208,7 @@ char get_clk_name(uintptr_t a0)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000000a8 origin=fragment_seed original=get_clka_name */
-char get_clka_name(uintptr_t a0)
+static char get_clka_name(uintptr_t a0)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -19217,7 +19237,7 @@ void private_vfree(void *addr)
 }
 
 
-ktime_t private_ktime_set(const long secs, const unsigned long nsecs)
+static ktime_t private_ktime_set(const long secs, const unsigned long nsecs)
 {
     return ktime_set(secs, nsecs);
 }
@@ -19247,7 +19267,7 @@ void private_do_gettimeofday(struct timeval *tv)
 }
 
 
-void private_dma_sync_single_for_device(struct device *dev, dma_addr_t addr, size_t size, enum dma_data_direction dir)
+static void private_dma_sync_single_for_device(struct device *dev, dma_addr_t addr, size_t size, enum dma_data_direction dir)
 {
     dma_sync_single_for_device(dev, addr, size, dir);
 }
@@ -19332,7 +19352,7 @@ private_get_driver_interface0x7c:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000000240 origin=fragment_seed original=tx_isp_release_device */
-int32_t tx_isp_release_device(void)
+static int32_t tx_isp_release_device(void)
 {
     uint32_t ra = 0;
 
@@ -19363,7 +19383,7 @@ int32_t *pop_buffer_fifo(int32_t *arg1) {
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000000290 origin=model_output original=tx_isp_vic_start */
-int32_t tx_isp_vic_start(void* arg1)
+static int32_t tx_isp_vic_start(void* arg1)
 {
     return regtrace_t23_vic_start_repaired((unsigned char *)arg1,
                                            "tx_isp_vic_start");
@@ -19842,7 +19862,7 @@ int32_t ispvic_frame_channel_clearbuf(void *arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000000de0 origin=fragment_seed original=tx_isp_vic_probe */
-int tx_isp_vic_probe(struct platform_device *pdev)
+static int tx_isp_vic_probe(struct platform_device *pdev)
 {
     uintptr_t a0 = (uintptr_t)pdev;
 
@@ -19929,7 +19949,7 @@ tx_isp_vic_probe0x168:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000000f60 origin=model_output original=tisp_vic_ctrl_release */
-int32_t tisp_vic_ctrl_release(int32_t arg1, int32_t arg2)
+static int32_t tisp_vic_ctrl_release(int32_t arg1, int32_t arg2)
 {
     uint32_t mode = *(uint8_t *)((char *)&data_a8f96 + 27);
 
@@ -19957,7 +19977,7 @@ int32_t tisp_vic_ctrl_release(int32_t arg1, int32_t arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000102c origin=fragment_seed original=dump_isp_vic_frd_open */
-int32_t dump_isp_vic_frd_open(uint32_t a0, uint32_t a1)
+static int32_t dump_isp_vic_frd_open(uint32_t a0, uint32_t a1)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -19999,7 +20019,7 @@ int32_t dump_isp_vic_frd_open(uint32_t a0, uint32_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000001074 origin=fragment_seed original=isp_vic_frd_show */
-int isp_vic_frd_show(struct seq_file *seq, void *v)
+static int isp_vic_frd_show(struct seq_file *seq, void *v)
 {
     uint32_t *v0;
     uint32_t v1;
@@ -20059,7 +20079,7 @@ error:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000011ac origin=fragment_seed original=tisp_vic_mmap */
-int32_t tisp_vic_mmap(uint32_t a0, uintptr_t a1)
+static int32_t tisp_vic_mmap(uint32_t a0, uintptr_t a1)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_18 = 0;
@@ -20548,7 +20568,7 @@ int vic_sensor_ops_sync_sensor_attr(void *arg1, void *arg2, void *arg3)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000168c origin=fragment_seed original=dump_vic_reg */
-int32_t dump_vic_reg(void)
+static int32_t dump_vic_reg(void)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -20599,7 +20619,7 @@ int32_t dump_vic_reg(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000170c origin=fragment_seed original=check_vic_error */
-void check_vic_error(void)
+static void check_vic_error(void)
 {
 	unsigned int s0 = (unsigned int)&dump_vic_reg;
 	unsigned int s1 = (unsigned int)&ivdc_threshold_line;
@@ -20611,14 +20631,14 @@ void check_vic_error(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000001738 origin=fragment_seed original=tx_vic_enable_irq */
-void tx_vic_enable_irq(void)
+static void tx_vic_enable_irq(void)
 {
     /* one-off compile triage stub for malformed recovered body */
     return;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000017e0 origin=fragment_seed original=tx_vic_disable_irq */
-void tx_vic_disable_irq(struct tx_isp_vic_device *vic_dev)
+static void tx_vic_disable_irq(struct tx_isp_vic_device *vic_dev)
 {
     /* one-off compile triage stub for malformed recovered body */
     return;
@@ -20777,7 +20797,7 @@ out:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000001ae8 origin=fragment_seed original=vic_mdma_enable */
-uint32_t vic_mdma_enable(uintptr_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t arg4, uint32_t arg5)
+static uint32_t vic_mdma_enable(uintptr_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t arg4, uint32_t arg5)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -20937,7 +20957,7 @@ vic_mdma_enable0x184:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000001c78 origin=fragment_seed original=isp_vic_cmd_set */
-int32_t isp_vic_cmd_set(uintptr_t a0, uint32_t a1, uint32_t a2)
+static int32_t isp_vic_cmd_set(uintptr_t a0, uint32_t a1, uint32_t a2)
 {
     return (int32_t)regtrace_t23_vic_proc_write(
         (struct file *)a0, (const char __user *)(uintptr_t)a1,
@@ -21903,7 +21923,7 @@ isp_vic_cmd_set0xa6c:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000002710 origin=fragment_seed original=tisp_vic_ctrl_ioctl */
-int32_t tisp_vic_ctrl_ioctl(uintptr_t a0, uint32_t a1, uint32_t a2)
+static int32_t tisp_vic_ctrl_ioctl(uintptr_t a0, uint32_t a1, uint32_t a2)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -22861,9 +22881,9 @@ epilogue:
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000003ac0 origin=fragment_seed original=vic_core_ops_ioctl */
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t vic_core_ops_ioctl_1(uintptr_t a0, uint32_t a1, uint32_t a2) __asm__("vic_core_ops_ioctl");
+static int32_t vic_core_ops_ioctl_1(uintptr_t a0, uint32_t a1, uint32_t a2) __asm__("vic_core_ops_ioctl");
 #endif
-int32_t vic_core_ops_ioctl_1(uintptr_t a0, uint32_t a1, uint32_t a2)
+static int32_t vic_core_ops_ioctl_1(uintptr_t a0, uint32_t a1, uint32_t a2)
 {
     uint32_t *local_14 = 0;
     uint32_t ra = 0;
@@ -23057,7 +23077,7 @@ int32_t tx_isp_vin_init(void *arg1, int32_t arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000003cdc origin=fragment_seed original=subdev_sensor_ops_set_input */
-int32_t subdev_sensor_ops_set_input(uintptr_t a0, uintptr_t a1, uint32_t a2)
+static int32_t subdev_sensor_ops_set_input(uintptr_t a0, uintptr_t a1, uint32_t a2)
 {
     uint32_t *local_10 = 0;
     uint32_t local_1c = 0;
@@ -23316,7 +23336,7 @@ int32_t tx_isp_vin_reset(void *arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000003f9c origin=fragment_seed original=tx_isp_vin_probe */
-int tx_isp_vin_probe(struct platform_device *pdev)
+static int tx_isp_vin_probe(struct platform_device *pdev)
 {
     void *vin;
     uint32_t *s2;
@@ -23951,7 +23971,7 @@ int32_t subdev_sensor_ops_ioctl(void *arg1, int32_t arg2, int32_t *arg3)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000004fe0 origin=fragment_seed original=tx_isp_csi_probe */
-int tx_isp_csi_probe(struct platform_device *pdev)
+static int tx_isp_csi_probe(struct platform_device *pdev)
 {
     uintptr_t a0 = (uintptr_t)pdev;
 
@@ -24080,7 +24100,7 @@ tx_isp_csi_probe0x200:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000051f8 origin=fragment_seed original=dump_isp_csi_open */
-int32_t dump_isp_csi_open(uint32_t a0, uint32_t a1)
+static int32_t dump_isp_csi_open(uint32_t a0, uint32_t a1)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -24122,7 +24142,7 @@ int32_t dump_isp_csi_open(uint32_t a0, uint32_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000005240 origin=fragment_seed original=isp_csi_show */
-int32_t isp_csi_show(uintptr_t a0)
+static int32_t isp_csi_show(uintptr_t a0)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -24741,14 +24761,14 @@ out_return:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000059c4 origin=model_output original=dump_csi_reg */
-int32_t dump_csi_reg(void *arg1)
+static int32_t dump_csi_reg(void *arg1)
 {
     /* one-off compile triage stub for malformed recovered body */
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000005b54 origin=fragment_seed original=check_csi_error */
-void check_csi_error(void)
+static void check_csi_error(void)
 {
     uint32_t *local_14 = 0;
     uint32_t *local_18 = 0;
@@ -24822,7 +24842,7 @@ check_csi_error0x6c:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000005be4 origin=model_output original=csi_set_on_lanes */
-int32_t csi_set_on_lanes(void *arg1, char arg2)
+static int32_t csi_set_on_lanes(void *arg1, char arg2)
 {
     uint8_t lane = (uint8_t)arg2;
     int32_t lane_num = (lane - 1) & 3;
@@ -24837,7 +24857,7 @@ int32_t csi_set_on_lanes(void *arg1, char arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000005c60 origin=fragment_seed original=isp_core_tunning_release */
-int32_t isp_core_tunning_release(uint32_t a0, uintptr_t a1)
+static int32_t isp_core_tunning_release(uint32_t a0, uintptr_t a1)
 {
     uintptr_t *s0;
     uint32_t v1;
@@ -24867,7 +24887,7 @@ out:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000005ce4 origin=fragment_seed original=isp_core_tunning_open */
-int32_t isp_core_tunning_open(uint32_t a0, uintptr_t a1)
+static int32_t isp_core_tunning_open(uint32_t a0, uintptr_t a1)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -25029,9 +25049,9 @@ apical_isp_sensor_hvflip_update0xec:
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000005e48 origin=fragment_seed original=apical_isp_autozoom_s_attr.isra.28 */
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_autozoom_s_attr_isra_28(uintptr_t a0) __asm__("apical_isp_autozoom_s_attr.isra.28");
+static int32_t apical_isp_autozoom_s_attr_isra_28(uintptr_t a0) __asm__("apical_isp_autozoom_s_attr.isra.28");
 #endif
-int32_t apical_isp_autozoom_s_attr_isra_28(uintptr_t a0)
+static int32_t apical_isp_autozoom_s_attr_isra_28(uintptr_t a0)
 {
     uint32_t *local_10 = 0;
     uint32_t local_74 = 0;
@@ -25380,9 +25400,9 @@ apical_isp_expr_s_ctrl_isra_330x130:
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000006150 origin=model_output original=apical_isp_ae_s_roi.isra.34 */
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_ae_s_roi_isra_34(int32_t *arg1) __asm__("apical_isp_ae_s_roi.isra.34");
+static int32_t apical_isp_ae_s_roi_isra_34(int32_t *arg1) __asm__("apical_isp_ae_s_roi.isra.34");
 #endif
-int32_t apical_isp_ae_s_roi_isra_34(int32_t *arg1)
+static int32_t apical_isp_ae_s_roi_isra_34(int32_t *arg1)
 {
     uintptr_t *buf;
     int32_t *result = -1;
@@ -25425,9 +25445,9 @@ cleanup:
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000062a4 origin=fragment_seed original=apical_isp_ae_zone_weight_s_attr.isra.45 */
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_ae_zone_weight_s_attr_isra_45(uintptr_t a0) __asm__("apical_isp_ae_zone_weight_s_attr.isra.45");
+static int32_t apical_isp_ae_zone_weight_s_attr_isra_45(uintptr_t a0) __asm__("apical_isp_ae_zone_weight_s_attr.isra.45");
 #endif
-int32_t apical_isp_ae_zone_weight_s_attr_isra_45(uintptr_t a0)
+static int32_t apical_isp_ae_zone_weight_s_attr_isra_45(uintptr_t a0)
 {
     uint32_t *local_10 = 0;
     uint32_t local_fc = 0;
@@ -25542,9 +25562,9 @@ apical_isp_ae_zone_weight_s_attr_isra_450x140:
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000063f8 origin=fragment_seed original=apical_isp_af_hist_s_attr.isra.48 */
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_af_hist_s_attr_isra_48(uint32_t a0) __asm__("apical_isp_af_hist_s_attr.isra.48");
+static int32_t apical_isp_af_hist_s_attr_isra_48(uint32_t a0) __asm__("apical_isp_af_hist_s_attr.isra.48");
 #endif
-int32_t apical_isp_af_hist_s_attr_isra_48(uint32_t a0)
+static int32_t apical_isp_af_hist_s_attr_isra_48(uint32_t a0)
 {
     uint32_t *local_10 = 0;
     uint32_t local_60 = 0;
@@ -25859,9 +25879,9 @@ apical_isp_af_hist_s_attr_isra_480x258:
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000665c origin=fragment_seed original=apical_isp_af_weight_s_attr.isra.49 */
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_af_weight_s_attr_isra_49(uintptr_t a0) __asm__("apical_isp_af_weight_s_attr.isra.49");
+static int32_t apical_isp_af_weight_s_attr_isra_49(uintptr_t a0) __asm__("apical_isp_af_weight_s_attr.isra.49");
 #endif
-int32_t apical_isp_af_weight_s_attr_isra_49(uintptr_t a0)
+static int32_t apical_isp_af_weight_s_attr_isra_49(uintptr_t a0)
 {
     uint32_t *local_10 = 0;
     uint32_t local_fc = 0;
@@ -28447,9 +28467,9 @@ apical_isp_core_ops_s_ctrl0x1420:
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000007c90 origin=fragment_seed original=apical_isp_autozoom_g_attr.isra.71 */
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_autozoom_g_attr_isra_71(uintptr_t a0) __asm__("apical_isp_autozoom_g_attr.isra.71");
+static int32_t apical_isp_autozoom_g_attr_isra_71(uintptr_t a0) __asm__("apical_isp_autozoom_g_attr.isra.71");
 #endif
-int32_t apical_isp_autozoom_g_attr_isra_71(uintptr_t a0)
+static int32_t apical_isp_autozoom_g_attr_isra_71(uintptr_t a0)
 {
     char local_10[100];
     uint32_t local_74 = 0;
@@ -28605,9 +28625,9 @@ apical_isp_autozoom_g_attr_isra_710x1b4:
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000007e64 origin=fragment_seed original=apical_isp_expr_g_ctrl.isra.75 */
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_expr_g_ctrl_isra_75(uintptr_t a0) __asm__("apical_isp_expr_g_ctrl.isra.75");
+static int32_t apical_isp_expr_g_ctrl_isra_75(uintptr_t a0) __asm__("apical_isp_expr_g_ctrl.isra.75");
 #endif
-int32_t apical_isp_expr_g_ctrl_isra_75(uintptr_t a0)
+static int32_t apical_isp_expr_g_ctrl_isra_75(uintptr_t a0)
 {
     uint32_t *local_10 = 0;
     uint32_t local_4c = 0;
@@ -28656,9 +28676,9 @@ int32_t apical_isp_expr_g_ctrl_isra_75(uintptr_t a0)
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000007ee0 origin=fragment_seed original=apical_isp_max_again_g_ctrl.isra.76 */
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_max_again_g_ctrl_isra_76(uintptr_t a0) __asm__("apical_isp_max_again_g_ctrl.isra.76");
+static int32_t apical_isp_max_again_g_ctrl_isra_76(uintptr_t a0) __asm__("apical_isp_max_again_g_ctrl.isra.76");
 #endif
-int32_t apical_isp_max_again_g_ctrl_isra_76(uintptr_t a0)
+static int32_t apical_isp_max_again_g_ctrl_isra_76(uintptr_t a0)
 {
     uint32_t *local_10 = 0;
     uint32_t local_3c = 0;
@@ -28708,9 +28728,9 @@ apical_isp_max_again_g_ctrl_isra_760x68:
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000007f5c origin=fragment_seed original=apical_isp_max_dgain_g_ctrl.isra.77 */
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_max_dgain_g_ctrl_isra_77(uintptr_t a0) __asm__("apical_isp_max_dgain_g_ctrl.isra.77");
+static int32_t apical_isp_max_dgain_g_ctrl_isra_77(uintptr_t a0) __asm__("apical_isp_max_dgain_g_ctrl.isra.77");
 #endif
-int32_t apical_isp_max_dgain_g_ctrl_isra_77(uintptr_t a0)
+static int32_t apical_isp_max_dgain_g_ctrl_isra_77(uintptr_t a0)
 {
     uint32_t *local_10 = 0;
     uint32_t local_40 = 0;
@@ -28760,9 +28780,9 @@ apical_isp_max_dgain_g_ctrl_isra_770x68:
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000007fd8 origin=fragment_seed original=apical_isp_ev_g_attr.isra.78 */
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_ev_g_attr_isra_78(uintptr_t a0) __asm__("apical_isp_ev_g_attr.isra.78");
+static int32_t apical_isp_ev_g_attr_isra_78(uintptr_t a0) __asm__("apical_isp_ev_g_attr.isra.78");
 #endif
-int32_t apical_isp_ev_g_attr_isra_78(uintptr_t a0)
+static int32_t apical_isp_ev_g_attr_isra_78(uintptr_t a0)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_18 = 0;
@@ -28831,9 +28851,9 @@ apical_isp_ev_g_attr_isra_780xa8:
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000008094 origin=fragment_seed original=apical_isp_gamma_g_attr.isra.79 */
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_gamma_g_attr_isra_79(uintptr_t a0) __asm__("apical_isp_gamma_g_attr.isra.79");
+static int32_t apical_isp_gamma_g_attr_isra_79(uintptr_t a0) __asm__("apical_isp_gamma_g_attr.isra.79");
 #endif
-int32_t apical_isp_gamma_g_attr_isra_79(uintptr_t a0)
+static int32_t apical_isp_gamma_g_attr_isra_79(uintptr_t a0)
 {
     uint32_t *local_10 = 0;
     uint32_t local_114 = 0;
@@ -28905,9 +28925,9 @@ apical_isp_gamma_g_attr_isra_790xa0:
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000008148 origin=fragment_seed original=apical_isp_ae_g_roi.isra.80 */
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_ae_g_roi_isra_80(uintptr_t arg1) __asm__("apical_isp_ae_g_roi.isra.80");
+static int32_t apical_isp_ae_g_roi_isra_80(uintptr_t arg1) __asm__("apical_isp_ae_g_roi.isra.80");
 #endif
-int32_t apical_isp_ae_g_roi_isra_80(uintptr_t arg1)
+static int32_t apical_isp_ae_g_roi_isra_80(uintptr_t arg1)
 {
     uintptr_t *s2 = arg1;
     private_kmalloc(900, 208);
@@ -28952,9 +28972,9 @@ cleanup:
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000008270 origin=model_output original=apical_isp_ae_zone_g_ctrl.isra.87 */
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_ae_zone_g_ctrl_isra_87(int32_t *arg1) __asm__("apical_isp_ae_zone_g_ctrl.isra.87");
+static int32_t apical_isp_ae_zone_g_ctrl_isra_87(int32_t *arg1) __asm__("apical_isp_ae_zone_g_ctrl.isra.87");
 #endif
-int32_t apical_isp_ae_zone_g_ctrl_isra_87(int32_t *arg1)
+static int32_t apical_isp_ae_zone_g_ctrl_isra_87(int32_t *arg1)
 {
 	int32_t var_390;
 
@@ -28965,9 +28985,9 @@ int32_t apical_isp_ae_zone_g_ctrl_isra_87(int32_t *arg1)
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000082c0 origin=fragment_seed original=apical_isp_af_zone_g_ctrl.isra.88 */
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_af_zone_g_ctrl_isra_88(uintptr_t a0) __asm__("apical_isp_af_zone_g_ctrl.isra.88");
+static int32_t apical_isp_af_zone_g_ctrl_isra_88(uintptr_t a0) __asm__("apical_isp_af_zone_g_ctrl.isra.88");
 #endif
-int32_t apical_isp_af_zone_g_ctrl_isra_88(uintptr_t a0)
+static int32_t apical_isp_af_zone_g_ctrl_isra_88(uintptr_t a0)
 {
     uint32_t *local_10 = 0;
     uint32_t local_398 = 0;
@@ -29002,9 +29022,9 @@ int32_t apical_isp_af_zone_g_ctrl_isra_88(uintptr_t a0)
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000008310 origin=fragment_seed original=apical_isp_ae_zone_weight_g_attr.isra.92 */
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_ae_zone_weight_g_attr_isra_92(uintptr_t arg1) __asm__("apical_isp_ae_zone_weight_g_attr.isra.92");
+static int32_t apical_isp_ae_zone_weight_g_attr_isra_92(uintptr_t arg1) __asm__("apical_isp_ae_zone_weight_g_attr.isra.92");
 #endif
-int32_t apical_isp_ae_zone_weight_g_attr_isra_92(uintptr_t arg1)
+static int32_t apical_isp_ae_zone_weight_g_attr_isra_92(uintptr_t arg1)
 {
     uintptr_t *s0;
     uintptr_t *s1;
@@ -29069,9 +29089,9 @@ epilogue:
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000008438 origin=fragment_seed original=apical_isp_ae_hist_origin_g_attr.isra.95 */
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_ae_hist_origin_g_attr_isra_95(uintptr_t a0) __asm__("apical_isp_ae_hist_origin_g_attr.isra.95");
+static int32_t apical_isp_ae_hist_origin_g_attr_isra_95(uintptr_t a0) __asm__("apical_isp_ae_hist_origin_g_attr.isra.95");
 #endif
-int32_t apical_isp_ae_hist_origin_g_attr_isra_95(uintptr_t a0)
+static int32_t apical_isp_ae_hist_origin_g_attr_isra_95(uintptr_t a0)
 {
     uint32_t *local_10 = 0;
     uint32_t local_414 = 0;
@@ -29112,9 +29132,9 @@ apical_isp_ae_hist_origin_g_attr_isra_950xa8:
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000084f4 origin=fragment_seed original=apical_isp_awb_zone_statis_g_attr.isra.97 */
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_awb_zone_statis_g_attr_isra_97(uintptr_t a0) __asm__("apical_isp_awb_zone_statis_g_attr.isra.97");
+static int32_t apical_isp_awb_zone_statis_g_attr_isra_97(uintptr_t a0) __asm__("apical_isp_awb_zone_statis_g_attr.isra.97");
 #endif
-int32_t apical_isp_awb_zone_statis_g_attr_isra_97(uintptr_t a0)
+static int32_t apical_isp_awb_zone_statis_g_attr_isra_97(uintptr_t a0)
 {
     uint32_t *local_10 = 0;
     uint32_t local_2bc = 0;
@@ -29170,7 +29190,7 @@ apical_isp_awb_zone_statis_g_attr_isra_970xa4:
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000085ac origin=model_output original=apical_isp_af_hist_g_attr.isra.98 */
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_af_hist_g_attr_isra_98(int32_t *arg1) __asm__("apical_isp_af_hist_g_attr.isra.98");
+static int32_t apical_isp_af_hist_g_attr_isra_98(int32_t *arg1) __asm__("apical_isp_af_hist_g_attr.isra.98");
 #endif
 /* This won't compile as-is since dots aren't valid in identifiers. * Instead, we use the underscored version which is the actual C symbol. */ int32_t apical_isp_af_hist_g_attr_isra_98(int32_t *arg1)
 {
@@ -29180,9 +29200,9 @@ int32_t apical_isp_af_hist_g_attr_isra_98(int32_t *arg1) __asm__("apical_isp_af_
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000879c origin=fragment_seed original=apical_isp_af_weight_g_attr.isra.99 */
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_af_weight_g_attr_isra_99(uintptr_t a0) __asm__("apical_isp_af_weight_g_attr.isra.99");
+static int32_t apical_isp_af_weight_g_attr_isra_99(uintptr_t a0) __asm__("apical_isp_af_weight_g_attr.isra.99");
 #endif
-int32_t apical_isp_af_weight_g_attr_isra_99(uintptr_t a0)
+static int32_t apical_isp_af_weight_g_attr_isra_99(uintptr_t a0)
 {
     /* one-off compile triage stub for malformed recovered body */
     return 0;
@@ -29190,9 +29210,9 @@ int32_t apical_isp_af_weight_g_attr_isra_99(uintptr_t a0)
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000088c4 origin=fragment_seed original=tiziano_isp_ae_manual_attr_g_ctrl.isra.106 */
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t tiziano_isp_ae_manual_attr_g_ctrl_isra_106(uintptr_t a0) __asm__("tiziano_isp_ae_manual_attr_g_ctrl.isra.106");
+static int32_t tiziano_isp_ae_manual_attr_g_ctrl_isra_106(uintptr_t a0) __asm__("tiziano_isp_ae_manual_attr_g_ctrl.isra.106");
 #endif
-int32_t tiziano_isp_ae_manual_attr_g_ctrl_isra_106(uintptr_t a0)
+static int32_t tiziano_isp_ae_manual_attr_g_ctrl_isra_106(uintptr_t a0)
 {
 	uint32_t var_b8[0x2c];
 	uintptr_t *s0;
@@ -29206,9 +29226,9 @@ int32_t tiziano_isp_ae_manual_attr_g_ctrl_isra_106(uintptr_t a0)
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000008914 origin=fragment_seed original=apical_isp_awb_zone_weight_g_attr.isra.115 */
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t apical_isp_awb_zone_weight_g_attr_isra_115(uintptr_t a0) __asm__("apical_isp_awb_zone_weight_g_attr.isra.115");
+static int32_t apical_isp_awb_zone_weight_g_attr_isra_115(uintptr_t a0) __asm__("apical_isp_awb_zone_weight_g_attr.isra.115");
 #endif
-int32_t apical_isp_awb_zone_weight_g_attr_isra_115(uintptr_t a0)
+static int32_t apical_isp_awb_zone_weight_g_attr_isra_115(uintptr_t a0)
 {
     uint32_t *local_10 = 0;
     uint32_t local_398 = 0;
@@ -29254,7 +29274,7 @@ apical_isp_awb_zone_weight_g_attr_isra_1150x94:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000089bc origin=fragment_seed original=isp_frame_done_wait */
-int isp_frame_done_wait(int timeout_ms, uint64_t *frame_count)
+static int isp_frame_done_wait(int timeout_ms, uint64_t *frame_count)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -31210,7 +31230,7 @@ static long isp_core_tunning_unlocked_ioctl(struct file *filp, unsigned int cmd,
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000009bc4 origin=fragment_seed original=isp_frame_done_wakeup */
-void isp_frame_done_wakeup(void)
+static void isp_frame_done_wakeup(void)
 {
 	uint32_t cnt_lo, cnt_hi, new_lo, new_hi, wrap;
 	uintptr_t cnt_ptr;
@@ -31228,7 +31248,7 @@ void isp_frame_done_wakeup(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000009c10 origin=model_output original=isp_core_tuning_event */
-int32_t isp_core_tuning_event(void *arg1, int32_t arg2)
+static int32_t isp_core_tuning_event(void *arg1, int32_t arg2)
 {
 	if (arg2 == 0x4000001) {
 		*(int32_t *)((uintptr_t)arg1 + 0x40c8) = 1;
@@ -31257,7 +31277,7 @@ int32_t isp_core_tuning_event(void *arg1, int32_t arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000009cb0 origin=fragment_seed original=isp_core_tuning_init */
-int32_t* isp_core_tuning_init(uint32_t a0)
+static int32_t* isp_core_tuning_init(uint32_t a0)
 {
     uint32_t *local_14 = 0;
     uint32_t *local_18 = 0;
@@ -31320,14 +31340,14 @@ isp_core_tuning_init0xc4:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000009d88 origin=model_output original=isp_core_tuning_deinit */
-void isp_core_tuning_deinit(int32_t arg1)
+static void isp_core_tuning_deinit(int32_t arg1)
 {
     /* one-off compile triage stub for malformed recovered body */
     return;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000009db0 origin=fragment_seed original=private_math_exp2 */
-uint32_t private_math_exp2(uint32_t a0, uint32_t a1, uint32_t a2)
+static uint32_t private_math_exp2(uint32_t a0, uint32_t a1, uint32_t a2)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -31486,7 +31506,7 @@ int private_gpio_direction_output(unsigned int gpio, int value)
 }
 
 
-int private_jzgpio_set_func(enum gpio_port port, enum gpio_function func, unsigned long pins)
+static int private_jzgpio_set_func(enum gpio_port port, enum gpio_function func, unsigned long pins)
 {
     return jzgpio_set_func(port, func, pins);
 }
@@ -31537,7 +31557,7 @@ int32_t private_driver_get_interface(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000a004 origin=model_output original=private_leading_one_position */
-int32_t private_leading_one_position(uint32_t arg1) {
+static int32_t private_leading_one_position(uint32_t arg1) {
     char *result = 0;
 
     if (arg1 >= 0x10000) {
@@ -31568,7 +31588,7 @@ int32_t private_leading_one_position(uint32_t arg1) {
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000a080 origin=model_output original=private_log2_int_to_fixed */
-int32_t private_log2_int_to_fixed(uint32_t arg1)
+static int32_t private_log2_int_to_fixed(uint32_t arg1)
 {
 	if (arg1 == 0)
 		return 0;
@@ -31604,7 +31624,7 @@ int32_t private_log2_int_to_fixed(uint32_t arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000a130 origin=fragment_seed original=private_log2_fixed_to_fixed */
-int32_t private_log2_fixed_to_fixed(uint32_t a0)
+static int32_t private_log2_fixed_to_fixed(uint32_t a0)
 {
     uint32_t *local_14 = 0;
     uint32_t *a1 = 0;
@@ -31636,7 +31656,7 @@ int32_t private_log2_fixed_to_fixed(uint32_t a0)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000a168 origin=model_output original=private_leading_one_position_64 */
-int32_t private_leading_one_position_64(uint32_t arg1, uint32_t arg2) {
+static int32_t private_leading_one_position_64(uint32_t arg1, uint32_t arg2) {
     int32_t *result = 0;
 
     if (arg2 != 0) {
@@ -31690,7 +31710,7 @@ int32_t private_leading_one_position_64(uint32_t arg1, uint32_t arg2) {
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000a204 origin=model_output original=private_log2_int_to_fixed_64 */
-int32_t private_log2_int_to_fixed_64(uint32_t arg1, uint32_t arg2, char arg3, char arg4)
+static int32_t private_log2_int_to_fixed_64(uint32_t arg1, uint32_t arg2, char arg3, char arg4)
 {
     uint32_t precision = (uint8_t)arg3;
     uint32_t output_shift = (uint8_t)arg4;
@@ -31731,7 +31751,7 @@ int32_t private_log2_int_to_fixed_64(uint32_t arg1, uint32_t arg2, char arg3, ch
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000a384 origin=model_output original=private_log2_fixed_to_fixed_64 */
-int32_t private_log2_fixed_to_fixed_64(uint32_t arg1, uint32_t arg2, int32_t arg3, char arg4)
+static int32_t private_log2_fixed_to_fixed_64(uint32_t arg1, uint32_t arg2, int32_t arg3, char arg4)
 {
 	uint32_t precision = (uint8_t)arg4;
 
@@ -31749,37 +31769,37 @@ long private_copy_to_user(void __user *to, const void *from, long size)
     return 0;
 }
 
-struct sk_buff *private_nlmsg_new(size_t payload, gfp_t flags)
+static struct sk_buff *private_nlmsg_new(size_t payload, gfp_t flags)
 {
     return nlmsg_new(payload, flags);
 }
 
 
-struct nlmsghdr *private_nlmsg_put(struct sk_buff *skb, u32 portid, u32 seq, int type, int payload, int flags)
+static struct nlmsghdr *private_nlmsg_put(struct sk_buff *skb, u32 portid, u32 seq, int type, int payload, int flags)
 {
     return nlmsg_put(skb, portid, seq, type, payload, flags);
 }
 
 
-int private_netlink_unicast(struct sock *ssk, struct sk_buff *skb, u32 portid, int nonblock)
+static int private_netlink_unicast(struct sock *ssk, struct sk_buff *skb, u32 portid, int nonblock)
 {
     return netlink_unicast(ssk, skb, portid, nonblock);
 }
 
 
-struct sock *private_netlink_kernel_create(struct net *net, int unit, struct netlink_kernel_cfg *cfg)
+static struct sock *private_netlink_kernel_create(struct net *net, int unit, struct netlink_kernel_cfg *cfg)
 {
     return netlink_kernel_create(net, unit, cfg);
 }
 
 
-void private_sock_release(struct socket *sock)
+static void private_sock_release(struct socket *sock)
 {
     sock_release(sock);
 }
 
 
-struct file *private_filp_open(const char *filename, int flags, umode_t mode)
+static struct file *private_filp_open(const char *filename, int flags, umode_t mode)
 {
     return filp_open(filename, flags, mode);
 }
@@ -31791,19 +31811,19 @@ int private_filp_close(struct file *filp, fl_owner_t id)
 }
 
 
-ssize_t private_vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
+static ssize_t private_vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
 {
     return vfs_read(file, buf, count, pos);
 }
 
 
-ssize_t private_vfs_write(struct file *file, const char __user *buf, size_t count, loff_t *pos)
+static ssize_t private_vfs_write(struct file *file, const char __user *buf, size_t count, loff_t *pos)
 {
     return vfs_write(file, buf, count, pos);
 }
 
 
-loff_t private_vfs_llseek(struct file *file, loff_t offset, int whence)
+static loff_t private_vfs_llseek(struct file *file, loff_t offset, int whence)
 {
     return vfs_llseek(file, offset, whence);
 }
@@ -31827,19 +31847,19 @@ void private_dma_cache_sync(struct device *dev, void *vaddr, size_t size, enum d
 }
 
 
-void private_getrawmonotonic(struct timespec *ts)
+static void private_getrawmonotonic(struct timespec *ts)
 {
     getrawmonotonic(ts);
 }
 
 
-struct net *private_get_init_net(void)
+static struct net *private_get_init_net(void)
 {
     return &init_net;
 }
 
 
-void private_get_isp_priv_mem(unsigned int *phyaddr, unsigned int *size)
+static void private_get_isp_priv_mem(unsigned int *phyaddr, unsigned int *size)
 {
     extern void get_isp_priv_mem(unsigned int *phyaddr, unsigned int *size);
     get_isp_priv_mem(phyaddr, size);
@@ -31847,7 +31867,7 @@ void private_get_isp_priv_mem(unsigned int *phyaddr, unsigned int *size)
 
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000aab0 origin=fragment_seed original=find_new_buffer */
-int32_t find_new_buffer(uintptr_t a0, uint32_t a1, uint32_t a2)
+static int32_t find_new_buffer(uintptr_t a0, uint32_t a1, uint32_t a2)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -31910,7 +31930,7 @@ find_new_buffer0x74:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000ab40 origin=fragment_seed original=isp_mem_init */
-void* isp_mem_init(void)
+static void* isp_mem_init(void)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -31963,7 +31983,7 @@ void* isp_mem_init(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000abf8 origin=fragment_seed original=isp_malloc_buffer */
-int32_t isp_malloc_buffer(int32_t arg1)
+static int32_t isp_malloc_buffer(int32_t arg1)
 {
 	uintptr_t *s0;
 	uint32_t *s1;
@@ -32036,7 +32056,7 @@ label_acdc:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000ad18 origin=model_output original=isp_free_buffer */
-int32_t isp_free_buffer(int32_t arg1) {
+static int32_t isp_free_buffer(int32_t arg1) {
     private_mutex_lock(((char *)&ispmem + 0x1a0));
 
     /* data_a91ec is at offset 412 (0x19C) from .bss base */
@@ -32100,7 +32120,7 @@ int32_t isp_free_buffer(int32_t arg1) {
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000ae30 origin=model_output original=sub_ae30 */
-int32_t sub_ae30(int32_t a2, int32_t a3)
+static int32_t sub_ae30(int32_t a2, int32_t a3)
 {
     *(int32_t *)((char *)&a2 - 8) = a2;
     *(int32_t *)((char *)&a2 - 12) = a3;
@@ -32108,7 +32128,7 @@ int32_t sub_ae30(int32_t a2, int32_t a3)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000ae40 origin=fragment_seed original=sub_ae40 */
-int32_t sub_ae40(void)
+static int32_t sub_ae40(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32123,7 +32143,7 @@ int32_t sub_ae40(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000ae48 origin=fragment_seed original=sub_ae48 */
-int32_t sub_ae48(void)
+static int32_t sub_ae48(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32138,7 +32158,7 @@ int32_t sub_ae48(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000ae50 origin=fragment_seed original=sub_ae50 */
-int32_t sub_ae50(void)
+static int32_t sub_ae50(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32153,7 +32173,7 @@ int32_t sub_ae50(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000ae58 origin=fragment_seed original=sub_ae58 */
-int32_t sub_ae58(void)
+static int32_t sub_ae58(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32168,7 +32188,7 @@ int32_t sub_ae58(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000ae60 origin=fragment_seed original=sub_ae60 */
-int32_t sub_ae60(void)
+static int32_t sub_ae60(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32183,12 +32203,12 @@ int32_t sub_ae60(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000ae68 origin=model_output original=sub_ae68 */
-int sub_ae68(void) {
+static int sub_ae68(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000ae70 origin=model_output original=sub_ae70 */
-int32_t *sub_ae70(int32_t *arg1)
+static int32_t *sub_ae70(int32_t *arg1)
 {
 	*arg1 = 0;
 	((void **)arg1)[1] = 0;
@@ -32196,12 +32216,12 @@ int32_t *sub_ae70(int32_t *arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000ae88 origin=model_output original=sub_ae88 */
-int sub_ae88(void) {
+static int sub_ae88(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000ae90 origin=fragment_seed original=sub_ae90 */
-int32_t sub_ae90(void)
+static int32_t sub_ae90(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32216,7 +32236,7 @@ int32_t sub_ae90(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000ae98 origin=fragment_seed original=sub_ae98 */
-int32_t sub_ae98(void)
+static int32_t sub_ae98(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32231,17 +32251,17 @@ int32_t sub_ae98(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000aea0 origin=model_output original=sub_aea0 */
-int sub_aea0(void) {
+static int sub_aea0(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000aea8 origin=model_output original=sub_aea8 */
-int sub_aea8(void) {
+static int sub_aea8(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000aeb0 origin=fragment_seed original=sub_aeb0 */
-int32_t sub_aeb0(void)
+static int32_t sub_aeb0(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32256,17 +32276,17 @@ int32_t sub_aeb0(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000aeb8 origin=model_output original=sub_aeb8 */
-int sub_aeb8(void) {
+static int sub_aeb8(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000aec0 origin=model_output original=sub_aec0 */
-int sub_aec0(void) {
+static int sub_aec0(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000aec8 origin=fragment_seed original=sub_aec8 */
-int32_t sub_aec8(void)
+static int32_t sub_aec8(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32281,7 +32301,7 @@ int32_t sub_aec8(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000aed0 origin=fragment_seed original=sub_aed0 */
-int32_t sub_aed0(void)
+static int32_t sub_aed0(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32296,7 +32316,7 @@ int32_t sub_aed0(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000aed8 origin=fragment_seed original=sub_aed8 */
-int32_t sub_aed8(void)
+static int32_t sub_aed8(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32311,38 +32331,38 @@ int32_t sub_aed8(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000aee0 origin=model_output original=sub_aee0 */
-void sub_aee0(void)
+static void sub_aee0(void)
 {
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000aee8 origin=model_output original=sub_aee8 */
-int sub_aee8(void) {
+static int sub_aee8(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000aef0 origin=model_output original=sub_aef0 */
-int sub_aef0(void) {
+static int sub_aef0(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000aef8 origin=model_output original=sub_aef8 */
-int sub_aef8(void) {
+static int sub_aef8(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000af00 origin=model_output original=sub_af00 */
-int sub_af00(void) {
+static int sub_af00(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000af08 origin=model_output original=sub_af08 */
-int32_t sub_af08(void)
+static int32_t sub_af08(void)
 {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000af10 origin=fragment_seed original=sub_af10 */
-int32_t sub_af10(void)
+static int32_t sub_af10(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32357,7 +32377,7 @@ int32_t sub_af10(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000af18 origin=fragment_seed original=sub_af18 */
-int32_t sub_af18(void)
+static int32_t sub_af18(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32372,7 +32392,7 @@ int32_t sub_af18(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000af20 origin=fragment_seed original=sub_af20 */
-int32_t sub_af20(void)
+static int32_t sub_af20(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32387,7 +32407,7 @@ int32_t sub_af20(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000af28 origin=fragment_seed original=sub_af28 */
-int32_t sub_af28(void)
+static int32_t sub_af28(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32402,7 +32422,7 @@ int32_t sub_af28(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000af34 origin=fragment_seed original=sub_af34 */
-int32_t sub_af34(void)
+static int32_t sub_af34(void)
 {
     uint32_t ra = 0;
     uint32_t v1 = 0;
@@ -32417,7 +32437,7 @@ int32_t sub_af34(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000af3c origin=model_output original=sub_af3c */
-int32_t *sub_af3c(int32_t *arg1)
+static int32_t *sub_af3c(int32_t *arg1)
 {
 	int32_t *var_10;
 	memset(&var_10, 0, 4);
@@ -32426,7 +32446,7 @@ int32_t *sub_af3c(int32_t *arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000af80 origin=fragment_seed original=sub_af80 */
-int32_t sub_af80(void)
+static int32_t sub_af80(void)
 {
     uint32_t ra = 0;
 
@@ -32441,17 +32461,17 @@ int32_t sub_af80(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000af88 origin=model_output original=sub_af88 */
-int sub_af88(void) {
+static int sub_af88(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000af90 origin=model_output original=sub_af90 */
-int sub_af90(void) {
+static int sub_af90(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000af98 origin=fragment_seed original=sub_af98 */
-int32_t sub_af98(void)
+static int32_t sub_af98(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32466,7 +32486,7 @@ int32_t sub_af98(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000afa0 origin=fragment_seed original=sub_afa0 */
-int32_t sub_afa0(void)
+static int32_t sub_afa0(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32481,18 +32501,18 @@ int32_t sub_afa0(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000afa8 origin=model_output original=sub_afa8 */
-int sub_afa8(void) {
+static int sub_afa8(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000afb0 origin=model_output original=sub_afb0 */
-int32_t sub_afb0(void) {
+static int32_t sub_afb0(void) {
     int32_t _ret = 0;
     return _ret;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000afb8 origin=fragment_seed original=sub_afb8 */
-int32_t sub_afb8(void)
+static int32_t sub_afb8(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32507,7 +32527,7 @@ int32_t sub_afb8(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000afc0 origin=fragment_seed original=sub_afc0 */
-int32_t sub_afc0(void)
+static int32_t sub_afc0(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32522,12 +32542,12 @@ int32_t sub_afc0(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000afc8 origin=model_output original=sub_afc8 */
-int sub_afc8(void) {
+static int sub_afc8(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000afd0 origin=fragment_seed original=sub_afd0 */
-int32_t sub_afd0(void)
+static int32_t sub_afd0(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32542,7 +32562,7 @@ int32_t sub_afd0(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000afd8 origin=fragment_seed original=sub_afd8 */
-int32_t sub_afd8(void)
+static int32_t sub_afd8(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32557,7 +32577,7 @@ int32_t sub_afd8(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000afe0 origin=fragment_seed original=sub_afe0 */
-int32_t sub_afe0(void)
+static int32_t sub_afe0(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32572,7 +32592,7 @@ int32_t sub_afe0(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000afe8 origin=fragment_seed original=sub_afe8 */
-int32_t sub_afe8(void)
+static int32_t sub_afe8(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32587,7 +32607,7 @@ int32_t sub_afe8(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000aff0 origin=fragment_seed original=sub_aff0 */
-int32_t sub_aff0(void)
+static int32_t sub_aff0(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32602,12 +32622,12 @@ int32_t sub_aff0(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000aff8 origin=model_output original=sub_aff8 */
-int sub_aff8(void) {
+static int sub_aff8(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b000 origin=fragment_seed original=sub_b000 */
-int32_t sub_b000(void)
+static int32_t sub_b000(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32622,12 +32642,12 @@ int32_t sub_b000(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b008 origin=model_output original=sub_b008 */
-int sub_b008(void) {
+static int sub_b008(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b010 origin=fragment_seed original=sub_b010 */
-int32_t sub_b010(void)
+static int32_t sub_b010(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32642,17 +32662,17 @@ int32_t sub_b010(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b018 origin=model_output original=sub_b018 */
-int sub_b018(void) {
+static int sub_b018(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b020 origin=model_output original=sub_b020 */
-int sub_b020(void) {
+static int sub_b020(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b028 origin=fragment_seed original=sub_b028 */
-int32_t sub_b028(void)
+static int32_t sub_b028(void)
 {
     uint32_t ra = 0;
 
@@ -32667,22 +32687,22 @@ int32_t sub_b028(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b030 origin=model_output original=sub_b030 */
-int sub_b030(void) {
+static int sub_b030(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b038 origin=model_output original=sub_b038 */
-int sub_b038(void) {
+static int sub_b038(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b040 origin=model_output original=sub_b040 */
-int sub_b040(void) {
+static int sub_b040(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b048 origin=fragment_seed original=sub_b048 */
-int32_t sub_b048(void)
+static int32_t sub_b048(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32697,7 +32717,7 @@ int32_t sub_b048(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b050 origin=fragment_seed original=sub_b050 */
-int32_t sub_b050(void)
+static int32_t sub_b050(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32712,7 +32732,7 @@ int32_t sub_b050(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b058 origin=fragment_seed original=sub_b058 */
-int32_t sub_b058(void)
+static int32_t sub_b058(void)
 {
     uint32_t ra = 0;
 
@@ -32727,7 +32747,7 @@ int32_t sub_b058(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b060 origin=fragment_seed original=sub_b060 */
-int32_t sub_b060(void)
+static int32_t sub_b060(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32742,12 +32762,12 @@ int32_t sub_b060(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b068 origin=model_output original=sub_b068 */
-int sub_b068(void) {
+static int sub_b068(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b070 origin=fragment_seed original=sub_b070 */
-int32_t sub_b070(void)
+static int32_t sub_b070(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32761,32 +32781,32 @@ int32_t sub_b070(void)
     return 0;
 }
 
-struct clk *private_devm_clk_get(struct device *dev, const char *id)
+static struct clk *private_devm_clk_get(struct device *dev, const char *id)
 {
     return devm_clk_get(dev, id);
 }
 
 
-int private_clk_prepare_enable(struct clk *clk)
+static int private_clk_prepare_enable(struct clk *clk)
 {
     return clk_prepare_enable(clk);
 }
 
 
-void private_clk_disable_unprepare(struct clk *clk)
+static void private_clk_disable_unprepare(struct clk *clk)
 {
     clk_disable_unprepare(clk);
 }
 
 
-void private_devm_clk_put(struct device *dev, struct clk *clk)
+static void private_devm_clk_put(struct device *dev, struct clk *clk)
 {
     devm_clk_put(dev, clk);
 }
 
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b098 origin=fragment_seed original=sub_b098 */
-int32_t sub_b098(void)
+static int32_t sub_b098(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32801,14 +32821,14 @@ int32_t sub_b098(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b0a0 origin=model_output original=sub_b0a0 */
-int32_t sub_b0a0(void)
+static int32_t sub_b0a0(void)
 {
     int32_t _dummy = 0;
     return _dummy;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b0a8 origin=fragment_seed original=sub_b0a8 */
-int32_t sub_b0a8(void)
+static int32_t sub_b0a8(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32823,12 +32843,12 @@ int32_t sub_b0a8(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b0b0 origin=model_output original=sub_b0b0 */
-int sub_b0b0(void) {
+static int sub_b0b0(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b0b8 origin=fragment_seed original=sub_b0b8 */
-int32_t sub_b0b8(void)
+static int32_t sub_b0b8(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32843,7 +32863,7 @@ int32_t sub_b0b8(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b0c0 origin=fragment_seed original=sub_b0c0 */
-int32_t sub_b0c0(void)
+static int32_t sub_b0c0(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32858,12 +32878,12 @@ int32_t sub_b0c0(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b0c8 origin=model_output original=sub_b0c8 */
-int sub_b0c8(void) {
+static int sub_b0c8(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b0d0 origin=fragment_seed original=sub_b0d0 */
-int32_t sub_b0d0(void)
+static int32_t sub_b0d0(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32878,12 +32898,12 @@ int32_t sub_b0d0(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b0d8 origin=model_output original=sub_b0d8 */
-int sub_b0d8(void) {
+static int sub_b0d8(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b0e0 origin=fragment_seed original=sub_b0e0 */
-int32_t sub_b0e0(void)
+static int32_t sub_b0e0(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32898,7 +32918,7 @@ int32_t sub_b0e0(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b0e8 origin=fragment_seed original=sub_b0e8 */
-int32_t sub_b0e8(void)
+static int32_t sub_b0e8(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32913,7 +32933,7 @@ int32_t sub_b0e8(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b0f0 origin=fragment_seed original=sub_b0f0 */
-int32_t sub_b0f0(void)
+static int32_t sub_b0f0(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32928,7 +32948,7 @@ int32_t sub_b0f0(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b0f8 origin=fragment_seed original=sub_b0f8 */
-int32_t sub_b0f8(void)
+static int32_t sub_b0f8(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32943,12 +32963,12 @@ int32_t sub_b0f8(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b100 origin=model_output original=sub_b100 */
-int sub_b100(void) {
+static int sub_b100(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b108 origin=fragment_seed original=sub_b108 */
-int32_t sub_b108(void)
+static int32_t sub_b108(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32963,7 +32983,7 @@ int32_t sub_b108(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b114 origin=fragment_seed original=sub_b114 */
-int32_t sub_b114(void)
+static int32_t sub_b114(void)
 {
     uint32_t ra = 0;
     uint32_t v1 = 0;
@@ -32978,7 +32998,7 @@ int32_t sub_b114(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b11c origin=fragment_seed original=sub_b11c */
-int32_t sub_b11c(void)
+static int32_t sub_b11c(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -32993,7 +33013,7 @@ int32_t sub_b11c(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b124 origin=model_output original=sub_b124 */
-int32_t sub_b124(int32_t arg_8, int32_t arg_c) {
+static int32_t sub_b124(int32_t arg_8, int32_t arg_c) {
     int32_t *a2 = arg_8;
     int32_t *a3 = arg_c;
     (void)a2;
@@ -33002,12 +33022,12 @@ int32_t sub_b124(int32_t arg_8, int32_t arg_c) {
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b134 origin=model_output original=sub_b134 */
-int sub_b134(void) {
+static int sub_b134(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b13c origin=fragment_seed original=sub_b13c */
-int32_t sub_b13c(void)
+static int32_t sub_b13c(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -33022,7 +33042,7 @@ int32_t sub_b13c(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b144 origin=fragment_seed original=sub_b144 */
-int32_t sub_b144(void)
+static int32_t sub_b144(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -33037,7 +33057,7 @@ int32_t sub_b144(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b14c origin=fragment_seed original=sub_b14c */
-int32_t sub_b14c(void)
+static int32_t sub_b14c(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -33052,7 +33072,7 @@ int32_t sub_b14c(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b154 origin=fragment_seed original=sub_b154 */
-int32_t sub_b154(void)
+static int32_t sub_b154(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -33067,7 +33087,7 @@ int32_t sub_b154(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b160 origin=fragment_seed original=sub_b160 */
-int32_t sub_b160(void)
+static int32_t sub_b160(void)
 {
     uint32_t ra = 0;
     uint32_t v1 = 0;
@@ -33082,7 +33102,7 @@ int32_t sub_b160(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b168 origin=fragment_seed original=sub_b168 */
-int32_t sub_b168(void)
+static int32_t sub_b168(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -33097,7 +33117,7 @@ int32_t sub_b168(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b170 origin=fragment_seed original=sub_b170 */
-int32_t sub_b170(void)
+static int32_t sub_b170(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -33112,7 +33132,7 @@ int32_t sub_b170(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b178 origin=fragment_seed original=sub_b178 */
-int32_t sub_b178(void)
+static int32_t sub_b178(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -33127,19 +33147,19 @@ int32_t sub_b178(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b180 origin=model_output original=sub_b180 */
-int sub_b180(void) {
+static int sub_b180(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b188 origin=model_output original=sub_b188 */
-int32_t sub_b188(int32_t arg_8, int32_t arg_c) {
+static int32_t sub_b188(int32_t arg_8, int32_t arg_c) {
     *(int32_t *)((char *)&arg_8 + 8) = arg_8;
     *(int32_t *)((char *)&arg_8 + 12) = arg_c;
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b19c origin=fragment_seed original=sub_b19c */
-int32_t sub_b19c(void)
+static int32_t sub_b19c(void)
 {
     uint32_t ra = 0;
     uint32_t v1 = 0;
@@ -33154,7 +33174,7 @@ int32_t sub_b19c(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b1a4 origin=fragment_seed original=sub_b1a4 */
-int32_t sub_b1a4(void)
+static int32_t sub_b1a4(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -33169,7 +33189,7 @@ int32_t sub_b1a4(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b1ac origin=fragment_seed original=sub_b1ac */
-int32_t sub_b1ac(void)
+static int32_t sub_b1ac(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -33184,7 +33204,7 @@ int32_t sub_b1ac(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b1b4 origin=fragment_seed original=sub_b1b4 */
-int32_t sub_b1b4(void)
+static int32_t sub_b1b4(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -33199,7 +33219,7 @@ int32_t sub_b1b4(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b1bc origin=fragment_seed original=sub_b1bc */
-int32_t sub_b1bc(void)
+static int32_t sub_b1bc(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -33214,12 +33234,12 @@ int32_t sub_b1bc(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b1c4 origin=model_output original=sub_b1c4 */
-int sub_b1c4(void) {
+static int sub_b1c4(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b1cc origin=fragment_seed original=sub_b1cc */
-int32_t sub_b1cc(void)
+static int32_t sub_b1cc(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -33234,7 +33254,7 @@ int32_t sub_b1cc(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b1d4 origin=fragment_seed original=sub_b1d4 */
-int32_t sub_b1d4(void)
+static int32_t sub_b1d4(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -33249,12 +33269,12 @@ int32_t sub_b1d4(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b1dc origin=model_output original=sub_b1dc */
-int sub_b1dc(void) {
+static int sub_b1dc(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b1e4 origin=fragment_seed original=sub_b1e4 */
-int32_t sub_b1e4(void)
+static int32_t sub_b1e4(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -33759,7 +33779,7 @@ int tx_isp_request_irq(struct platform_device *pdev, struct tx_isp_irq_info *irq
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b4a4 origin=model_output original=tx_isp_free_irq */
-void tx_isp_free_irq(int32_t *arg1)
+static void tx_isp_free_irq(int32_t *arg1)
 {
     /* one-off compile triage stub for malformed recovered body */
     return;
@@ -33866,7 +33886,7 @@ int32_t ivdc_link_setup(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b564 origin=fragment_seed original=ivdc_misc_release */
-int32_t ivdc_misc_release(void)
+static int32_t ivdc_misc_release(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -33881,7 +33901,7 @@ int32_t ivdc_misc_release(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b56c origin=fragment_seed original=ivdc_misc_read */
-int32_t ivdc_misc_read(void)
+static int32_t ivdc_misc_read(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -33896,7 +33916,7 @@ int32_t ivdc_misc_read(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b574 origin=fragment_seed original=tx_isp_ivdc_probe */
-int tx_isp_ivdc_probe(struct platform_device *pdev)
+static int tx_isp_ivdc_probe(struct platform_device *pdev)
 {
     uintptr_t a0 = (uintptr_t)pdev;
 
@@ -34027,7 +34047,7 @@ static long ivdc_misc_unlocked_ioctl(struct file *filp, unsigned int cmd, unsign
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b914 origin=fragment_seed original=proc_ivdc_open */
-int32_t proc_ivdc_open(uint32_t a0, uint32_t a1)
+static int32_t proc_ivdc_open(uint32_t a0, uint32_t a1)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -34069,7 +34089,7 @@ int32_t proc_ivdc_open(uint32_t a0, uint32_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000b95c origin=fragment_seed original=tx_isp_ivdc_show */
-int32_t tx_isp_ivdc_show(uintptr_t a0)
+static int32_t tx_isp_ivdc_show(uintptr_t a0)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -34224,7 +34244,7 @@ tx_isp_ivdc_show0xbc:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000bc40 origin=fragment_seed original=proc_ivdc_writel */
-int32_t proc_ivdc_writel(uintptr_t a0, uint32_t a1, uint32_t a2)
+static int32_t proc_ivdc_writel(uintptr_t a0, uint32_t a1, uint32_t a2)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -35158,7 +35178,7 @@ ivdc_core_ops_init0x120:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000c51c origin=fragment_seed original=ivdc_misc_open */
-int32_t ivdc_misc_open(void)
+static int32_t ivdc_misc_open(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -35325,14 +35345,14 @@ int ivdc_activate_module(void* arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000c708 origin=fragment_seed original=dump_ivdc_regs */
-int32_t dump_ivdc_regs(uint32_t a0)
+static int32_t dump_ivdc_regs(uint32_t a0)
 {
     /* one-off compile triage stub for malformed recovered body */
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000cdcc origin=fragment_seed original=ivdc_enable_irq */
-int32_t ivdc_enable_irq(uintptr_t a0)
+static int32_t ivdc_enable_irq(uintptr_t a0)
 {
     uint32_t *local_10 = 0;
     uint32_t local_1c = 0;
@@ -35388,7 +35408,7 @@ ivdc_enable_irq0x68:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000ce60 origin=fragment_seed original=ivdc_disable_irq */
-int32_t ivdc_disable_irq(uintptr_t a0)
+static int32_t ivdc_disable_irq(uintptr_t a0)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_18 = 0;
@@ -35437,7 +35457,7 @@ ivdc_disable_irq0x54:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000cedc origin=fragment_seed original=ivdc_pad_event_handle */
-int32_t ivdc_pad_event_handle(uintptr_t a0, uint32_t a1, uintptr_t a2)
+static int32_t ivdc_pad_event_handle(uintptr_t a0, uint32_t a1, uintptr_t a2)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_18 = 0;
@@ -36370,7 +36390,7 @@ int fs_slake_module(struct tx_isp_subdev *sd)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000dadc origin=fragment_seed original=frame_channel_release */
-int32_t frame_channel_release(uint32_t a0, uintptr_t a1)
+static int32_t frame_channel_release(uint32_t a0, uintptr_t a1)
 {
     uintptr_t *s0;
     uint32_t *v0;
@@ -36404,7 +36424,7 @@ epilogue:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000db54 origin=fragment_seed original=dump_isp_framesource_open */
-int32_t dump_isp_framesource_open(uint32_t a0, uint32_t a1)
+static int32_t dump_isp_framesource_open(uint32_t a0, uint32_t a1)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -36446,7 +36466,7 @@ int32_t dump_isp_framesource_open(uint32_t a0, uint32_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000db9c origin=fragment_seed original=isp_framesource_show */
-int32_t isp_framesource_show(uintptr_t a0)
+static int32_t isp_framesource_show(uintptr_t a0)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -36850,7 +36870,7 @@ int32_t __fill_v4l2_buffer(void *arg1, void *arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000e0a8 origin=fragment_seed original=frame_chan_event */
-int32_t frame_chan_event(uintptr_t a0, uint32_t a1, uintptr_t a2)
+static int32_t frame_chan_event(uintptr_t a0, uint32_t a1, uintptr_t a2)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -37525,7 +37545,7 @@ frame_chan_event0x70c:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000e7bc origin=fragment_seed original=frame_channel_open */
-int frame_channel_open(struct inode *inode, struct file *file)
+static int frame_channel_open(struct inode *inode, struct file *file)
 {
 	uintptr_t s0 = *(uintptr_t *)((char *)file + 0x70);
 	uintptr_t *s1;
@@ -37556,7 +37576,7 @@ int frame_channel_open(struct inode *inode, struct file *file)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000e8a0 origin=fragment_seed original=frame_channel_vidioc_set_fmt */
-int32_t frame_channel_vidioc_set_fmt(uintptr_t a0, uint32_t a1)
+static int32_t frame_channel_vidioc_set_fmt(uintptr_t a0, uint32_t a1)
 {
     uint32_t *local_10 = 0;
     uint32_t local_20 = 0;
@@ -37725,7 +37745,7 @@ frame_channel_vidioc_set_fmt0x188:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000ea30 origin=fragment_seed original=frame_channel_vidioc_get_fmt */
-int32_t frame_channel_vidioc_get_fmt(uintptr_t a0, uint32_t a1)
+static int32_t frame_channel_vidioc_get_fmt(uintptr_t a0, uint32_t a1)
 {
     int32_t *s0;
     int32_t *s1;
@@ -37776,20 +37796,20 @@ static long frame_channel_unlocked_ioctl(struct file *filp, unsigned int cmd, un
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000f950 origin=model_output original=check_state */
-int32_t check_state(void *arg1)
+static int32_t check_state(void *arg1)
 {
 	return tx_isp_t23_subdev_state_ready(arg1);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000f97c origin=fragment_seed original=tx_isp_frame_chan_deinit */
-void tx_isp_frame_chan_deinit(struct tx_isp_frame_channel *chan)
+static void tx_isp_frame_chan_deinit(struct tx_isp_frame_channel *chan)
 {
     /* one-off compile triage stub for malformed recovered body */
     return;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000f9f0 origin=fragment_seed original=tx_isp_fs_probe */
-int tx_isp_fs_probe(struct platform_device *pdev)
+static int tx_isp_fs_probe(struct platform_device *pdev)
 {
     uintptr_t a0 = (uintptr_t)pdev;
 
@@ -38072,7 +38092,7 @@ tx_isp_fs_probe0x374:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000fda0 origin=fragment_seed original=sensor_alloc_analog_gain */
-int sensor_alloc_analog_gain(int gain, void *arg2)
+static int sensor_alloc_analog_gain(int gain, void *arg2)
 {
     int (*func_ptr)(int, int, int *);
     int *var_10 = 0;
@@ -38087,7 +38107,7 @@ int sensor_alloc_analog_gain(int gain, void *arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000fde8 origin=fragment_seed original=sensor_alloc_analog_gain_short */
-int32_t sensor_alloc_analog_gain_short(int32_t arg1, int32_t *arg2)
+static int32_t sensor_alloc_analog_gain_short(int32_t arg1, int32_t *arg2)
 {
     int32_t (*func_ptr)(int32_t, int32_t, int32_t *);
     int32_t *local_10 = 0;
@@ -38102,7 +38122,7 @@ int32_t sensor_alloc_analog_gain_short(int32_t arg1, int32_t *arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000fe30 origin=fragment_seed original=sensor_alloc_digital_gain */
-int32_t sensor_alloc_digital_gain(int32_t arg1, void *arg2)
+static int32_t sensor_alloc_digital_gain(int32_t arg1, void *arg2)
 {
     uint32_t func_ptr;
     uint32_t callback;
@@ -38118,7 +38138,7 @@ int32_t sensor_alloc_digital_gain(int32_t arg1, void *arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000fe78 origin=fragment_seed original=sensor_alloc_integration_time */
-int32_t sensor_alloc_integration_time(uint32_t a0, void *a1)
+static int32_t sensor_alloc_integration_time(uint32_t a0, void *a1)
 {
     uint32_t *var_10 = 0;
     uint32_t v1;
@@ -38142,7 +38162,7 @@ int32_t sensor_alloc_integration_time(uint32_t a0, void *a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000fed0 origin=model_output original=sensor_alloc_integration_time_short */
-int32_t sensor_alloc_integration_time_short(int32_t arg1, void *arg2) {
+static int32_t sensor_alloc_integration_time_short(int32_t arg1, void *arg2) {
     void **v1_1 = *(void ***)((uintptr_t)&ispcore_base + 0x480);
     int32_t a1 = *(int32_t*)((uintptr_t)v1_1 + 0xd4);
     int32_t *var_10 = 0;
@@ -38161,7 +38181,7 @@ int32_t sensor_alloc_integration_time_short(int32_t arg1, void *arg2) {
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000ff2c origin=fragment_seed original=sensor_set_integration_time */
-uint32_t sensor_set_integration_time(uint32_t a0)
+static uint32_t sensor_set_integration_time(uint32_t a0)
 {
     uint32_t ispcore_1 = *(uint32_t *)((char *)current_thread_info() + 1152);
     uint32_t v1 = *(uint32_t *)((char *)ispcore_1 + 288);
@@ -38187,7 +38207,7 @@ uint32_t sensor_set_integration_time(uint32_t a0)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000ff7c origin=fragment_seed original=sensor_set_integration_time_short */
-uint32_t sensor_set_integration_time_short(uint32_t a0)
+static uint32_t sensor_set_integration_time_short(uint32_t a0)
 {
     uint32_t *a1 = 0;
     uint32_t ra = 0;
@@ -38224,7 +38244,7 @@ sensor_set_integration_time_short0x2c:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000ffb0 origin=fragment_seed original=sensor_set_analog_gain */
-uint32_t sensor_set_analog_gain(uint32_t a0)
+static uint32_t sensor_set_analog_gain(uint32_t a0)
 {
     uint32_t *a1 = 0;
     uint32_t *a2 = 0;
@@ -38268,7 +38288,7 @@ sensor_set_analog_gain0x40:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000000fff8 origin=fragment_seed original=sensor_set_analog_gain_short */
-uint32_t sensor_set_analog_gain_short(uint32_t a0)
+static uint32_t sensor_set_analog_gain_short(uint32_t a0)
 {
     uint32_t *a1 = 0;
     uint32_t ra = 0;
@@ -38304,7 +38324,7 @@ sensor_set_analog_gain_short0x28:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000010028 origin=fragment_seed original=sensor_set_digital_gain */
-uint32_t sensor_set_digital_gain(uint32_t a0)
+static uint32_t sensor_set_digital_gain(uint32_t a0)
 {
     uint32_t *a1 = 0;
     uint32_t ra = 0;
@@ -38340,14 +38360,14 @@ sensor_set_digital_gain0x28:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000010058 origin=fragment_seed original=sensor_get_normal_fps */
-uint32_t sensor_get_normal_fps(void)
+static uint32_t sensor_get_normal_fps(void)
 {
     /* one-off compile triage stub for malformed recovered body */
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000010094 origin=fragment_seed original=sensor_read_black_pedestal */
-int32_t sensor_read_black_pedestal(void)
+static int32_t sensor_read_black_pedestal(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -38362,12 +38382,12 @@ int32_t sensor_read_black_pedestal(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001009c origin=model_output original=sensor_end_changes */
-int sensor_end_changes(void) {
+static int sensor_end_changes(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000100a4 origin=fragment_seed original=sensor_get_id */
-uint32_t sensor_get_id(void)
+static uint32_t sensor_get_id(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -38389,12 +38409,12 @@ uint32_t sensor_get_id(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000100b8 origin=model_output original=sensor_set_wdr_mode */
-int sensor_set_wdr_mode(void) {
+static int sensor_set_wdr_mode(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000100c0 origin=fragment_seed original=sensor_fps_control */
-int64_t sensor_fps_control(uint32_t a0, uintptr_t a1)
+static int64_t sensor_fps_control(uint32_t a0, uintptr_t a1)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -38433,12 +38453,12 @@ int64_t sensor_fps_control(uint32_t a0, uintptr_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000010114 origin=model_output original=sensor_disable_isp */
-int sensor_disable_isp(void) {
+static int sensor_disable_isp(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001011c origin=fragment_seed original=sensor_get_lines_per_second */
-int32_t sensor_get_lines_per_second(void)
+static int32_t sensor_get_lines_per_second(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -38453,7 +38473,7 @@ int32_t sensor_get_lines_per_second(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000010124 origin=fragment_seed original=sensor_set_mode */
-uint32_t sensor_set_mode(uint32_t arg1, uint32_t arg2)
+static uint32_t sensor_set_mode(uint32_t arg1, uint32_t arg2)
 {
     uint8_t var_20 = 1;
     uint32_t *s0, *s1, *s2;
@@ -38545,22 +38565,22 @@ error_path:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000010214 origin=model_output original=sensor_start_changes */
-int sensor_start_changes(void) {
+static int sensor_start_changes(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001021c origin=model_output original=sensor_hw_reset_enable */
-int sensor_hw_reset_enable(void) {
+static int sensor_hw_reset_enable(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000010224 origin=model_output original=sensor_hw_reset_disable */
-int sensor_hw_reset_disable(void) {
+static int sensor_hw_reset_disable(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001022c origin=fragment_seed original=sensor_init */
-int32_t sensor_init(uintptr_t a0)
+static int32_t sensor_init(uintptr_t a0)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -38770,14 +38790,14 @@ int32_t tx_isp_video_s_stream(void *arg1, int32_t arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000104c0 origin=model_output original=tx_isp_video_link_stream */
-int32_t tx_isp_video_link_stream(void *arg1, int32_t arg2)
+static int32_t tx_isp_video_link_stream(void *arg1, int32_t arg2)
 {
     /* one-off compile triage stub for malformed recovered body */
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000105c0 origin=model_output original=tx_isp_open */
-int32_t tx_isp_open(int32_t arg1, void *arg2) {
+static int32_t tx_isp_open(int32_t arg1, void *arg2) {
 	void **v1_1 = *(void **)((char *)arg2 + 0x70);
 	int32_t v0 = *(int32_t *)((char *)v1_1 + 0x108);
 
@@ -38898,7 +38918,7 @@ static void regtrace_t23_install_sensor_notify(uintptr_t sd)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000010798 origin=fragment_seed original=find_subdev_link_pad */
-int64_t find_subdev_link_pad(uintptr_t arg1, uintptr_t arg2)
+static int64_t find_subdev_link_pad(uintptr_t arg1, uintptr_t arg2)
 {
     return tx_isp_t23_resolve_link_pad(arg1, arg2, 0);
 #if 0 /* Preserved recovered resolver oracle; common code is live. */
@@ -38964,7 +38984,7 @@ out:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000010878 origin=fragment_seed original=isp_subdev_release_clks */
-int32_t isp_subdev_release_clks(void *arg1)
+static int32_t isp_subdev_release_clks(void *arg1)
 {
     void *s0 = arg1;
     uint32_t s1 = *(uint32_t *)((char *)arg1 + 188);
@@ -39080,7 +39100,7 @@ int isp_subdev_init_clks(void * arg1, int32_t * arg2) {
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000010ae0 origin=fragment_seed original=tx_isp_unregister_platforms */
-int32_t tx_isp_unregister_platforms(uintptr_t a0)
+static int32_t tx_isp_unregister_platforms(uintptr_t a0)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -39133,7 +39153,7 @@ tx_isp_unregister_platforms0x4c:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000010b50 origin=fragment_seed original=tx_isp_exit */
-int32_t tx_isp_exit(void)
+static int32_t tx_isp_exit(void)
 {
     private_platform_driver_unregister(&tx_isp_driver);
     private_platform_device_unregister(&tx_isp_platform_device);
@@ -39141,7 +39161,7 @@ int32_t tx_isp_exit(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000010b88 origin=fragment_seed original=subdev_video_destroy_link */
-int32_t subdev_video_destroy_link(uintptr_t a0)
+static int32_t subdev_video_destroy_link(uintptr_t a0)
 {
     uintptr_t *a1 = 0;
     uint32_t ra = 0;
@@ -39196,9 +39216,9 @@ subdev_video_destroy_link0x54:
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000010be4 origin=fragment_seed original=tx_isp_video_link_destroy.isra.9 */
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t tx_isp_video_link_destroy_isra_9(uintptr_t a0) __asm__("tx_isp_video_link_destroy.isra.9");
+static int32_t tx_isp_video_link_destroy_isra_9(uintptr_t a0) __asm__("tx_isp_video_link_destroy.isra.9");
 #endif
-int32_t tx_isp_video_link_destroy_isra_9(uintptr_t a0)
+static int32_t tx_isp_video_link_destroy_isra_9(uintptr_t a0)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -39348,7 +39368,7 @@ tx_isp_video_link_destroy_isra_90x120:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000010d0c origin=fragment_seed original=tx_isp_release */
-int32_t tx_isp_release(uint32_t a0, uintptr_t a1)
+static int32_t tx_isp_release(uint32_t a0, uintptr_t a1)
 {
     uint32_t *s0;
     uintptr_t *s1;
@@ -39481,19 +39501,19 @@ static long tx_isp_unlocked_ioctl(struct file *filp, unsigned int cmd, unsigned 
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000012ca8 origin=fragment_seed original=tx_isp_probe */
-int tx_isp_probe(struct platform_device *pdev)
+static int tx_isp_probe(struct platform_device *pdev)
 {
     /* one-off compile triage stub for malformed recovered body */
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000013060 origin=model_output original=sub_13060 */
-int sub_13060(void) {
+static int sub_13060(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000013068 origin=fragment_seed original=sub_13068 */
-int32_t sub_13068(void)
+static int32_t sub_13068(void)
 {
     uint32_t local_8 = 0;
     uint32_t local_c = 0;
@@ -39516,7 +39536,7 @@ int32_t sub_13068(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000013078 origin=fragment_seed original=sub_13078 */
-int32_t sub_13078(void)
+static int32_t sub_13078(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -39531,7 +39551,7 @@ int32_t sub_13078(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000013080 origin=fragment_seed original=get_isp_memopt */
-int32_t get_isp_memopt(void)
+static int32_t get_isp_memopt(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -39546,7 +39566,7 @@ int32_t get_isp_memopt(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000013088 origin=fragment_seed original=sub_13088 */
-int32_t sub_13088(void)
+static int32_t sub_13088(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -39561,22 +39581,22 @@ int32_t sub_13088(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000013090 origin=model_output original=sub_13090 */
-int sub_13090(void) {
+static int sub_13090(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000013098 origin=model_output original=sub_13098 */
-int sub_13098(void) {
+static int sub_13098(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000130a0 origin=model_output original=sub_130a0 */
-int sub_130a0(void) {
+static int sub_130a0(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000130a8 origin=fragment_seed original=sub_130a8 */
-int32_t sub_130a8(void)
+static int32_t sub_130a8(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -39591,7 +39611,7 @@ int32_t sub_130a8(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000130b0 origin=fragment_seed original=sub_130b0 */
-int32_t sub_130b0(void)
+static int32_t sub_130b0(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -39606,7 +39626,7 @@ int32_t sub_130b0(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000130b8 origin=fragment_seed original=sub_130b8 */
-int32_t sub_130b8(void)
+static int32_t sub_130b8(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -39621,22 +39641,22 @@ int32_t sub_130b8(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000130c0 origin=model_output original=sub_130c0 */
-int sub_130c0(void) {
+static int sub_130c0(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000130c8 origin=model_output original=sub_130c8 */
-int sub_130c8(void) {
+static int sub_130c8(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000130d0 origin=model_output original=sub_130d0 */
-int sub_130d0(void) {
+static int sub_130d0(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000130d8 origin=fragment_seed original=sub_130d8 */
-int32_t sub_130d8(void)
+static int32_t sub_130d8(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -39651,7 +39671,7 @@ int32_t sub_130d8(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000130e0 origin=fragment_seed original=sub_130e0 */
-int32_t sub_130e0(void)
+static int32_t sub_130e0(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -39666,7 +39686,7 @@ int32_t sub_130e0(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000130e8 origin=fragment_seed original=sub_130e8 */
-int32_t sub_130e8(void)
+static int32_t sub_130e8(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -39681,7 +39701,7 @@ int32_t sub_130e8(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000130f0 origin=fragment_seed original=sub_130f0 */
-int32_t sub_130f0(void)
+static int32_t sub_130f0(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -39696,7 +39716,7 @@ int32_t sub_130f0(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000130fc origin=fragment_seed original=sub_130fc */
-int32_t sub_130fc(void)
+static int32_t sub_130fc(void)
 {
     uint32_t ra = 0;
     uint32_t v1 = 0;
@@ -39711,7 +39731,7 @@ int32_t sub_130fc(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000013104 origin=model_output original=sub_13104 */
-int32_t* sub_13104(int32_t* arg1) {
+static int32_t* sub_13104(int32_t* arg1) {
     int32_t *var_10;
     memset(&var_10, 0, 4);
     *arg1 = var_10;
@@ -39719,53 +39739,53 @@ int32_t* sub_13104(int32_t* arg1) {
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000013148 origin=model_output original=sub_13148 */
-int sub_13148(void) {
+static int sub_13148(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000013150 origin=model_output original=sub_13150 */
-int sub_13150(void) {
+static int sub_13150(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000013158 origin=model_output original=sub_13158 */
-int sub_13158(void) {
+static int sub_13158(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000013160 origin=model_output original=sub_13160 */
-int32_t sub_13160(void) {
+static int32_t sub_13160(void) {
     int32_t _ret = 0;
     return _ret;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000013168 origin=model_output original=sub_13168 */
-int sub_13168(void) {
+static int sub_13168(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000013170 origin=model_output original=sub_13170 */
-int sub_13170(void) {
+static int sub_13170(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000013178 origin=model_output original=sub_13178 */
-int sub_13178(void) {
+static int sub_13178(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000013180 origin=model_output original=sub_13180 */
-int sub_13180(void) {
+static int sub_13180(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000013188 origin=model_output original=sub_13188 */
-int sub_13188(void) {
+static int sub_13188(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000013190 origin=fragment_seed original=sub_13190 */
-int32_t sub_13190(void)
+static int32_t sub_13190(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -39780,7 +39800,7 @@ int32_t sub_13190(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000013198 origin=fragment_seed original=sub_13198 */
-int32_t sub_13198(void)
+static int32_t sub_13198(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -39795,7 +39815,7 @@ int32_t sub_13198(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000131a4 origin=fragment_seed original=sub_131a4 */
-int32_t sub_131a4(void)
+static int32_t sub_131a4(void)
 {
     uint32_t ra = 0;
     uint32_t v1 = 0;
@@ -39810,7 +39830,7 @@ int32_t sub_131a4(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000131ac origin=fragment_seed original=sub_131ac */
-int32_t sub_131ac(void)
+static int32_t sub_131ac(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -39825,7 +39845,7 @@ int32_t sub_131ac(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000131b4 origin=fragment_seed original=sub_131b4 */
-int32_t sub_131b4(void)
+static int32_t sub_131b4(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -39840,7 +39860,7 @@ int32_t sub_131b4(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000131bc origin=fragment_seed original=sub_131bc */
-int32_t sub_131bc(void)
+static int32_t sub_131bc(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -39855,12 +39875,12 @@ int32_t sub_131bc(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000131c4 origin=model_output original=sub_131c4 */
-int sub_131c4(void) {
+static int sub_131c4(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000131cc origin=fragment_seed original=sub_131cc */
-int32_t sub_131cc(void)
+static int32_t sub_131cc(void)
 {
     uint32_t local_8 = 0;
     uint32_t local_c = 0;
@@ -39883,7 +39903,7 @@ int32_t sub_131cc(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000131e0 origin=fragment_seed original=sub_131e0 */
-int32_t sub_131e0(void)
+static int32_t sub_131e0(void)
 {
     uint32_t ra = 0;
     uint32_t v1 = 0;
@@ -39898,7 +39918,7 @@ int32_t sub_131e0(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000131e8 origin=fragment_seed original=sub_131e8 */
-int32_t sub_131e8(void)
+static int32_t sub_131e8(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -39913,19 +39933,19 @@ int32_t sub_131e8(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000131f0 origin=model_output original=sub_131f0 */
-int32_t sub_131f0(void) {
+static int32_t sub_131f0(void) {
     int32_t _unused = 0;
     (void)_unused;
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000131f8 origin=model_output original=sub_131f8 */
-int sub_131f8(void) {
+static int sub_131f8(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000013200 origin=fragment_seed original=sub_13200 */
-int32_t sub_13200(void)
+static int32_t sub_13200(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -39940,14 +39960,14 @@ int32_t sub_13200(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000013208 origin=model_output original=sub_13208 */
-int32_t sub_13208(void)
+static int32_t sub_13208(void)
 {
     /* Thunk: jr ra; nop - forwards to caller's return address */
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000013210 origin=fragment_seed original=sub_13210 */
-int32_t sub_13210(void)
+static int32_t sub_13210(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -39962,7 +39982,7 @@ int32_t sub_13210(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000013218 origin=fragment_seed original=sub_13218 */
-int32_t sub_13218(void)
+static int32_t sub_13218(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -39977,7 +39997,7 @@ int32_t sub_13218(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000133a8 origin=model_output original=fix_point_mult2 */
-int32_t fix_point_mult2(int32_t arg1, int32_t arg2, int32_t arg3,
+static int32_t fix_point_mult2(int32_t arg1, int32_t arg2, int32_t arg3,
                        int32_t arg4, int32_t arg5, int32_t arg6)
 {
     int32_t *s0;
@@ -40044,7 +40064,7 @@ int32_t fix_point_mult2(int32_t arg1, int32_t arg2, int32_t arg3,
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000013558 origin=model_output original=fix_point_mult3 */
-int32_t fix_point_mult3(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4,
+static int32_t fix_point_mult3(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4,
                         int32_t arg5, int32_t arg6, int32_t arg7, int32_t arg8) {
     int32_t *v0;
     int32_t v1;
@@ -40056,7 +40076,7 @@ int32_t fix_point_mult3(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4,
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000013670 origin=fragment_seed original=fix_point_mult2_64 */
-int32_t fix_point_mult2_64(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t arg4, uint32_t arg5)
+static int32_t fix_point_mult2_64(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t arg4, uint32_t arg5)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -40170,7 +40190,7 @@ int32_t fix_point_mult2_64(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, u
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000013810 origin=fragment_seed original=fix_point_mult3_64 */
-int32_t fix_point_mult3_64(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t arg4, uint32_t arg5, uint32_t arg6, uint32_t arg7)
+static int32_t fix_point_mult3_64(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t arg4, uint32_t arg5, uint32_t arg6, uint32_t arg7)
 {
 	uint32_t *s0;
 	uint32_t *s1;
@@ -40189,7 +40209,7 @@ int32_t fix_point_mult3_64(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, u
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000013884 origin=fragment_seed original=fix_point_div_64 */
-int32_t fix_point_div_64(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t arg4, uint32_t arg5)
+static int32_t fix_point_div_64(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t arg4, uint32_t arg5)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -40316,7 +40336,7 @@ fix_point_div_640x130:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000139fc origin=fragment_seed original=fix_point_div */
-int32_t fix_point_div(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t arg4, uint32_t arg5)
+static int32_t fix_point_div(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t arg4, uint32_t arg5)
 {
     uint32_t t9 = 0;
 
@@ -40330,7 +40350,7 @@ int32_t fix_point_div(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000013aa8 origin=model_output original=fix_point_mult3_32 */
-int32_t fix_point_mult3_32(int32_t arg1, int32_t arg2, int32_t arg3) {
+static int32_t fix_point_mult3_32(int32_t arg1, int32_t arg2, int32_t arg3) {
     int32_t ret = fix_point_mult2_32(arg1, arg2, arg3);
     int32_t t2 = arg3;
     int32_t *a2 = t2;
@@ -40339,7 +40359,7 @@ int32_t fix_point_mult3_32(int32_t arg1, int32_t arg2, int32_t arg3) {
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000013b6c origin=model_output original=fix_point_intp */
-int32_t fix_point_intp(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5)
+static int32_t fix_point_intp(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5)
 {
     int *i = 0;
     int32_t *s3 = arg1;
@@ -40391,7 +40411,7 @@ int32_t fix_point_intp(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, i
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000013d04 origin=model_output original=table_intp */
-int32_t table_intp(int32_t arg1, int32_t *arg2, int32_t arg3, int32_t arg4)
+static int32_t table_intp(int32_t arg1, int32_t *arg2, int32_t arg3, int32_t arg4)
 {
 	/* 13d04: v0 = arg2[1] */
 	/* 13d08: sltu v0, v0, a3 -> v0 = (arg2[1] < arg4) ? 1 : 0 */
@@ -40477,7 +40497,7 @@ return_path:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000141a0 origin=model_output original=ISPAWBInterpolation1 */
-int32_t ISPAWBInterpolation1(int32_t arg1, int32_t arg2, int32_t arg3,
+static int32_t ISPAWBInterpolation1(int32_t arg1, int32_t arg2, int32_t arg3,
                               int32_t arg4, int32_t arg5, int32_t arg6)
 {
     int32_t *s0 = arg1;
@@ -40503,7 +40523,7 @@ int32_t ISPAWBInterpolation1(int32_t arg1, int32_t arg2, int32_t arg3,
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000014250 origin=hlil_exact original=ISPAWBInterpolation2 */
-int32_t ISPAWBInterpolation2(int32_t q, int32_t x, int32_t x0,
+static int32_t ISPAWBInterpolation2(int32_t q, int32_t x, int32_t x0,
                              int32_t x1, int32_t y0, int32_t y1)
 {
     int32_t denominator = (x1 - x0) << (q & 0x1f);
@@ -40518,7 +40538,7 @@ int32_t ISPAWBInterpolation2(int32_t q, int32_t x, int32_t x0,
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000142f0 origin=fragment_seed original=func_zone_ct_weight */
-int32_t func_zone_ct_weight(uint32_t a0, uintptr_t a1, uintptr_t a2, uint32_t a3, uint32_t arg4)
+static int32_t func_zone_ct_weight(uint32_t a0, uintptr_t a1, uintptr_t a2, uint32_t a3, uint32_t arg4)
 {
 	uint32_t v1;
 	uint32_t *t0;
@@ -40605,7 +40625,7 @@ func_zone_ct_weight0x98:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000143c8 origin=fragment_seed original=Tiziano_Awb_Ct_Detect */
-int32_t* Tiziano_Awb_Ct_Detect(uintptr_t a0, uintptr_t a1, uintptr_t a2, uint32_t a3, uintptr_t arg4, uintptr_t arg5, uintptr_t arg6, uint32_t arg7, uint32_t arg8, uintptr_t arg9, uintptr_t arg10, uintptr_t arg11, uintptr_t arg12, uintptr_t arg13, uintptr_t arg14, uintptr_t arg15, uintptr_t arg16, uintptr_t arg17, uintptr_t arg18, uintptr_t arg19)
+static int32_t* Tiziano_Awb_Ct_Detect(uintptr_t a0, uintptr_t a1, uintptr_t a2, uint32_t a3, uintptr_t arg4, uintptr_t arg5, uintptr_t arg6, uint32_t arg7, uint32_t arg8, uintptr_t arg9, uintptr_t arg10, uintptr_t arg11, uintptr_t arg12, uintptr_t arg13, uintptr_t arg14, uintptr_t arg15, uintptr_t arg16, uintptr_t arg17, uintptr_t arg18, uintptr_t arg19)
 {
     uint32_t *zone_rg = (uint32_t *)(uintptr_t)a0;
     const uint32_t *zone_pixels = (const uint32_t *)(uintptr_t)a1;
@@ -40708,7 +40728,7 @@ no_valid_zones:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000160a0 origin=fragment_seed original=crc32 */
-int32_t crc32(uint32_t a0, uint32_t a1)
+static int32_t crc32(uint32_t a0, uint32_t a1)
 {
     uint32_t *a2 = 0;
     uint32_t *a3 = 0;
@@ -40752,7 +40772,7 @@ crc320x3c:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000160e4 origin=fragment_seed original=tisp_long_tgain_update */
-int32_t tisp_long_tgain_update(uint32_t a0, uint32_t a1, uint32_t a2)
+static int32_t tisp_long_tgain_update(uint32_t a0, uint32_t a1, uint32_t a2)
 {
     uint32_t *local_14 = 0;
     uint32_t *local_18 = 0;
@@ -40805,7 +40825,7 @@ int32_t tisp_long_tgain_update(uint32_t a0, uint32_t a1, uint32_t a2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001619c origin=model_output original=tisp_ct_update */
-int32_t tisp_ct_update(int32_t arg1, int32_t arg2, uint32_t arg3)
+static int32_t tisp_ct_update(int32_t arg1, int32_t arg2, uint32_t arg3)
 {
 	int32_t reg_val = system_reg_read(12);
 	int32_t *s0 = reg_val;
@@ -40833,7 +40853,7 @@ int32_t tisp_ct_update(int32_t arg1, int32_t arg2, uint32_t arg3)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000016278 origin=fragment_seed original=tisp_ae_ir_update */
-int32_t tisp_ae_ir_update(uint32_t a0, uint32_t a1, uint32_t a2)
+static int32_t tisp_ae_ir_update(uint32_t a0, uint32_t a1, uint32_t a2)
 {
     uint32_t *local_14 = 0;
     uint32_t *a3 = 0;
@@ -40859,7 +40879,7 @@ int32_t tisp_ae_ir_update(uint32_t a0, uint32_t a1, uint32_t a2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000162a4 origin=fragment_seed original=tisp_long_ev_update */
-int32_t tisp_long_ev_update(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3)
+static int32_t tisp_long_ev_update(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3)
 {
     uint32_t *local_14 = 0;
     uint32_t *local_18 = 0;
@@ -40946,7 +40966,7 @@ tisp_long_ev_update0xd0:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000016394 origin=fragment_seed original=tisp_long_again_update */
-int32_t tisp_long_again_update(void)
+static int32_t tisp_long_again_update(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -40961,7 +40981,7 @@ int32_t tisp_long_again_update(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001639c origin=fragment_seed original=tisp_short_tgain_update */
-int32_t tisp_short_tgain_update(void)
+static int32_t tisp_short_tgain_update(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -40976,7 +40996,7 @@ int32_t tisp_short_tgain_update(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000163a4 origin=fragment_seed original=tisp_short_ev_update */
-int32_t tisp_short_ev_update(void)
+static int32_t tisp_short_ev_update(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -40991,7 +41011,7 @@ int32_t tisp_short_ev_update(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000163ac origin=model_output original=tisp_ipc_triger */
-int32_t tisp_ipc_triger(void *arg1)
+static int32_t tisp_ipc_triger(void *arg1)
 {
 	uint32_t *v0;
 	uint32_t *a1;
@@ -41013,7 +41033,7 @@ int32_t tisp_ipc_triger(void *arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000163f8 origin=fragment_seed original=tisp_stream_on */
-int32_t tisp_stream_on(uintptr_t a0)
+static int32_t tisp_stream_on(uintptr_t a0)
 {
     const uint32_t *desc = (const uint32_t *)(uintptr_t)a0;
     unsigned char *channel_info;
@@ -41048,7 +41068,7 @@ int32_t tisp_stream_on(uintptr_t a0)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000016514 origin=fragment_seed original=tisp_process_init */
-int32_t tisp_process_init(void)
+static int32_t tisp_process_init(void)
 {
     uint32_t *local_10 = 0;
     uint32_t local_1c = 0;
@@ -41084,7 +41104,7 @@ tisp_process_init0x4c:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000016568 origin=fragment_seed original=tisp_process_deinit */
-int32_t tisp_process_deinit(uint32_t a0)
+static int32_t tisp_process_deinit(uint32_t a0)
 {
 	uint32_t ret;
 
@@ -41098,17 +41118,17 @@ out:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000165bc origin=model_output original=tisp_activate_all */
-int tisp_activate_all(void) {
+static int tisp_activate_all(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000165c4 origin=model_output original=tisp_slake_all */
-int tisp_slake_all(void) {
+static int tisp_slake_all(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000165cc origin=fragment_seed original=tisp_function_clear */
-int32_t tisp_function_clear(void)
+static int32_t tisp_function_clear(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -41123,7 +41143,7 @@ int32_t tisp_function_clear(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000165d4 origin=fragment_seed original=tisp_deinit */
-int tisp_deinit(int arg1)
+static int tisp_deinit(int arg1)
 {
 	int *s0;
 	int *s1;
@@ -41176,7 +41196,7 @@ int tisp_deinit(int arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001677c origin=fragment_seed original=tisp_fw_process */
-int32_t tisp_fw_process(void)
+static int32_t tisp_fw_process(void)
 {
     uint32_t *local_14 = 0;
     uint32_t *a0 = 0;
@@ -41219,7 +41239,7 @@ int32_t tisp_channel_start(int32_t arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000016804 origin=model_output original=tisp_channel_main_stop */
-int32_t tisp_channel_main_stop(int32_t arg1)
+static int32_t tisp_channel_main_stop(int32_t arg1)
 {
 	int32_t tmp = arg1 * 608;
 	*(int32_t *)(tmp + (int32_t)&mscaler) = 0;
@@ -41227,7 +41247,7 @@ int32_t tisp_channel_main_stop(int32_t arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000016824 origin=model_output original=tisp_channel_main_fifo_clear */
-int32_t tisp_channel_main_fifo_clear(int32_t arg1)
+static int32_t tisp_channel_main_fifo_clear(int32_t arg1)
 {
 	int32_t s1 = (arg1 + 0xd0) << 8;
 	system_reg_write(s1 + 0x144, 1);
@@ -41438,12 +41458,12 @@ skip_third_block:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000169ec origin=model_output original=tiziano_reserve_reg_write */
-void tiziano_reserve_reg_write(void)
+static void tiziano_reserve_reg_write(void)
 {
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000169f4 origin=fragment_seed original=tiziano_load_parameters */
-int32_t tiziano_load_parameters(uint32_t a0)
+static int32_t tiziano_load_parameters(uint32_t a0)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -42051,7 +42071,7 @@ tiziano_load_parameters0x70c:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000017130 origin=fragment_seed original=tisp_init */
-int32_t tisp_init(uint32_t arg1, uintptr_t arg2)
+static int32_t tisp_init(uint32_t arg1, uintptr_t arg2)
 {
     uint32_t *v0;
     uint32_t *s3;
@@ -42367,7 +42387,7 @@ int32_t tisp_init(uint32_t arg1, uintptr_t arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000017aa4 origin=fragment_seed original=tiziano_sync_sensor_attr */
-int32_t tiziano_sync_sensor_attr(uintptr_t a0)
+static int32_t tiziano_sync_sensor_attr(uintptr_t a0)
 {
     uint32_t *a1 = 0;
     uint32_t ra = 0;
@@ -42732,7 +42752,7 @@ static struct tisp_event_channel *tisp_event_channel_get(uint32_t channel)
     return &tisp_event_queues[channel];
 }
 
-int tisp_event_init(uint32_t channel)
+static int tisp_event_init(uint32_t channel)
 {
     struct tisp_event_channel *queue;
     unsigned long flags;
@@ -42797,7 +42817,7 @@ int32_t tisp_event_push(uint32_t channel, const void *event)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000181c0 origin=model_output original=tisp_event_exit */
-int32_t tisp_event_exit(uint32_t channel)
+static int32_t tisp_event_exit(uint32_t channel)
 {
     struct tisp_event_record event = { .event_id = 0 };
 
@@ -42806,7 +42826,7 @@ int32_t tisp_event_exit(uint32_t channel)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000181ec origin=fragment_seed original=tisp_event_process */
-int tisp_event_process(uint32_t channel)
+static int tisp_event_process(uint32_t channel)
 {
     struct tisp_event_channel *queue;
     struct tisp_event_record *record;
@@ -42848,7 +42868,7 @@ int tisp_event_process(uint32_t channel)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000183f0 origin=fragment_seed original=tisp_msca_normalized */
-int32_t tisp_msca_normalized(uintptr_t a0, uint32_t a1, uintptr_t a2)
+static int32_t tisp_msca_normalized(uintptr_t a0, uint32_t a1, uintptr_t a2)
 {
     static const uint32_t add_order[4] = { 1, 2, 0, 3 };
     static const uint32_t subtract_order[4] = { 3, 0, 2, 1 };
@@ -42912,7 +42932,7 @@ int32_t tisp_msca_normalized(uintptr_t a0, uint32_t a1, uintptr_t a2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000018700 origin=fragment_seed original=tisp_sin */
-int32_t tisp_sin(uint32_t a0, uint32_t a1, uintptr_t a2)
+static int32_t tisp_sin(uint32_t a0, uint32_t a1, uintptr_t a2)
 {
     const s16 *sinc_lut;
     int16_t *output = (int16_t *)a2;
@@ -44099,7 +44119,7 @@ tisp_msca_ch_curve_write_ctrl0xd4:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000019938 origin=fragment_seed original=tisp_msca_scaling_algorithm */
-int32_t tisp_msca_scaling_algorithm(void)
+static int32_t tisp_msca_scaling_algorithm(void)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -44187,7 +44207,7 @@ int32_t tisp_msca_scaling_algorithm(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000019a70 origin=fragment_seed original=tisp_msca_write_reg */
-int32_t tisp_msca_write_reg(void)
+static int32_t tisp_msca_write_reg(void)
 {
     uint32_t min_left = 0xffffU;
     uint32_t min_top = 0xffffU;
@@ -44538,7 +44558,7 @@ int32_t tisp_msca_chx_cfg_load(uint32_t unused, uint32_t channel,
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000019f7c origin=fragment_seed original=tisp_msca_params_refresh */
-int32_t tisp_msca_params_refresh(void)
+static int32_t tisp_msca_params_refresh(void)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -44604,7 +44624,7 @@ int32_t tisp_msca_params_refresh(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001a0dc origin=fragment_seed original=tisp_msca_init */
-int32_t tisp_msca_init(uint32_t a0, uint32_t a1, uint32_t a2)
+static int32_t tisp_msca_init(uint32_t a0, uint32_t a1, uint32_t a2)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -44665,7 +44685,7 @@ int32_t tisp_msca_init(uint32_t a0, uint32_t a1, uint32_t a2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001a1d4 origin=fragment_seed original=tisp_msca_deinit */
-void* tisp_msca_deinit(void)
+static void* tisp_msca_deinit(void)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -44731,7 +44751,7 @@ tisp_msca_deinit0x68:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001a24c origin=fragment_seed original=tisp_msca_params_update */
-int32_t tisp_msca_params_update(uint32_t a0)
+static int32_t tisp_msca_params_update(uint32_t a0)
 {
     unsigned char *cfg;
     const uint32_t *params;
@@ -44785,7 +44805,7 @@ int32_t tisp_msca_params_update(uint32_t a0)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001a454 origin=model_output original=tisp_msca_crop_api */
-int32_t tisp_msca_crop_api(int32_t arg1, char arg2, void *arg3)
+static int32_t tisp_msca_crop_api(int32_t arg1, char arg2, void *arg3)
 {
 	int32_t *s0;
 	int32_t *s1;
@@ -44803,7 +44823,7 @@ int32_t tisp_msca_crop_api(int32_t arg1, char arg2, void *arg3)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001a4d8 origin=fragment_seed original=tisp_msca_param_array_get */
-int32_t tisp_msca_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2)
+static int32_t tisp_msca_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -44889,7 +44909,7 @@ int32_t tisp_msca_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001a6bc origin=fragment_seed original=tisp_msca_param_array_set */
-int32_t tisp_msca_param_array_set(uint32_t a0, uint32_t a1)
+static int32_t tisp_msca_param_array_set(uint32_t a0, uint32_t a1)
 {
     uint32_t *local_14 = 0;
     uint32_t *local_18 = 0;
@@ -44972,7 +44992,7 @@ int32_t tisp_msca_addr_fifo_write(char arg1, int32_t arg2, int32_t arg3)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001a858 origin=model_output original=tisp_msca_addr_fifo_read */
-int32_t tisp_msca_addr_fifo_read(char arg1, int32_t *arg2, int32_t *arg3) {
+static int32_t tisp_msca_addr_fifo_read(char arg1, int32_t *arg2, int32_t *arg3) {
     int32_t *s0;
     int32_t *s1;
     int32_t *s2;
@@ -44999,18 +45019,18 @@ int32_t tisp_msca_addr_fifo_read(char arg1, int32_t *arg2, int32_t *arg3) {
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001a8d4 origin=model_output original=tisp_msca_ir_init */
-int32_t tisp_msca_ir_init(void)
+static int32_t tisp_msca_ir_init(void)
 {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001a8dc origin=model_output original=tisp_msca_addr_ir_fifo_read */
-int tisp_msca_addr_ir_fifo_read(void) {
+static int tisp_msca_addr_ir_fifo_read(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001a8e4 origin=model_output original=tisp_msca_addr_ir_fifo_write */
-int tisp_msca_addr_ir_fifo_write(void) {
+static int tisp_msca_addr_ir_fifo_write(void) {
     return 0;
 }
 
@@ -45294,7 +45314,7 @@ tisp_msca_api_set_mask0x10c:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001acac origin=model_output original=tisp_msca_api_set_line */
-int32_t tisp_msca_api_set_line(int32_t arg1, int16_t *arg2, void *arg3)
+static int32_t tisp_msca_api_set_line(int32_t arg1, int16_t *arg2, void *arg3)
 {
     /* one-off compile triage stub for malformed recovered body */
     return 0;
@@ -45484,7 +45504,7 @@ int32_t tisp_msca_api_set_fcrop(uint32_t a0, uint32_t a1, uint32_t a2,
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001b494 origin=fragment_seed original=tisp_msca_api_set_scaler_level_control */
-int32_t tisp_msca_api_set_scaler_level_control(uint32_t a0, uintptr_t a1, uint32_t a2)
+static int32_t tisp_msca_api_set_scaler_level_control(uint32_t a0, uintptr_t a1, uint32_t a2)
 {
     const unsigned char *control = (const unsigned char *)a1;
     uint32_t channel;
@@ -45620,7 +45640,7 @@ int32_t tiziano_gamma_params_refresh(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001bae4 origin=fragment_seed original=tisp_gamma_wdr_en */
-int tisp_gamma_wdr_en(int enable)
+static int tisp_gamma_wdr_en(int enable)
 {
     gamma_wdr_en = !!enable;
     tiziano_gamma_lut_now = gamma_wdr_en
@@ -45664,7 +45684,7 @@ int32_t tisp_gamma_param_array_get(int32_t arg1, int32_t *arg2, int32_t *arg3)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001bc30 origin=model_output original=tisp_gamma_param_array_set */
-int32_t tisp_gamma_param_array_set(int32_t arg1, const void *arg2)
+static int32_t tisp_gamma_param_array_set(int32_t arg1, const void *arg2)
 {
     const unsigned char *in = arg2;
 
@@ -45682,14 +45702,14 @@ int32_t tisp_gamma_param_array_set(int32_t arg1, const void *arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001bca8 origin=model_output original=tisp_api_gamma_param_set */
-int32_t tisp_api_gamma_param_set(const void *src)
+static int32_t tisp_api_gamma_param_set(const void *src)
 {
 	memcpy(&tiziano_gamma_lut, src, 258);
 	return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001bcd8 origin=model_output original=tisp_api_gamma_param_get */
-int32_t tisp_api_gamma_param_get(int32_t arg1, int32_t *arg2, int32_t *arg3)
+static int32_t tisp_api_gamma_param_get(int32_t arg1, int32_t *arg2, int32_t *arg3)
 {
 	memcpy(arg2, &tiziano_gamma_lut, 0x102);
 	*arg3 = 0x102;
@@ -45697,7 +45717,7 @@ int32_t tisp_api_gamma_param_get(int32_t arg1, int32_t *arg2, int32_t *arg3)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001bd20 origin=fragment_seed original=isp_tunning_poll */
-int32_t isp_tunning_poll(uint32_t a0, uintptr_t a1)
+static int32_t isp_tunning_poll(uint32_t a0, uintptr_t a1)
 {
     uint32_t *local_14 = 0;
     uint32_t *a2 = 0;
@@ -45754,7 +45774,7 @@ isp_tunning_poll0x44:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001bd70 origin=fragment_seed original=isp_tunning_read */
-int32_t isp_tunning_read(uint32_t a0, uint32_t a1, uint32_t a2)
+static int32_t isp_tunning_read(uint32_t a0, uint32_t a1, uint32_t a2)
 {
     uint32_t v1;
     uint32_t *v0;
@@ -45811,7 +45831,7 @@ out:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001be24 origin=fragment_seed original=tisp_code_tuning_release */
-int tisp_code_tuning_release(struct inode *inode, struct file *file)
+static int tisp_code_tuning_release(struct inode *inode, struct file *file)
 {
     void *ptr;
 
@@ -45824,7 +45844,7 @@ int tisp_code_tuning_release(struct inode *inode, struct file *file)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001be78 origin=fragment_seed original=tisp_code_tuning_open */
-int32_t tisp_code_tuning_open(void)
+static int32_t tisp_code_tuning_open(void)
 {
     uint32_t *local_14 = 0;
     uint32_t *a0 = 0;
@@ -45857,7 +45877,7 @@ int32_t tisp_code_tuning_open(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001bec4 origin=fragment_seed original=tisp_top_param_array_get */
-int32_t tisp_top_param_array_get(uint32_t a0, uintptr_t a1)
+static int32_t tisp_top_param_array_get(uint32_t a0, uintptr_t a1)
 {
     uint32_t *local_10 = 0;
     uint32_t local_94 = 0;
@@ -45920,7 +45940,7 @@ tisp_top_param_array_get0x38:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001bf48 origin=fragment_seed original=tisp_comn_param_array_get */
-int32_t tisp_comn_param_array_get(uint32_t a0, uintptr_t a1)
+static int32_t tisp_comn_param_array_get(uint32_t a0, uintptr_t a1)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -45975,7 +45995,7 @@ int32_t tisp_comn_param_array_get(uint32_t a0, uintptr_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001c01c origin=fragment_seed original=tisp_comn_param_array_set */
-int32_t tisp_comn_param_array_set(uint32_t a0, uint32_t a1)
+static int32_t tisp_comn_param_array_set(uint32_t a0, uint32_t a1)
 {
     uint32_t *local_14 = 0;
     uint32_t *local_18 = 0;
@@ -46054,7 +46074,7 @@ tisp_comn_param_array_set0x98:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001c0cc origin=model_output original=tisp_top_param_array_set */
-int32_t tisp_top_param_array_set(int32_t arg1)
+static int32_t tisp_top_param_array_set(int32_t arg1)
 {
     int32_t buf[32];
     int32_t *p = buf;
@@ -46077,7 +46097,7 @@ int32_t tisp_top_param_array_set(int32_t arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001c138 origin=fragment_seed original=tisp_get_ae_info */
-int32_t tisp_get_ae_info(uintptr_t a0)
+static int32_t tisp_get_ae_info(uintptr_t a0)
 {
     uint32_t *local_14 = 0;
     uint32_t *a1 = 0;
@@ -46105,7 +46125,7 @@ int32_t tisp_get_ae_info(uintptr_t a0)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001c174 origin=fragment_seed original=tisp_set_ae_info */
-int32_t tisp_set_ae_info(uintptr_t a0)
+static int32_t tisp_set_ae_info(uintptr_t a0)
 {
     uint32_t *local_14 = 0;
     uint32_t *a1 = 0;
@@ -46133,7 +46153,7 @@ int32_t tisp_set_ae_info(uintptr_t a0)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001c1b0 origin=fragment_seed original=tisp_get_awb_info */
-int32_t tisp_get_awb_info(uintptr_t a0)
+static int32_t tisp_get_awb_info(uintptr_t a0)
 {
     uint32_t *local_10 = 0;
     uint32_t local_30 = 0;
@@ -46168,7 +46188,7 @@ int32_t tisp_get_awb_info(uintptr_t a0)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001c204 origin=fragment_seed original=tisp_set_awb_info */
-int32_t tisp_set_awb_info(uintptr_t a0)
+static int32_t tisp_set_awb_info(uintptr_t a0)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -46213,7 +46233,7 @@ int32_t tisp_set_awb_info(uintptr_t a0)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001c270 origin=model_output original=tisp_set_ae_minmax */
-int32_t tisp_set_ae_minmax(void *arg1)
+static int32_t tisp_set_ae_minmax(void *arg1)
 {
 	char var_b8[176];
 	int32_t *v0 = 176;
@@ -46224,7 +46244,7 @@ int32_t tisp_set_ae_minmax(void *arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001c2a8 origin=fragment_seed original=tisp_reg_map_get */
-int32_t tisp_reg_map_get(uint32_t a0, uint32_t a1, uintptr_t a2)
+static int32_t tisp_reg_map_get(uint32_t a0, uint32_t a1, uintptr_t a2)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_18 = 0;
@@ -46276,7 +46296,7 @@ int32_t tisp_reg_map_get(uint32_t a0, uint32_t a1, uintptr_t a2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001c32c origin=model_output original=tisp_reg_map_set */
-int32_t tisp_reg_map_set(int32_t arg1)
+static int32_t tisp_reg_map_set(int32_t arg1)
 {
 	int32_t var_14;
 	int32_t var_18;
@@ -46289,7 +46309,7 @@ int32_t tisp_reg_map_set(int32_t arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001c3a0 origin=model_output original=tisp_code_tuning_ioctl */
-int32_t tisp_code_tuning_ioctl(int32_t arg1, int32_t arg2, int32_t arg3)
+static int32_t tisp_code_tuning_ioctl(int32_t arg1, int32_t arg2, int32_t arg3)
 {
     uint32_t cmd_type;
     uint32_t cmd_nr;
@@ -47094,7 +47114,7 @@ case_20007408_end:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001cdac origin=fragment_seed original=tisp_code_create_tuning_node */
-int32_t tisp_code_create_tuning_node(void)
+static int32_t tisp_code_create_tuning_node(void)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_18 = 0;
@@ -47179,7 +47199,7 @@ tisp_code_create_tuning_node0x74:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001cee8 origin=fragment_seed original=tisp_code_destroy_tuning_node */
-int32_t tisp_code_destroy_tuning_node(void)
+static int32_t tisp_code_destroy_tuning_node(void)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -48228,7 +48248,7 @@ int32_t tisp_gib_deir_ir_update(uint32_t ir_value)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001db04 origin=fragment_seed original=tiziano_gib_init */
-int32_t tiziano_gib_init(void)
+static int32_t tiziano_gib_init(void)
 {
     uint32_t *local_14 = 0;
     uint32_t *a0 = 0;
@@ -48263,7 +48283,7 @@ int32_t tiziano_gib_init(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001db68 origin=fragment_seed original=tisp_gib_param_array_get */
-int32_t tisp_gib_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2)
+static int32_t tisp_gib_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -48385,7 +48405,7 @@ int32_t tisp_gib_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001de6c origin=fragment_seed original=tisp_gib_param_array_set */
-int32_t tisp_gib_param_array_set(uint32_t a0, uint32_t a1)
+static int32_t tisp_gib_param_array_set(uint32_t a0, uint32_t a1)
 {
     uint32_t *local_14 = 0;
     uint32_t *local_18 = 0;
@@ -48491,7 +48511,7 @@ int32_t tisp_gib_param_array_set(uint32_t a0, uint32_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001e070 origin=model_output original=JZ_Isp_Awb_Reg2par */
-int32_t JZ_Isp_Awb_Reg2par(int32_t *arg1, int32_t *arg2)
+static int32_t JZ_Isp_Awb_Reg2par(int32_t *arg1, int32_t *arg2)
 {
     int32_t v0 = arg2[0];
     int32_t *a2 = &arg2[5];
@@ -48560,7 +48580,7 @@ int32_t JZ_Isp_Awb_Reg2par(int32_t *arg1, int32_t *arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001e1d8 origin=fragment_seed original=JZ_Isp_Awb_Awbg2reg */
-int64_t JZ_Isp_Awb_Awbg2reg(uintptr_t a0, uintptr_t a1)
+static int64_t JZ_Isp_Awb_Awbg2reg(uintptr_t a0, uintptr_t a1)
 {
     uint32_t *a2 = 0;
     uint32_t *a3 = 0;
@@ -48711,7 +48731,7 @@ JZ_Isp_Awb_Awbg2reg0xec:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001e2ec origin=fragment_seed original=JZ_Isp_Get_Awb_Statistics */
-uint32_t JZ_Isp_Get_Awb_Statistics(uintptr_t a0, uint32_t a1)
+static uint32_t JZ_Isp_Get_Awb_Statistics(uintptr_t a0, uint32_t a1)
 {
     uint32_t local_4 = 0;
     uint32_t local_8 = 0;
@@ -49038,7 +49058,7 @@ tiziano_awb_params_refresh0x32c:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001e7a4 origin=fragment_seed original=tiziano_awb_dump */
-int32_t tiziano_awb_dump(void)
+static int32_t tiziano_awb_dump(void)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -49249,7 +49269,7 @@ int32_t system_reg_write_awb(int32_t arg1, int32_t arg2, int32_t arg3) {
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001eb10 origin=fragment_seed original=Tiziano_awb_set_gain */
-int Tiziano_awb_set_gain(void *mf_para, uint32_t point_pos, const uint32_t *arg3)
+static int Tiziano_awb_set_gain(void *mf_para, uint32_t point_pos, const uint32_t *arg3)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -49339,7 +49359,7 @@ Tiziano_awb_set_gain0x16c:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001ec9c origin=fragment_seed original=Tiziano_awb_fpga */
-uint32_t Tiziano_awb_fpga(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t arg4, uintptr_t arg5, uintptr_t arg6, uint32_t arg7, uintptr_t arg8, uintptr_t arg9, uintptr_t arg10, uintptr_t arg11, uint32_t arg12)
+static uint32_t Tiziano_awb_fpga(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t arg4, uintptr_t arg5, uintptr_t arg6, uint32_t arg7, uintptr_t arg8, uintptr_t arg9, uintptr_t arg10, uintptr_t arg11, uint32_t arg12)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -51663,7 +51683,7 @@ int32_t tisp_g_wb_mode(void *arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000205d4 origin=fragment_seed original=tisp_awb_set_frz */
-int32_t tisp_awb_set_frz(uint32_t a0, uint32_t a1)
+static int32_t tisp_awb_set_frz(uint32_t a0, uint32_t a1)
 {
     (void)a0;
     ACCESS_ONCE(awb_frz) = a1 & 0xffU;
@@ -51671,7 +51691,7 @@ int32_t tisp_awb_set_frz(uint32_t a0, uint32_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000205e4 origin=fragment_seed original=tisp_awb_get_frz */
-int32_t tisp_awb_get_frz(uint32_t a0, uintptr_t a1)
+static int32_t tisp_awb_get_frz(uint32_t a0, uintptr_t a1)
 {
     uint8_t value = (uint8_t)ACCESS_ONCE(awb_frz);
 
@@ -51715,7 +51735,7 @@ int32_t tisp_s_wb_mode(uint32_t a0, uint32_t a1, uint32_t a2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002075c origin=fragment_seed original=tisp_awb_get_ct */
-uint32_t tisp_awb_get_ct(uint32_t a0, uintptr_t a1)
+static uint32_t tisp_awb_get_ct(uint32_t a0, uintptr_t a1)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -51736,7 +51756,7 @@ uint32_t tisp_awb_get_ct(uint32_t a0, uintptr_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002076c origin=fragment_seed original=tisp_awb_set_ct */
-int64_t tisp_awb_set_ct(uint32_t a0, uintptr_t a1)
+static int64_t tisp_awb_set_ct(uint32_t a0, uintptr_t a1)
 {
     uint32_t v1;
     v1 = *(uint32_t *)(uintptr_t)a1;
@@ -51745,14 +51765,14 @@ int64_t tisp_awb_set_ct(uint32_t a0, uintptr_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002077c origin=model_output original=tisp_api_awb_zone_weight_set */
-int tisp_api_awb_zone_weight_set(const void *src)
+static int tisp_api_awb_zone_weight_set(const void *src)
 {
 	memcpy(_awb_wght, src, 900);
 	return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000020794 origin=model_output original=tisp_api_awb_zone_weight_get */
-int32_t tisp_api_awb_zone_weight_get(int32_t arg1, int32_t *arg2, int32_t *arg3)
+static int32_t tisp_api_awb_zone_weight_get(int32_t arg1, int32_t *arg2, int32_t *arg3)
 {
 	memcpy(arg2, _awb_wght, 0x384);
 	*arg3 = 0x384;
@@ -51804,7 +51824,7 @@ int32_t tiziano_g_awb_start(int32_t arg0, int32_t *arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000020848 origin=model_output original=tiziano_s_wb_algo */
-int32_t tiziano_s_wb_algo(int32_t arg1, int32_t arg2)
+static int32_t tiziano_s_wb_algo(int32_t arg1, int32_t arg2)
 {
 	if (arg2 == 1) {
 		*(int32_t *)(&(_light_src) + 19) = arg2;
@@ -51827,7 +51847,7 @@ int32_t tiziano_s_wb_algo(int32_t arg1, int32_t arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000208d0 origin=fragment_seed original=tisp_awb_get_zone */
-int32_t tisp_awb_get_zone(uint32_t a0, uint32_t a1)
+static int32_t tisp_awb_get_zone(uint32_t a0, uint32_t a1)
 {
     uint32_t *local_14 = 0;
     uint32_t *a2 = 0;
@@ -51948,7 +51968,7 @@ tisp_awb_get_ct_trend0x10:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000020aa0 origin=model_output original=tisp_awb_param_array_get */
-int32_t tisp_awb_param_array_get(int32_t arg1, void *arg2, int32_t *arg3) {
+static int32_t tisp_awb_param_array_get(int32_t arg1, void *arg2, int32_t *arg3) {
     *arg3 = 0;
     memcpy(arg2, &_awb_parameter, 0xb4);
     *arg3 += 0xb4;
@@ -52012,7 +52032,7 @@ int32_t tisp_awb_param_array_get(int32_t arg1, void *arg2, int32_t *arg3) {
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000020e84 origin=fragment_seed original=tisp_awb_param_array_set */
-int32_t tisp_awb_param_array_set(uint32_t a0, uint32_t a1)
+static int32_t tisp_awb_param_array_set(uint32_t a0, uint32_t a1)
 {
     uint32_t *s1 = a1;
     uint32_t *s5 = 1;
@@ -52068,7 +52088,7 @@ tisp_awb_param_array_set0x2c0:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002117c origin=fragment_seed original=tisp_awb_algo_init */
-int32_t * tisp_awb_algo_init(int32_t arg1, int32_t arg2, int32_t arg3)
+static int32_t * tisp_awb_algo_init(int32_t arg1, int32_t arg2, int32_t arg3)
 {
 	uintptr_t v0 = (uintptr_t)&ivdc_threshold_line;
 	*(uint32_t *)((char *)((char *)&tawb_custom_en)) = arg1;
@@ -52076,7 +52096,7 @@ int32_t * tisp_awb_algo_init(int32_t arg1, int32_t arg2, int32_t arg3)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000021188 origin=fragment_seed original=tisp_awb_algo_handle */
-int32_t tisp_awb_algo_handle(uint32_t a0, uintptr_t a1)
+static int32_t tisp_awb_algo_handle(uint32_t a0, uintptr_t a1)
 {
     uint32_t result = *(uint32_t *)((char *)a0 + 8);
     uint32_t *v0;
@@ -52110,7 +52130,7 @@ int32_t tisp_awb_algo_handle(uint32_t a0, uintptr_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002120c origin=model_output original=tisp_awb_deinit */
-int32_t tisp_awb_deinit(void)
+static int32_t tisp_awb_deinit(void)
 {
     static int tawb_custom_en_value;
     if (tawb_custom_en_value == 1)
@@ -52372,7 +52392,7 @@ tisp_lsc_lut_valid_judge0x178:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000213c8 origin=fragment_seed original=tisp_lsc_wdr_en */
-int tisp_lsc_wdr_en(int arg1)
+static int tisp_lsc_wdr_en(int arg1)
 {
 	uintptr_t *v0;
 	uintptr_t v1;
@@ -52408,7 +52428,7 @@ int32_t tisp_lsc_ct_update(uint32_t a0)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000021410 origin=fragment_seed original=tisp_lsc_gain_update */
-int32_t tisp_lsc_gain_update(uint32_t a0)
+static int32_t tisp_lsc_gain_update(uint32_t a0)
 {
     /*
      * OEM: only stores the log2 total gain; tisp_lsc_write_lut_datas
@@ -52469,7 +52489,7 @@ int32_t tiziano_lsc_dn_params_refresh(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000021594 origin=fragment_seed original=tisp_lsc_param_array_get */
-int tisp_lsc_param_array_get(int param_id, void *out_buf, int *size_buf)
+static int tisp_lsc_param_array_get(int param_id, void *out_buf, int *size_buf)
 {
     uint32_t offset;
 
@@ -52501,7 +52521,7 @@ int tisp_lsc_param_array_get(int param_id, void *out_buf, int *size_buf)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000216d8 origin=fragment_seed original=tisp_lsc_judge_ct_update_flag */
-int32_t tisp_lsc_judge_ct_update_flag(void)
+static int32_t tisp_lsc_judge_ct_update_flag(void)
 {
     uintptr_t *a0 = 0;
     uintptr_t *a1 = 0;
@@ -52848,7 +52868,7 @@ int32_t tiziano_lsc_init(uint32_t arg1, uint32_t arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000021ed8 origin=fragment_seed original=tisp_lsc_param_array_set */
-int tisp_lsc_param_array_set(int param_id, void *in_buf, int *size_buf)
+static int tisp_lsc_param_array_set(int param_id, void *in_buf, int *size_buf)
 {
     uint32_t a2 = (uint32_t)size_buf & 0xffff;
     uint32_t *v0;
@@ -53420,7 +53440,7 @@ tisp_lsc_mirror_flip0x364:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000022624 origin=model_output original=tisp_lsc_deinit */
-int32_t tisp_lsc_deinit(void)
+static int32_t tisp_lsc_deinit(void)
 {
 	private_vfree(tmp_space);
 	tmp_space = NULL;
@@ -54199,7 +54219,7 @@ jz_isp_ccm0x190:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000232f8 origin=fragment_seed original=tisp_ccm_ev_update */
-int tisp_ccm_ev_update(void)
+static int tisp_ccm_ev_update(void)
 {
 	uint32_t *s0;
 	uint32_t *a0;
@@ -54225,7 +54245,7 @@ int tisp_ccm_ev_update(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002336c origin=fragment_seed original=tisp_ccm_ct_update */
-int tisp_ccm_ct_update(uint32_t arg1)
+static int tisp_ccm_ct_update(uint32_t arg1)
 {
     uint32_t ccm_ct_value_old_1;
     uint32_t diff;
@@ -54280,7 +54300,7 @@ int tiziano_ccm_params_refresh(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000023564 origin=fragment_seed original=tisp_ccm_wdr_en */
-int32_t tisp_ccm_wdr_en(void)
+static int32_t tisp_ccm_wdr_en(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -54305,7 +54325,7 @@ int32_t tiziano_ccm_dn_params_refresh(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000235b0 origin=fragment_seed original=tiziano_ccm_init */
-int32_t tiziano_ccm_init(void)
+static int32_t tiziano_ccm_init(void)
 {
     uintptr_t *s0;
     uintptr_t *s1;
@@ -54366,14 +54386,14 @@ int32_t tiziano_ccm_init(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000236e4 origin=model_output original=tisp_ccm_get_attr */
-int32_t tisp_ccm_get_attr(void *a0, void *a1, void *a2, void *a3, void *a4, void *a5)
+static int32_t tisp_ccm_get_attr(void *a0, void *a1, void *a2, void *a3, void *a4, void *a5)
 {
     /* one-off compile triage stub for malformed recovered body */
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000023700 origin=fragment_seed original=tisp_ccm_set_attr */
-char *tisp_ccm_set_attr(uint32_t a0, uint32_t a1)
+static char *tisp_ccm_set_attr(uint32_t a0, uint32_t a1)
 {
     uint32_t *s0;
     uint32_t *s1;
@@ -54470,7 +54490,7 @@ tisp_ccm_set_attr_0x1cc:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000023908 origin=fragment_seed original=tisp_ccm_param_array_get */
-int32_t tisp_ccm_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2)
+static int32_t tisp_ccm_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -54556,7 +54576,7 @@ int32_t tisp_ccm_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000023aec origin=fragment_seed original=tisp_ccm_param_array_set */
-int32_t tisp_ccm_param_array_set(uint32_t a0, uint32_t a1)
+static int32_t tisp_ccm_param_array_set(uint32_t a0, uint32_t a1)
 {
     uint32_t *local_14 = 0;
     uint32_t *local_18 = 0;
@@ -54648,7 +54668,7 @@ uint32_t tiziano_bcsh_StrenCal_part_0(int32_t arg1, int32_t arg2, int32_t arg3, 
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000023c9c origin=model_output original=tiziano_bcsh_dump2 */
-int32_t tiziano_bcsh_dump2(int32_t *arg1, int32_t *arg2, int32_t *arg3,
+static int32_t tiziano_bcsh_dump2(int32_t *arg1, int32_t *arg2, int32_t *arg3,
                            int32_t *arg4, int32_t *arg5, int32_t *arg6,
                            int32_t *arg7, int32_t *arg8, int32_t *arg9,
                            int32_t *arg10, int32_t *arg11, int32_t *arg12,
@@ -55646,7 +55666,7 @@ uint32_t tiziano_ct_bcsh_interpolation(uint32_t ct)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000024bc4 origin=fragment_seed original=tisp_bcsh_wdr_en */
-int32_t tisp_bcsh_wdr_en(void)
+static int32_t tisp_bcsh_wdr_en(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -57083,7 +57103,7 @@ int32_t tisp_bcsh_ct_update(uintptr_t ignored, uint32_t ct)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000268f8 origin=fragment_seed original=tiziano_bcsh_dump */
-int32_t tiziano_bcsh_dump(void)
+static int32_t tiziano_bcsh_dump(void)
 {
     uint32_t *v0;
 
@@ -57305,7 +57325,7 @@ int32_t tiziano_bcsh_init(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000027288 origin=fragment_seed original=tisp_bcsh_param_array_get */
-int32_t tisp_bcsh_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2)
+static int32_t tisp_bcsh_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -57503,7 +57523,7 @@ int32_t tisp_bcsh_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000277ec origin=fragment_seed original=tisp_bcsh_param_array_set */
-int32_t tisp_bcsh_param_array_set(uint32_t a0, uint32_t a1)
+static int32_t tisp_bcsh_param_array_set(uint32_t a0, uint32_t a1)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -57664,7 +57684,7 @@ int32_t tisp_bcsh_param_array_set(uint32_t a0, uint32_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000027b84 origin=fragment_seed original=tisp_bcsh_set_mjpeg_contrast */
-int tisp_bcsh_set_mjpeg_contrast(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3)
+static int tisp_bcsh_set_mjpeg_contrast(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3)
 {
     (void)a0;
     s_bcsh_mjpeg_mode = (uint8_t)a1;
@@ -57720,19 +57740,19 @@ uint8_t tisp_bcsh_g_hue(uint32_t a0, uintptr_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000027ca8 origin=fragment_seed original=tisp_bcsh_g_brightness */
-uint32_t tisp_bcsh_g_brightness(void)
+static uint32_t tisp_bcsh_g_brightness(void)
 {
     return bcsh_brightness;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000027cb4 origin=fragment_seed original=tisp_bcsh_g_saturation */
-uint32_t tisp_bcsh_g_saturation(void)
+static uint32_t tisp_bcsh_g_saturation(void)
 {
     return bcsh_saturation;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000027cc0 origin=fragment_seed original=tisp_bcsh_g_contrast */
-uint32_t tisp_bcsh_g_contrast(void)
+static uint32_t tisp_bcsh_g_contrast(void)
 {
     return bcsh_contrast;
 }
@@ -57748,7 +57768,7 @@ int32_t tisp_bcsh_get_attr(uintptr_t context, void *out)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000027ce8 origin=fragment_seed original=tisp_bcsh_set_attr */
-int32_t tisp_bcsh_set_attr(uintptr_t context, const void *in)
+static int32_t tisp_bcsh_set_attr(uintptr_t context, const void *in)
 {
     static const uint32_t identity[9] = {
         0x400, 0, 0,
@@ -57780,7 +57800,7 @@ int32_t tisp_bcsh_set_attr(uintptr_t context, const void *in)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000027ee8 origin=model_output original=tisp_bcsh_s_rgb_coefft */
-int32_t tisp_bcsh_s_rgb_coefft(int32_t arg1, int16_t *arg2)
+static int32_t tisp_bcsh_s_rgb_coefft(int32_t arg1, int16_t *arg2)
 {
 	/* zx.d is a zero-extension builtin/macro, not a direct call */
 	((void **)tisp_BCSH_au32OffsetRGB_now)[0] = (uint32_t)(uint16_t)arg2[0];
@@ -58089,7 +58109,7 @@ int32_t tisp_dpc_refresh(uint32_t arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000028d48 origin=fragment_seed original=tisp_dpc_param_array_get */
-int32_t tisp_dpc_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2)
+static int32_t tisp_dpc_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -58247,7 +58267,7 @@ int32_t tisp_dpc_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002916c origin=fragment_seed original=tisp_dpc_param_array_set */
-int32_t tisp_dpc_param_array_set(uint32_t a0, uint32_t a1)
+static int32_t tisp_dpc_param_array_set(uint32_t a0, uint32_t a1)
 {
     uint32_t *local_14 = 0;
     uint32_t *local_18 = 0;
@@ -58608,7 +58628,7 @@ int tiziano_dpc_init(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000299bc origin=fragment_seed original=tisp_g_dpc_str_internal */
-uint32_t tisp_g_dpc_str_internal(uint32_t a0, uintptr_t a1)
+static uint32_t tisp_g_dpc_str_internal(uint32_t a0, uintptr_t a1)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -58677,14 +58697,14 @@ int32_t tisp_ydns_intp(uint32_t a0)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000029cb0 origin=model_output original=tisp_ydns_all_reg_refresh */
-int32_t tisp_ydns_all_reg_refresh(int32_t arg1) {
+static int32_t tisp_ydns_all_reg_refresh(int32_t arg1) {
     tisp_ydns_intp(arg1);
     tisp_ydns_param_cfg();
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000029ce8 origin=model_output original=tisp_ydns_intp_reg_refresh */
-int32_t tisp_ydns_intp_reg_refresh(int32_t arg1)
+static int32_t tisp_ydns_intp_reg_refresh(int32_t arg1)
 {
 	tisp_ydns_intp(arg1);
 	tisp_ydns_param_cfg();
@@ -58712,7 +58732,7 @@ int32_t tisp_ydns_par_refresh(uint32_t gain_q16)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000029d80 origin=model_output original=tisp_ydns_gain_update */
-int32_t tisp_ydns_gain_update(uint32_t arg1)
+static int32_t tisp_ydns_gain_update(uint32_t arg1)
 {
     tisp_ydns_par_refresh(arg1);
     return 0;
@@ -58792,13 +58812,13 @@ int32_t tiziano_ydns_init(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000029fd0 origin=model_output original=tisp_ydns_refresh */
-int32_t tisp_ydns_refresh(uint32_t arg1)
+static int32_t tisp_ydns_refresh(uint32_t arg1)
 {
     return tisp_ydns_par_refresh(arg1);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000029ff8 origin=fragment_seed original=tisp_ydns_param_array_get */
-int32_t tisp_ydns_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2)
+static int32_t tisp_ydns_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -58892,7 +58912,7 @@ int32_t tisp_ydns_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002a21c origin=fragment_seed original=tisp_ydns_param_array_set */
-int32_t tisp_ydns_param_array_set(uint32_t a0, uint32_t a1)
+static int32_t tisp_ydns_param_array_set(uint32_t a0, uint32_t a1)
 {
     uint32_t *local_14 = 0;
     uint32_t *local_18 = 0;
@@ -58968,7 +58988,7 @@ int32_t tisp_ydns_param_array_set(uint32_t a0, uint32_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002a390 origin=fragment_seed original=subsection_map */
-int32_t subsection_map(int32_t target, int32_t mapped_value,
+static int32_t subsection_map(int32_t target, int32_t mapped_value,
                        int32_t blend_percent, int16_t *gamma_x,
                        int16_t *gamma_y, int32_t *lookup,
                        int32_t bins, int32_t output_precision,
@@ -59060,7 +59080,7 @@ int32_t subsection_map(int32_t target, int32_t mapped_value,
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002a5fc origin=fragment_seed original=subsection */
-int32_t subsection(int32_t *arg1, int32_t arg2, int16_t *arg3, int16_t *arg4, int32_t *arg5, int32_t arg6, int32_t arg7, int32_t arg8, int32_t arg9)
+static int32_t subsection(int32_t *arg1, int32_t arg2, int16_t *arg3, int16_t *arg4, int32_t *arg5, int32_t arg6, int32_t arg7, int32_t arg8, int32_t arg9)
 {
     int32_t *s4 = arg1;
     int16_t *s0 = arg3;
@@ -59218,7 +59238,7 @@ int32_t subsection(int32_t *arg1, int32_t arg2, int16_t *arg3, int16_t *arg4, in
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002abcc origin=fragment_seed original=subsection_up */
-int32_t subsection_up(int32_t *output, const uint32_t *targets,
+static int32_t subsection_up(int32_t *output, const uint32_t *targets,
                       const int32_t *lookup, int32_t scale)
 {
     int32_t result = 0;
@@ -59260,7 +59280,7 @@ int32_t subsection_up(int32_t *output, const uint32_t *targets,
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002acc0 origin=model_output original=subsection_light */
-int32_t subsection_light(void *arg1, void *arg2, int32_t arg3, int32_t *arg4) {
+static int32_t subsection_light(void *arg1, void *arg2, int32_t arg3, int32_t *arg4) {
     int *i = 0;
     int32_t *t0 = 0;
     int32_t *result;
@@ -59343,14 +59363,14 @@ int32_t subsection_light(void *arg1, void *arg2, int32_t arg3, int32_t *arg4) {
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002ad7c origin=fragment_seed original=Tiziano_adr_fpga */
-int32_t Tiziano_adr_fpga(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t arg4, uintptr_t arg5, uintptr_t arg6, uintptr_t arg7, uintptr_t arg8, uintptr_t arg9, uintptr_t arg10, uintptr_t arg11, uintptr_t arg12, uintptr_t arg13, uintptr_t arg14, uintptr_t arg15)
+static int32_t Tiziano_adr_fpga(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t arg4, uintptr_t arg5, uintptr_t arg6, uintptr_t arg7, uintptr_t arg8, uintptr_t arg9, uintptr_t arg10, uintptr_t arg11, uintptr_t arg12, uintptr_t arg13, uintptr_t arg14, uintptr_t arg15)
 {
     /* one-off compile triage stub for malformed recovered body */
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002dfa4 origin=model_output original=interpolate_adr_x8_y12 */
-int32_t interpolate_adr_x8_y12(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5)
+static int32_t interpolate_adr_x8_y12(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5)
 {
     int32_t range = arg2 - arg1;
     int64_t scaled;
@@ -63535,7 +63555,7 @@ int32_t *tisp_defog_ev_update(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003543c origin=fragment_seed original=tiziano_defog_get_data */
-int32_t* tiziano_defog_get_data(uintptr_t a0)
+static int32_t* tiziano_defog_get_data(uintptr_t a0)
 {
     uintptr_t *a1 = 0;
     uint32_t *a2 = 0;
@@ -63711,7 +63731,7 @@ int32_t tiziano_defog_interrupt_static(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003576c origin=fragment_seed original=tisp_defog_max_filter3 */
-char tisp_defog_max_filter3(uintptr_t a0, uint32_t a1)
+static char tisp_defog_max_filter3(uintptr_t a0, uint32_t a1)
 {
     uint8_t *input = (uint8_t *)a0;
     uint8_t *output = (uint8_t *)(uintptr_t)a1;
@@ -63932,7 +63952,7 @@ tisp_defog_max_filter30x104:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000358a4 origin=fragment_seed original=tisp_defog_img_filter5 */
-char tisp_defog_img_filter5(uintptr_t a0, uint32_t a1, uintptr_t a2)
+static char tisp_defog_img_filter5(uintptr_t a0, uint32_t a1, uintptr_t a2)
 {
     uint8_t *input = (uint8_t *)a0;
     uint8_t *output = (uint8_t *)(uintptr_t)a1;
@@ -64138,14 +64158,14 @@ tisp_defog_img_filter50x114:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000359f8 origin=fragment_seed original=tisp_defog_soft_process */
-int32_t tisp_defog_soft_process(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t arg4, uintptr_t arg5, uintptr_t arg6, uintptr_t arg7, uintptr_t arg8, uintptr_t arg9, uintptr_t arg10, uintptr_t arg11, uintptr_t arg12, uintptr_t arg13, uintptr_t arg14, uintptr_t arg15, uintptr_t arg16, uintptr_t arg17, uintptr_t arg18, uintptr_t arg19, uintptr_t arg20, uintptr_t arg21, uintptr_t arg22, uintptr_t arg23)
+static int32_t tisp_defog_soft_process(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t arg4, uintptr_t arg5, uintptr_t arg6, uintptr_t arg7, uintptr_t arg8, uintptr_t arg9, uintptr_t arg10, uintptr_t arg11, uintptr_t arg12, uintptr_t arg13, uintptr_t arg14, uintptr_t arg15, uintptr_t arg16, uintptr_t arg17, uintptr_t arg18, uintptr_t arg19, uintptr_t arg20, uintptr_t arg21, uintptr_t arg22, uintptr_t arg23)
 {
     /* one-off compile triage stub for malformed recovered body */
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000036b7c origin=fragment_seed original=tiziano_defog_algorithm */
-int32_t tiziano_defog_algorithm(void)
+static int32_t tiziano_defog_algorithm(void)
 {
     uint32_t *local_10 = 0;
     uint32_t local_60 = 0;
@@ -66124,7 +66144,7 @@ int32_t tisp_defog_param_array_set(int32_t arg1, int32_t arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003ab74 origin=model_output original=defog_itp */
-int32_t defog_itp(int32_t arg1, int32_t arg2, int32_t arg3)
+static int32_t defog_itp(int32_t arg1, int32_t arg2, int32_t arg3)
 {
     if (arg1 < 0x80)
         return (arg1 * arg3 + (0x80 - arg1) * 100) >> 7;
@@ -66276,7 +66296,7 @@ store_results:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003ae38 origin=model_output original=tisp_clm_sort_ct_list */
-int32_t tisp_clm_sort_ct_list(int32_t *arg1)
+static int32_t tisp_clm_sort_ct_list(int32_t *arg1)
 {
     int *i = 0;
     int32_t v0 = arg1[0];
@@ -66569,7 +66589,7 @@ int32_t tisp_clm_ct_update(int32_t ignored, uint32_t ct)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003b76c origin=fragment_seed original=tiziano_clm_init */
-int32_t tiziano_clm_init(void)
+static int32_t tiziano_clm_init(void)
 {
     int32_t ret = tiziano_clm_params_refresh();
 
@@ -66580,7 +66600,7 @@ int32_t tiziano_clm_init(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003b7c0 origin=model_output original=tisp_clm_param_array_get */
-int32_t tisp_clm_param_array_get(int32_t arg1, int32_t *arg2, int32_t *arg3) {
+static int32_t tisp_clm_param_array_get(int32_t arg1, int32_t *arg2, int32_t *arg3) {
 	*arg3 = 0;
 	memcpy(arg2, &tiziano_clm_h_a_lut, 0x41a);
 	*arg3 += 0x41a;
@@ -66602,7 +66622,7 @@ int32_t tisp_clm_param_array_get(int32_t arg1, int32_t *arg2, int32_t *arg3) {
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003b904 origin=fragment_seed original=tisp_clm_param_array_set */
-int32_t tisp_clm_param_array_set(uint32_t a0, uint32_t a1)
+static int32_t tisp_clm_param_array_set(uint32_t a0, uint32_t a1)
 {
     uint32_t *local_14 = 0;
     uint32_t *local_18 = 0;
@@ -66660,7 +66680,7 @@ int32_t tisp_clm_param_array_set(uint32_t a0, uint32_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003ba00 origin=model_output original=tisp_sdns_grad_thres_opt_cfg */
-int32_t tisp_sdns_grad_thres_opt_cfg(void)
+static int32_t tisp_sdns_grad_thres_opt_cfg(void)
 {
 	uint32_t data_c363c = sdns_aa_mv_det_opt[1];
 	uint32_t data_c3638 = sdns_aa_mv_det_opt[0];
@@ -66674,7 +66694,7 @@ int32_t tisp_sdns_grad_thres_opt_cfg(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003ba9c origin=fragment_seed original=tisp_sdns_h_mv_wei_opt_cfg */
-int32_t tisp_sdns_h_mv_wei_opt_cfg(void)
+static int32_t tisp_sdns_h_mv_wei_opt_cfg(void)
 {
     uint32_t *local_14 = 0;
     uintptr_t *a0 = 0;
@@ -66699,7 +66719,7 @@ int32_t tisp_sdns_h_mv_wei_opt_cfg(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003baf4 origin=fragment_seed original=tisp_sdns_mv_seg_number_num_thres_cfg */
-int32_t tisp_sdns_mv_seg_number_num_thres_cfg(void)
+static int32_t tisp_sdns_mv_seg_number_num_thres_cfg(void)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -66732,7 +66752,7 @@ int32_t tisp_sdns_mv_seg_number_num_thres_cfg(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003bb7c origin=fragment_seed original=tisp_sdns_g_det_val_div_cfg */
-int32_t tisp_sdns_g_det_val_div_cfg(void)
+static int32_t tisp_sdns_g_det_val_div_cfg(void)
 {
     uint32_t *local_14 = 0;
     uint32_t *a0 = 0;
@@ -66760,7 +66780,7 @@ int32_t tisp_sdns_g_det_val_div_cfg(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003bbbc origin=fragment_seed original=tisp_sdns_r_s_mv_cfg */
-int32_t tisp_sdns_r_s_mv_cfg(void)
+static int32_t tisp_sdns_r_s_mv_cfg(void)
 {
     uint32_t *local_14 = 0;
     uint32_t *local_18 = 0;
@@ -66837,7 +66857,7 @@ int32_t tisp_sdns_r_s_mv_cfg(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003bd64 origin=model_output original=tisp_sdns_h_s_cfg */
-int32_t tisp_sdns_h_s_cfg(void)
+static int32_t tisp_sdns_h_s_cfg(void)
 {
     system_reg_write(0x885c,
         (uint32_t)sdns_h_s_1_intp |
@@ -66863,7 +66883,7 @@ int32_t tisp_sdns_h_s_cfg(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003be8c origin=model_output original=tisp_sdns_h_mv_cfg */
-int32_t tisp_sdns_h_mv_cfg(void) {
+static int32_t tisp_sdns_h_mv_cfg(void) {
 	system_reg_write(0x886c, sdns_h_mv_2_intp << 8 | sdns_h_mv_3_intp << 0x10 | sdns_h_mv_1_intp | sdns_h_mv_4_intp << 0x18);
 	system_reg_write(0x8870, sdns_h_mv_6_intp << 8 | sdns_h_mv_7_intp << 0x10 | sdns_h_mv_5_intp | sdns_h_mv_8_intp << 0x18);
 	system_reg_write(0x8874, sdns_h_mv_10_intp << 8 | sdns_h_mv_11_intp << 0x10 | sdns_h_mv_9_intp | sdns_h_mv_12_intp << 0x18);
@@ -66872,7 +66892,7 @@ int32_t tisp_sdns_h_mv_cfg(void) {
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003bfb4 origin=model_output original=tisp_sdns_dark_light_tt_opt_cfg */
-int32_t tisp_sdns_dark_light_tt_opt_cfg(void) {
+static int32_t tisp_sdns_dark_light_tt_opt_cfg(void) {
     int32_t combined;
     combined = (sdns_light_thres_intp << 8)
              | (sdns_h_val_max << 0x10)
@@ -66883,7 +66903,7 @@ int32_t tisp_sdns_dark_light_tt_opt_cfg(void) {
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003c014 origin=fragment_seed original=tisp_sdns_d_s1_thres_cfg */
-int32_t tisp_sdns_d_s1_thres_cfg(void)
+static int32_t tisp_sdns_d_s1_thres_cfg(void)
 {
     uint32_t *local_14 = 0;
     uint32_t *local_18 = 0;
@@ -66936,7 +66956,7 @@ int32_t tisp_sdns_d_s1_thres_cfg(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003c100 origin=fragment_seed original=tisp_sdns_w_thres_cfg */
-int32_t tisp_sdns_w_thres_cfg(void)
+static int32_t tisp_sdns_w_thres_cfg(void)
 {
     uint32_t *local_14 = 0;
     uint32_t *local_18 = 0;
@@ -66989,7 +67009,7 @@ int32_t tisp_sdns_w_thres_cfg(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003c1f8 origin=fragment_seed original=tisp_sdns_hls_en_ave_filter_cfg */
-int32_t tisp_sdns_hls_en_ave_filter_cfg(void)
+static int32_t tisp_sdns_hls_en_ave_filter_cfg(void)
 {
     uint32_t *local_14 = 0;
     uintptr_t *a0 = 0;
@@ -67014,7 +67034,7 @@ int32_t tisp_sdns_hls_en_ave_filter_cfg(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003c254 origin=fragment_seed original=tisp_sdns_gaussian_y_cfg */
-int32_t tisp_sdns_gaussian_y_cfg(void)
+static int32_t tisp_sdns_gaussian_y_cfg(void)
 {
 	system_reg_write(0x88c4, 0x2999a);
 	system_reg_write(0x88c8, 0x1999a);
@@ -67023,7 +67043,7 @@ int32_t tisp_sdns_gaussian_y_cfg(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003c2ac origin=fragment_seed original=tisp_sdns_gaussian_x_cfg */
-int32_t tisp_sdns_gaussian_x_cfg(void)
+static int32_t tisp_sdns_gaussian_x_cfg(void)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -67145,7 +67165,7 @@ int32_t tisp_sdns_gaussian_x_cfg(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003c4d4 origin=fragment_seed original=tisp_sdns_gaussian_k_cfg */
-int32_t tisp_sdns_gaussian_k_cfg(void)
+static int32_t tisp_sdns_gaussian_k_cfg(void)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -67363,7 +67383,7 @@ int32_t tisp_sdns_gaussian_k_cfg(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003c7fc origin=fragment_seed original=tisp_sdns_h_line_cfg */
-int32_t tisp_sdns_h_line_cfg(void)
+static int32_t tisp_sdns_h_line_cfg(void)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -67401,7 +67421,7 @@ int32_t tisp_sdns_h_line_cfg(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003c864 origin=fragment_seed original=tisp_sdns_sp_std_en_seg_opt_cfg */
-int32_t tisp_sdns_sp_std_en_seg_opt_cfg(void)
+static int32_t tisp_sdns_sp_std_en_seg_opt_cfg(void)
 {
     uint32_t *local_14 = 0;
     uint32_t *a0 = 0;
@@ -67429,7 +67449,7 @@ int32_t tisp_sdns_sp_std_en_seg_opt_cfg(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003c8a4 origin=fragment_seed original=tisp_sdns_sp_uu_cfg */
-int32_t tisp_sdns_sp_uu_cfg(void)
+static int32_t tisp_sdns_sp_uu_cfg(void)
 {
     uint32_t *local_14 = 0;
     uint32_t *local_18 = 0;
@@ -67470,7 +67490,7 @@ int32_t tisp_sdns_sp_uu_cfg(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003c978 origin=model_output original=tisp_sdns_sp_v2_d_w_b_ll_hl_flat_cfg */
-int32_t tisp_sdns_sp_v2_d_w_b_ll_hl_flat_cfg(void)
+static int32_t tisp_sdns_sp_v2_d_w_b_ll_hl_flat_cfg(void)
 {
     uint32_t *slope = (uint32_t *)(void *)sdns_sp_d_v2_sigma_win5_slope;
     uint32_t *flat = (uint32_t *)(void *)sdns_sp_d_wbhl_flat;
@@ -67501,7 +67521,7 @@ int32_t tisp_sdns_sp_v2_d_w_b_ll_hl_flat_cfg(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003caec origin=model_output original=tisp_sdns_sp_ud_v2_v1_coef_w_wei_opt_cfg */
-int32_t tisp_sdns_sp_ud_v2_v1_coef_w_wei_opt_cfg(void)
+static int32_t tisp_sdns_sp_ud_v2_v1_coef_w_wei_opt_cfg(void)
 {
 	/* s0 points into sdns_sp_ud_v2_1_coef */
 	const uint16_t *coef = sdns_sp_ud_v2_1_coef;
@@ -67536,7 +67556,7 @@ int32_t tisp_sdns_sp_ud_v2_v1_coef_w_wei_opt_cfg(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003cb94 origin=fragment_seed original=tisp_sdns_sp_ud_w_stren_cfg */
-int32_t tisp_sdns_sp_ud_w_stren_cfg(void)
+static int32_t tisp_sdns_sp_ud_w_stren_cfg(void)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -67566,7 +67586,7 @@ int32_t tisp_sdns_sp_ud_w_stren_cfg(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003cbfc origin=fragment_seed original=tisp_sdns_sp_ud_w_limit_b_wei_opt_cfg */
-int32_t tisp_sdns_sp_ud_w_limit_b_wei_opt_cfg(void)
+static int32_t tisp_sdns_sp_ud_w_limit_b_wei_opt_cfg(void)
 {
     uint32_t *local_14 = 0;
     uint32_t *a0 = 0;
@@ -67594,7 +67614,7 @@ int32_t tisp_sdns_sp_ud_w_limit_b_wei_opt_cfg(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003cc3c origin=model_output original=tisp_sdns_sp_ud_b_stren_cfg */
-int32_t tisp_sdns_sp_ud_b_stren_cfg(void)
+static int32_t tisp_sdns_sp_ud_b_stren_cfg(void)
 {
 	system_reg_write(0x8ab0, sdns_sp_ud_b_sp_stren_1_intp << 0x10 | sdns_sp_ud_b_sp_stren_0_intp);
 	system_reg_write(0x8ab4, sdns_sp_ud_b_sp_stren_3_intp << 0x10 | sdns_sp_ud_b_sp_stren_2_intp);
@@ -67602,7 +67622,7 @@ int32_t tisp_sdns_sp_ud_b_stren_cfg(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003cca4 origin=fragment_seed original=tisp_sdns_sp_ud_b_limit_srd_ll_hl_flat_cfg */
-int32_t tisp_sdns_sp_ud_b_limit_srd_ll_hl_flat_cfg(void)
+static int32_t tisp_sdns_sp_ud_b_limit_srd_ll_hl_flat_cfg(void)
 {
     uint32_t *local_14 = 0;
     uint32_t *local_18 = 0;
@@ -67640,7 +67660,7 @@ int32_t tisp_sdns_sp_ud_b_limit_srd_ll_hl_flat_cfg(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003cd70 origin=fragment_seed original=tisp_sdns_sp_ud_stren_shift_opt_cfg */
-int32_t tisp_sdns_sp_ud_stren_shift_opt_cfg(void)
+static int32_t tisp_sdns_sp_ud_stren_shift_opt_cfg(void)
 {
     uint32_t *local_14 = 0;
     uint32_t *a0 = 0;
@@ -67664,7 +67684,7 @@ int32_t tisp_sdns_sp_ud_stren_shift_opt_cfg(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003cda0 origin=model_output original=tisp_sdns_sp_uu_np_array_cfg */
-int32_t tisp_sdns_sp_uu_np_array_cfg(void)
+static int32_t tisp_sdns_sp_uu_np_array_cfg(void)
 {
 	uint32_t *s0 = sdns_sp_uu_np_array;
 	system_reg_write(0x8acc, s0[1] << 8 | s0[2] << 16 | s0[0] | s0[3] << 18);
@@ -67675,7 +67695,7 @@ int32_t tisp_sdns_sp_uu_np_array_cfg(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003ce98 origin=fragment_seed original=tisp_sdns_sp_d_w_wei_np_array_cfg */
-int32_t tisp_sdns_sp_d_w_wei_np_array_cfg(void)
+static int32_t tisp_sdns_sp_d_w_wei_np_array_cfg(void)
 {
     uint32_t *local_14 = 0;
     uint32_t *local_18 = 0;
@@ -67722,7 +67742,7 @@ int32_t tisp_sdns_sp_d_w_wei_np_array_cfg(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003cfd8 origin=fragment_seed original=tisp_sdns_sp_d_b_wei_np_array_cfg */
-int32_t tisp_sdns_sp_d_b_wei_np_array_cfg(void)
+static int32_t tisp_sdns_sp_d_b_wei_np_array_cfg(void)
 {
 	uint32_t *v0;
 	uint32_t v1;
@@ -67802,7 +67822,7 @@ int32_t tisp_sdns_sp_d_b_wei_np_array_cfg(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003d118 origin=fragment_seed original=tisp_sdns_sp_ud_w_wei_np_array_cfg */
-int32_t tisp_sdns_sp_ud_w_wei_np_array_cfg(void)
+static int32_t tisp_sdns_sp_ud_w_wei_np_array_cfg(void)
 {
     uint32_t *s0;
     uint32_t *v0;
@@ -67881,7 +67901,7 @@ int32_t tisp_sdns_sp_ud_w_wei_np_array_cfg(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003d258 origin=fragment_seed original=tisp_sdns_sp_ud_b_wei_np_array_cfg */
-int32_t tisp_sdns_sp_ud_b_wei_np_array_cfg(void)
+static int32_t tisp_sdns_sp_ud_b_wei_np_array_cfg(void)
 {
     uint32_t *s0;
     uint32_t val;
@@ -68076,7 +68096,7 @@ int32_t tisp_sdns_refresh(uint32_t arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003df30 origin=fragment_seed original=tisp_sdns_param_array_get */
-int32_t tisp_sdns_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2)
+static int32_t tisp_sdns_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -68602,7 +68622,7 @@ int32_t tisp_sdns_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003eed4 origin=fragment_seed original=tisp_sdns_param_array_set */
-int32_t tisp_sdns_param_array_set(uint32_t a0, uint32_t a1)
+static int32_t tisp_sdns_param_array_set(uint32_t a0, uint32_t a1)
 {
     uint32_t *local_14 = 0;
     uint32_t *local_18 = 0;
@@ -70473,7 +70493,7 @@ tisp_s_sdns_ratio0xaa8:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000403b4 origin=manual_recovery original=tisp_sdns_wdr_en */
-int tisp_sdns_wdr_en(int enable)
+static int tisp_sdns_wdr_en(int enable)
 {
     uint32_t ratio;
 
@@ -71192,7 +71212,7 @@ int32_t tiziano_sharpen_dn_params_refresh(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000042b94 origin=fragment_seed original=tisp_sharpen_param_array_get */
-int32_t tisp_sharpen_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2)
+static int32_t tisp_sharpen_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -71422,7 +71442,7 @@ int32_t tisp_sharpen_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000431f8 origin=fragment_seed original=tisp_sharpen_param_array_set */
-int32_t tisp_sharpen_param_array_set(uint32_t a0, uint32_t a1)
+static int32_t tisp_sharpen_param_array_set(uint32_t a0, uint32_t a1)
 {
     uint32_t *local_14 = 0;
     uint32_t *local_18 = 0;
@@ -71634,7 +71654,7 @@ int32_t tisp_hldc_con_par_cfg(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000043740 origin=model_output original=tisp_hldc_strength_adjust_k */
-int16_t tisp_hldc_strength_adjust_k(char arg1, int16_t *arg2, int16_t *arg3)
+static int16_t tisp_hldc_strength_adjust_k(char arg1, int16_t *arg2, int16_t *arg3)
 {
     uint32_t strength = (uint8_t)arg1;
     uint32_t index = strength >> 5;
@@ -71649,7 +71669,7 @@ int16_t tisp_hldc_strength_adjust_k(char arg1, int16_t *arg2, int16_t *arg3)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000043818 origin=model_output original=tisp_hldc_para_validity_judge */
-int32_t tisp_hldc_para_validity_judge(int32_t arg1, int32_t arg2)
+static int32_t tisp_hldc_para_validity_judge(int32_t arg1, int32_t arg2)
 {
     int32_t discriminant;
 
@@ -71665,7 +71685,7 @@ int32_t tisp_hldc_para_validity_judge(int32_t arg1, int32_t arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004389c origin=model_output original=tisp_hldc_quadratic_func */
-int32_t tisp_hldc_quadratic_func(int32_t arg1, int32_t arg2, int32_t arg3,
+static int32_t tisp_hldc_quadratic_func(int32_t arg1, int32_t arg2, int32_t arg3,
                                   int32_t arg4, int32_t arg5, int32_t arg6) {
     /* v0 = arg5 * arg6 (32-bit signed multiply, result in lo) */
     int32_t *v0 = arg5 * arg6;
@@ -71766,7 +71786,7 @@ int32_t tisp_hldc_quadratic_func(int32_t arg1, int32_t arg2, int32_t arg3,
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000043928 origin=fragment_seed original=tisp_hldc_calc_para */
-int32_t tisp_hldc_calc_para(int32_t k1, int32_t k2, int32_t width,
+static int32_t tisp_hldc_calc_para(int32_t k1, int32_t k2, int32_t width,
                             int32_t height, int32_t center_x,
                             int32_t center_y, int32_t out[4])
 {
@@ -71821,7 +71841,7 @@ int32_t tisp_hldc_calc_para(int32_t k1, int32_t k2, int32_t width,
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000043b24 origin=fragment_seed original=tisp_hldc_par_refresh */
-int32_t tisp_hldc_par_refresh(uint32_t a0)
+static int32_t tisp_hldc_par_refresh(uint32_t a0)
 {
     tisp_hldc_con_par_cfg();
     if (a0 == 1)
@@ -71830,7 +71850,7 @@ int32_t tisp_hldc_par_refresh(uint32_t a0)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000043b70 origin=model_output original=tisp_hldc_set_attr */
-int32_t tisp_hldc_set_attr(int32_t arg1, const void *arg2)
+static int32_t tisp_hldc_set_attr(int32_t arg1, const void *arg2)
 {
     const uint8_t *attr = arg2;
     int16_t k1;
@@ -71881,7 +71901,7 @@ int32_t tisp_hldc_set_attr(int32_t arg1, const void *arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000043d5c origin=fragment_seed original=tisp_hldc_get_attr */
-int32_t tisp_hldc_get_attr(int32_t arg1, void *arg2)
+static int32_t tisp_hldc_get_attr(int32_t arg1, void *arg2)
 {
     (void)arg1;
     if (!arg2)
@@ -71891,7 +71911,7 @@ int32_t tisp_hldc_get_attr(int32_t arg1, void *arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000043d90 origin=fragment_seed original=tiziano_hldc_params_refresh */
-int32_t tiziano_hldc_params_refresh(void)
+static int32_t tiziano_hldc_params_refresh(void)
 {
     memcpy(hldc_con_par_array,
            tparams + T23_TPARAMS_ACTIVE_OFFSET + T23_TPARAMS_HLDC_OFFSET,
@@ -71900,7 +71920,7 @@ int32_t tiziano_hldc_params_refresh(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000043dc8 origin=fragment_seed original=tiziano_hldc_init */
-int32_t tiziano_hldc_init(void)
+static int32_t tiziano_hldc_init(void)
 {
     tiziano_hldc_params_refresh();
     tisp_hldc_con_par_cfg();
@@ -71909,7 +71929,7 @@ int32_t tiziano_hldc_init(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000043e10 origin=model_output original=tisp_hldc_param_array_get */
-int32_t tisp_hldc_param_array_get(int32_t arg1, int32_t *arg2, int32_t *arg3)
+static int32_t tisp_hldc_param_array_get(int32_t arg1, int32_t *arg2, int32_t *arg3)
 {
     (void)arg1;
     if (!arg2 || !arg3)
@@ -71920,7 +71940,7 @@ int32_t tisp_hldc_param_array_get(int32_t arg1, int32_t *arg2, int32_t *arg3)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000043e58 origin=fragment_seed original=tisp_hldc_param_array_set */
-int32_t tisp_hldc_param_array_set(int32_t arg1, const void *arg2)
+static int32_t tisp_hldc_param_array_set(int32_t arg1, const void *arg2)
 {
     (void)arg1;
     if (!arg2)
@@ -71932,7 +71952,7 @@ int32_t tisp_hldc_param_array_set(int32_t arg1, const void *arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000043eb0 origin=fragment_seed original=tisp_set_sensor_integration_time */
-void tisp_set_sensor_integration_time(uint32_t arg1)
+static void tisp_set_sensor_integration_time(uint32_t arg1)
 {
     uint32_t *var_38;
     uint16_t *var_28;
@@ -71989,7 +72009,7 @@ call_abc60:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000043fbc origin=fragment_seed original=tisp_set_sensor_integration_time_short */
-int32_t tisp_set_sensor_integration_time_short(uint32_t a0)
+static int32_t tisp_set_sensor_integration_time_short(uint32_t a0)
 {
     uint32_t *local_10 = 0;
     uint32_t local_22 = 0;
@@ -72092,7 +72112,7 @@ tisp_set_sensor_integration_time_short0xe4:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000440c4 origin=model_output original=tisp_set_sensor_analog_gain */
-uint32_t tisp_set_sensor_analog_gain(int32_t arg1)
+static uint32_t tisp_set_sensor_analog_gain(int32_t arg1)
 {
 	int16_t *var_28;
 	int32_t *ctrl = (int32_t *)&sensor_ctrl;
@@ -72123,7 +72143,7 @@ uint32_t tisp_set_sensor_analog_gain(int32_t arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000044148 origin=fragment_seed original=tisp_set_sensor_analog_gain_short */
-uint32_t tisp_set_sensor_analog_gain_short(uint32_t arg1)
+static uint32_t tisp_set_sensor_analog_gain_short(uint32_t arg1)
 {
     uint32_t log_result;
     uint32_t exp_result;
@@ -72138,7 +72158,7 @@ uint32_t tisp_set_sensor_analog_gain_short(uint32_t arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000441cc origin=fragment_seed original=tisp_set_sensor_digital_gain_short */
-uint32_t tisp_set_sensor_digital_gain_short(uint32_t arg1)
+static uint32_t tisp_set_sensor_digital_gain_short(uint32_t arg1)
 {
     uint32_t *var_28;
     uint32_t var_26;
@@ -72157,13 +72177,13 @@ uint32_t tisp_set_sensor_digital_gain_short(uint32_t arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000044250 origin=model_output original=tisp_set_sensor_digital_gain */
-uint32_t tisp_set_sensor_digital_gain(int32_t arg1)
+static uint32_t tisp_set_sensor_digital_gain(int32_t arg1)
 {
     return tisp_set_sensor_digital_gain_short((uint32_t)arg1);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000044260 origin=model_output original=JZ_Isp_Ae_Reg2par */
-int32_t JZ_Isp_Ae_Reg2par(int32_t *arg1, int32_t *arg2) {
+static int32_t JZ_Isp_Ae_Reg2par(int32_t *arg1, int32_t *arg2) {
     int *i = 0;
     int32_t v0 = arg2[0];
     int32_t *a2 = &arg2[5];
@@ -72213,7 +72233,7 @@ int32_t JZ_Isp_Ae_Reg2par(int32_t *arg1, int32_t *arg2) {
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000044378 origin=model_output original=JZ_Isp_Ae_Dg2reg */
-int32_t JZ_Isp_Ae_Dg2reg(int32_t arg1, int32_t *arg2, int32_t arg3, int32_t *arg4)
+static int32_t JZ_Isp_Ae_Dg2reg(int32_t arg1, int32_t *arg2, int32_t arg3, int32_t *arg4)
 {
 	int32_t r0 = fix_point_mult2_32(arg1, *arg4, arg3);
 	int32_t r1 = fix_point_mult2_32(arg1, arg4[1], arg3);
@@ -72224,7 +72244,7 @@ int32_t JZ_Isp_Ae_Dg2reg(int32_t arg1, int32_t *arg2, int32_t arg3, int32_t *arg
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000044408 origin=fragment_seed original=printf_func0 */
-int32_t printf_func0(uint32_t a0, uint32_t a1)
+static int32_t printf_func0(uint32_t a0, uint32_t a1)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -72550,7 +72570,7 @@ int printf_func1(uint32_t arg1, uint32_t arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000044828 origin=fragment_seed original=tisp_ae0_get_statistics */
-int tisp_ae0_get_statistics(void *buffer, uint32_t flags)
+static int tisp_ae0_get_statistics(void *buffer, uint32_t flags)
 {
     uint32_t *t6 = flags >> 28;
     uint32_t t2 = (uint32_t)&IspAeStatic;
@@ -72663,7 +72683,7 @@ ae0_interrupt_static0x98:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000449d8 origin=model_output original=tisp_ae1_get_statistics */
-int32_t tisp_ae1_get_statistics(int32_t *arg1, int32_t arg2)
+static int32_t tisp_ae1_get_statistics(int32_t *arg1, int32_t arg2)
 {
 	uint32_t t6 = (uint32_t)arg2 >> 0x1c;
 	int32_t *t0 = 0;
@@ -72702,7 +72722,7 @@ int32_t tisp_ae1_get_statistics(int32_t *arg1, int32_t arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000044ab0 origin=fragment_seed original=tisp_ae1_get_hist */
-void* tisp_ae1_get_hist(uintptr_t a0)
+static void* tisp_ae1_get_hist(uintptr_t a0)
 {
     uint32_t *a1 = 0;
     uint32_t *a2 = 0;
@@ -72742,7 +72762,7 @@ tisp_ae1_get_hist0x14:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000044af0 origin=fragment_seed original=tisp_ae0_get_hist */
-int tisp_ae0_get_hist(void *buffer, int mode, int flag)
+static int tisp_ae0_get_hist(void *buffer, int mode, int flag)
 {
     uint32_t *local_10 = 0;
     uintptr_t a0 = (uintptr_t)buffer;
@@ -73111,7 +73131,7 @@ int32_t ae0_interrupt_hist(void) {
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000044ec8 origin=fragment_seed original=tisp_ae_get_hist_custome */
-int32_t tisp_ae_get_hist_custome(uint32_t a0)
+static int32_t tisp_ae_get_hist_custome(uint32_t a0)
 {
     uint32_t *local_14 = 0;
     uint32_t *a1 = 0;
@@ -73152,7 +73172,7 @@ int32_t tisp_ae_set_hist_custome(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000044f38 origin=fragment_seed original=AePweightCalculate */
-int32_t AePweightCalculate(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3)
+static int32_t AePweightCalculate(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3)
 {
     uint32_t *local_14 = 0;
     uint32_t *local_18 = 0;
@@ -73215,7 +73235,7 @@ AePweightCalculate0xa0:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000044fe0 origin=fragment_seed original=ae0_weight_mean2 */
-int32_t ae0_weight_mean2(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t arg4, uintptr_t arg5, uint32_t arg6, uintptr_t arg7, uintptr_t arg8, uintptr_t arg9, uintptr_t arg10, uintptr_t arg11, uintptr_t arg12, uint32_t arg13, uint32_t arg14, uintptr_t arg15, uint32_t arg16, uint32_t arg17, uintptr_t arg18, uintptr_t arg19, uintptr_t arg20, uintptr_t arg21, uintptr_t arg22)
+static int32_t ae0_weight_mean2(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t arg4, uintptr_t arg5, uint32_t arg6, uintptr_t arg7, uintptr_t arg8, uintptr_t arg9, uintptr_t arg10, uintptr_t arg11, uintptr_t arg12, uint32_t arg13, uint32_t arg14, uintptr_t arg15, uint32_t arg16, uint32_t arg17, uintptr_t arg18, uintptr_t arg19, uintptr_t arg20, uintptr_t arg21, uintptr_t arg22)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -73738,7 +73758,7 @@ ae0_weight_mean20x438:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000454f8 origin=model_output original=tisp_ae_tune */
-int32_t tisp_ae_tune(int32_t *arg1, int32_t *arg2, int32_t *arg3, int32_t arg4, int32_t arg5, int32_t arg6)
+static int32_t tisp_ae_tune(int32_t *arg1, int32_t *arg2, int32_t *arg3, int32_t arg4, int32_t arg5, int32_t arg6)
 {
 	int32_t *s1 = *arg2;
 	int32_t *v0 = *arg1;
@@ -73768,7 +73788,7 @@ int32_t tisp_ae_tune(int32_t *arg1, int32_t *arg2, int32_t *arg3, int32_t arg4, 
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004560c origin=model_output original=tisp_ae_target */
-int32_t tisp_ae_target(int32_t arg1, int32_t *arg2, int32_t *arg3, int32_t arg4) {
+static int32_t tisp_ae_target(int32_t arg1, int32_t *arg2, int32_t *arg3, int32_t arg4) {
     uint32_t a0_val = (uint32_t)arg1;
     uint32_t a4_val = (uint32_t)arg4;
     uint32_t lo, hi;
@@ -73903,7 +73923,7 @@ label_45700:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000457e0 origin=fragment_seed original=ae0_tune2 */
-int64_t ae0_tune2(uintptr_t a0, uint32_t a1, uintptr_t a2, uintptr_t a3, uintptr_t arg4, uintptr_t arg5, uintptr_t arg6, uintptr_t arg7, uintptr_t arg8, uintptr_t arg9, uintptr_t arg10, uintptr_t arg11, uintptr_t arg12, uintptr_t arg13, uintptr_t arg14, uintptr_t arg15, uintptr_t arg16, uintptr_t arg17, uintptr_t arg18, uintptr_t arg19, uintptr_t arg20, uintptr_t arg21, uintptr_t arg22, uintptr_t arg23, uintptr_t arg24, uint32_t arg25, uintptr_t arg26, uint32_t arg27, uint32_t arg28, uint32_t arg29, uint32_t arg30, uint32_t arg31, uint32_t arg32)
+static int64_t ae0_tune2(uintptr_t a0, uint32_t a1, uintptr_t a2, uintptr_t a3, uintptr_t arg4, uintptr_t arg5, uintptr_t arg6, uintptr_t arg7, uintptr_t arg8, uintptr_t arg9, uintptr_t arg10, uintptr_t arg11, uintptr_t arg12, uintptr_t arg13, uintptr_t arg14, uintptr_t arg15, uintptr_t arg16, uintptr_t arg17, uintptr_t arg18, uintptr_t arg19, uintptr_t arg20, uintptr_t arg21, uintptr_t arg22, uintptr_t arg23, uintptr_t arg24, uint32_t arg25, uintptr_t arg26, uint32_t arg27, uint32_t arg28, uint32_t arg29, uint32_t arg30, uint32_t arg31, uint32_t arg32)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -76244,7 +76264,7 @@ ae0_tune20x17e8:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000046fdc origin=model_output original=tisp_ae_g_min */
-int32_t tisp_ae_g_min(int32_t arg1, int32_t *arg2)
+static int32_t tisp_ae_g_min(int32_t arg1, int32_t *arg2)
 {
 	int32_t *data = &IspAeExp[0];
 	((void **)arg2)[0] = data[4];
@@ -76253,7 +76273,7 @@ int32_t tisp_ae_g_min(int32_t arg1, int32_t *arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000047004 origin=fragment_seed original=tisp_ae_s_min */
-int32_t tisp_ae_s_min(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3)
+static int32_t tisp_ae_s_min(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -76360,7 +76380,7 @@ tisp_ae_s_min0x100:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000047124 origin=fragment_seed original=Tiziano_ae0_fpga */
-uint32_t* Tiziano_ae0_fpga(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t arg4, uintptr_t arg5, uintptr_t arg6, uint32_t arg7, uintptr_t arg8, uintptr_t arg9, uintptr_t arg10, uintptr_t arg11)
+static uint32_t* Tiziano_ae0_fpga(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t arg4, uintptr_t arg5, uintptr_t arg6, uint32_t arg7, uintptr_t arg8, uintptr_t arg9, uintptr_t arg10, uintptr_t arg11)
 {
     uint32_t *local_10 = 0;
     uint32_t local_48 = 0;
@@ -76807,7 +76827,7 @@ Tiziano_ae0_fpga0x378:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000474e8 origin=fragment_seed original=tisp_set_ae0_ag */
-uint32_t tisp_set_ae0_ag(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3)
+static uint32_t tisp_set_ae0_ag(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_18 = 0;
@@ -77002,7 +77022,7 @@ tisp_set_ae0_ag0x17c:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000476ac origin=fragment_seed original=tisp_set_ae1_ag */
-uint32_t tisp_set_ae1_ag(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3)
+static uint32_t tisp_set_ae1_ag(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_18 = 0;
@@ -77179,7 +77199,7 @@ tisp_set_ae1_ag0x154:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004783c origin=fragment_seed original=tisp_ae1_expt */
-int32_t tisp_ae1_expt(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t arg4, uintptr_t arg5, uintptr_t arg6, uintptr_t arg7, uintptr_t arg8, uintptr_t arg9, uintptr_t arg10)
+static int32_t tisp_ae1_expt(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t arg4, uintptr_t arg5, uintptr_t arg6, uintptr_t arg7, uintptr_t arg8, uintptr_t arg9, uintptr_t arg10)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -77784,7 +77804,7 @@ tisp_ae_mean_update0x68:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000047e60 origin=model_output original=ae1_weight_mean2 */
-void ae1_weight_mean2(void* arg1, void* arg2, void* arg3, void* arg4, void* arg5)
+static void ae1_weight_mean2(void* arg1, void* arg2, void* arg3, void* arg4, void* arg5)
 {
 	int32_t* a1 = (int32_t*)arg1;
 	int32_t* a2 = (int32_t*)arg2;
@@ -77822,7 +77842,7 @@ void ae1_weight_mean2(void* arg1, void* arg2, void* arg3, void* arg4, void* arg5
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000047f14 origin=model_output original=Tiziano_ae1_fpga */
-int32_t Tiziano_ae1_fpga(void *arg1, void *arg2, void *arg3, void *arg4) {
+static int32_t Tiziano_ae1_fpga(void *arg1, void *arg2, void *arg3, void *arg4) {
     volatile int32_t *v0 = 0;
     int32_t *i;
     
@@ -77835,7 +77855,7 @@ int32_t Tiziano_ae1_fpga(void *arg1, void *arg2, void *arg3, void *arg4) {
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000047f50 origin=fragment_seed original=tisp_ae0_ctrls_update */
-int32_t tisp_ae0_ctrls_update(void)
+static int32_t tisp_ae0_ctrls_update(void)
 {
     uint32_t *local_14 = 0;
     uint32_t *local_18 = 0;
@@ -78059,7 +78079,7 @@ tisp_ae0_ctrls_update0x188:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004813c origin=fragment_seed original=tisp_ae1_ctrls_update */
-int32_t tisp_ae1_ctrls_update(void)
+static int32_t tisp_ae1_ctrls_update(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -78074,7 +78094,7 @@ int32_t tisp_ae1_ctrls_update(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000048144 origin=fragment_seed original=ae1_interrupt_static */
-int32_t ae1_interrupt_static(void)
+static int32_t ae1_interrupt_static(void)
 {
     uint32_t bank_offset = (system_reg_read(0xa850U) << 8) & 0x3000U;
     uint32_t stats_base = *(uint32_t *)((char *)&tispinfo + 0x24);
@@ -78090,7 +78110,7 @@ int32_t ae1_interrupt_static(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000481d4 origin=fragment_seed original=ae1_interrupt_hist */
-int32_t ae1_interrupt_hist(void)
+static int32_t ae1_interrupt_hist(void)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_18 = 0;
@@ -78136,7 +78156,7 @@ int32_t ae1_interrupt_hist(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004826c origin=fragment_seed original=tiziano_ae_dump */
-int32_t tiziano_ae_dump(void)
+static int32_t tiziano_ae_dump(void)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -78466,7 +78486,7 @@ tiziano_ae_dump0x548:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000487bc origin=fragment_seed original=tiziano_ae_params_refresh */
-int32_t tiziano_ae_params_refresh(void)
+static int32_t tiziano_ae_params_refresh(void)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -78690,7 +78710,7 @@ tiziano_ae_params_refresh0x340:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000048bc0 origin=fragment_seed original=tiziano_ae_s_max_again */
-int tiziano_ae_s_max_again(uint32_t value)
+static int tiziano_ae_s_max_again(uint32_t value)
 {
     uint32_t *a3;
     uint32_t *v0;
@@ -78713,7 +78733,7 @@ tiziano_ae_s_max_again0x44:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000048c44 origin=fragment_seed original=tiziano_ae_s_max_isp_dgain */
-int32_t tiziano_ae_s_max_isp_dgain(uint32_t a0, uint32_t a1)
+static int32_t tiziano_ae_s_max_isp_dgain(uint32_t a0, uint32_t a1)
 {
     uint32_t *local_14 = 0;
     uint32_t *a2 = 0;
@@ -78744,7 +78764,7 @@ int32_t tiziano_ae_s_max_isp_dgain(uint32_t a0, uint32_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000048c90 origin=fragment_seed original=tisp_ae_s_at_list */
-int tisp_ae_s_at_list(uint32_t *in)
+static int tisp_ae_s_at_list(uint32_t *in)
 {
     uint32_t *p = in;
     uint32_t *dst = (uint32_t *)((char *)&tparams + 0x232a8);
@@ -78780,7 +78800,7 @@ int tisp_ae_g_at_list(int arg1, int arg2) {
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000048d10 origin=fragment_seed original=tiziano_deflicker_expt */
-int tiziano_deflicker_expt(uint32_t flicker_t, uint32_t param2, uint32_t param3, uint32_t param4, uint32_t *lut_array, uint32_t *nodes_count)
+static int tiziano_deflicker_expt(uint32_t flicker_t, uint32_t param2, uint32_t param3, uint32_t param4, uint32_t *lut_array, uint32_t *nodes_count)
 {
     uint32_t s0 = (uint32_t)&fix_point_div_32;
     uint32_t s1 = (uint32_t)nodes_count;
@@ -78893,14 +78913,14 @@ int tiziano_deflicker_expt(uint32_t flicker_t, uint32_t param2, uint32_t param3,
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000048eac origin=model_output original=tiziano_deflicker_expt_tune */
-int32_t tiziano_deflicker_expt_tune(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4)
+static int32_t tiziano_deflicker_expt_tune(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4)
 {
 	/* Pass addresses of _deflick_lut and _nodes_num as pointer args */
 	return tiziano_deflicker_expt(arg1, arg2, arg3, arg4, &_deflick_lut, &_nodes_num);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000048ee8 origin=model_output original=system_reg_write_ae */
-int32_t system_reg_write_ae(int32_t arg1, int32_t arg2, int32_t arg3) {
+static int32_t system_reg_write_ae(int32_t arg1, int32_t arg2, int32_t arg3) {
     if (arg1 == 1) {
         system_reg_write((const void *)0xa000, 1);
     } else if (arg1 == 2) {
@@ -78912,14 +78932,14 @@ int32_t system_reg_write_ae(int32_t arg1, int32_t arg2, int32_t arg3) {
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000048f74 origin=model_output original=tisp_ae1_process_impl */
-int tisp_ae1_process_impl(void)
+static int tisp_ae1_process_impl(void)
 {
     /* one-off compile triage stub for malformed recovered body */
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000493b8 origin=fragment_seed original=tiziano_ae_set_hardware_param */
-int32_t tiziano_ae_set_hardware_param(uint32_t arg1, uint32_t *arg2, uint32_t arg3)
+static int32_t tiziano_ae_set_hardware_param(uint32_t arg1, uint32_t *arg2, uint32_t arg3)
 {
 	uint32_t a1 = arg2[3] << 0x1c | arg2[2] << 0x10 | *arg2 | arg2[1] << 0xc;
 	uint32_t s5 = arg2[7] << 0x18 | arg2[6] << 0x10 | arg2[4] | arg2[5] << 8;
@@ -78979,7 +78999,7 @@ int32_t tiziano_ae_set_hardware_param(uint32_t arg1, uint32_t *arg2, uint32_t ar
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000496f0 origin=fragment_seed original=tiziano_ae_para_addr */
-int64_t tiziano_ae_para_addr(void)
+static int64_t tiziano_ae_para_addr(void)
 {
     uint32_t *a0 = 0;
     uint32_t *a1 = 0;
@@ -79238,7 +79258,7 @@ int32_t tiziano_ae_init_exp_th(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000049c54 origin=fragment_seed original=tisp_ae_wdr_en */
-int tisp_ae_wdr_en(int enable)
+static int tisp_ae_wdr_en(int enable)
 {
     uint32_t *v0;
     uint32_t v1;
@@ -79299,7 +79319,7 @@ int32_t tiziano_ae_init(uint32_t arg1, uint32_t arg2, uint32_t arg3)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004a12c origin=model_output original=tisp_ae_min_max_set */
-int32_t tisp_ae_min_max_set(int32_t arg0, int32_t arg1)
+static int32_t tisp_ae_min_max_set(int32_t arg0, int32_t arg1)
 {
     int32_t stack[2];
     ((void **)stack)[0] = arg0;
@@ -79308,7 +79328,7 @@ int32_t tisp_ae_min_max_set(int32_t arg0, int32_t arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004a13c origin=model_output original=tiziano_ae_s_ev_start */
-int32_t tiziano_ae_s_ev_start(int32_t arg1, uint32_t arg2)
+static int32_t tiziano_ae_s_ev_start(int32_t arg1, uint32_t arg2)
 {
     ae_ev_init_strict = (uintptr_t (*)())(uintptr_t)arg2;
     ae_ev_init_en = 1;
@@ -79345,7 +79365,7 @@ int32_t tisp_ae_state_get(uint32_t a0, uintptr_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004a180 origin=fragment_seed original=tisp_ae_manual_get */
-int32_t tisp_ae_manual_get(uint32_t a0, uint32_t a1)
+static int32_t tisp_ae_manual_get(uint32_t a0, uint32_t a1)
 {
     uint32_t *local_14 = 0;
     uint32_t *a2 = 0;
@@ -79371,7 +79391,7 @@ int32_t tisp_ae_manual_get(uint32_t a0, uint32_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004a1b4 origin=model_output original=tisp_ae_manual_set */
-int tisp_ae_manual_set(int arg1, int arg2, int arg3, int arg4, int arg5, int arg6, int arg7, int arg8, int arg9, int arg10, int arg11, int arg12, int arg13, int arg14, int arg15, int arg16, int arg17, int arg18, int arg19, int arg20) {
+static int tisp_ae_manual_set(int arg1, int arg2, int arg3, int arg4, int arg5, int arg6, int arg7, int arg8, int arg9, int arg10, int arg11, int arg12, int arg13, int arg14, int arg15, int arg16, int arg17, int arg18, int arg19, int arg20) {
     int *tisp_ae_ctrls = (int *)arg3;
     int *data_c807c = (int *)((char *)&tisp_ae_ctrls + 0x3c);
     int *data_c804c = (int *)((char *)&tisp_ae_ctrls + 0xc);
@@ -79542,7 +79562,7 @@ int tisp_ae_manual_set(int arg1, int arg2, int arg3, int arg4, int arg5, int arg
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004a540 origin=fragment_seed original=tisp_ae_get_y_zone */
-int32_t tisp_ae_get_y_zone(uint32_t a0, uint32_t a1)
+static int32_t tisp_ae_get_y_zone(uint32_t a0, uint32_t a1)
 {
     uint32_t *local_14 = 0;
     uint32_t *a2 = 0;
@@ -79603,7 +79623,7 @@ int32_t tiziano_ae_dn_params_refresh(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004a760 origin=fragment_seed original=tisp_ae_g_comp */
-char tisp_ae_g_comp(uint32_t a0, char *arg2)
+static char tisp_ae_g_comp(uint32_t a0, char *arg2)
 {
     char result = (char)(regtrace_t23_source_ae_compensation & 0xffU);
 
@@ -79637,7 +79657,7 @@ uint8_t tisp_ae_g_luma(uint8_t *arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004a7cc origin=fragment_seed original=tisp_ae_g_scene_luma */
-int tisp_ae_g_scene_luma(uint32_t *arg1)
+static int tisp_ae_g_scene_luma(uint32_t *arg1)
 {
     uint32_t luma = regtrace_t23_source_ae_hlil_luma;
     uint32_t weighted = 0;
@@ -79663,7 +79683,7 @@ int tisp_ae_g_scene_luma(uint32_t *arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004a974 origin=fragment_seed original=tisp_ae0_process_impl */
-int32_t tisp_ae0_process_impl(void)
+static int32_t tisp_ae0_process_impl(void)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -80306,14 +80326,14 @@ skip_ctrls_update:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004b07c origin=model_output original=tisp_ae1_process */
-int32_t tisp_ae1_process(void)
+static int32_t tisp_ae1_process(void)
 {
 	tisp_ae0_process_impl();
 	return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004b0a4 origin=model_output original=tisp_ae_get_antiflicker_step */
-int32_t tisp_ae_get_antiflicker_step(int32_t arg1, void *arg2, uint32_t *arg3)
+static int32_t tisp_ae_get_antiflicker_step(int32_t arg1, void *arg2, uint32_t *arg3)
 {
 	if (_deflicker_para != 1)
 		return -1;
@@ -80324,7 +80344,7 @@ int32_t tisp_ae_get_antiflicker_step(int32_t arg1, void *arg2, uint32_t *arg3)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004b0fc origin=fragment_seed original=tisp_ae_param_array_get */
-int tisp_ae_param_array_get(int param_id, void *out_buf, int *size_buf)
+static int tisp_ae_param_array_get(int param_id, void *out_buf, int *size_buf)
 {
     uint32_t ae_show_info_1;
     uint32_t ae_exp_th_val;
@@ -80508,7 +80528,7 @@ int tisp_ae_param_array_get(int param_id, void *out_buf, int *size_buf)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004b638 origin=fragment_seed original=tisp_ae_param_array_set */
-int tisp_ae_param_array_set(int a0, void *a1, int *a2)
+static int tisp_ae_param_array_set(int a0, void *a1, int *a2)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -80835,7 +80855,7 @@ int32_t tisp_ae_trig(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004bb7c origin=fragment_seed original=tisp_ae_deinit */
-void* tisp_ae_deinit(void)
+static void* tisp_ae_deinit(void)
 {
     uint32_t *a0;
     uintptr_t *s0;
@@ -80878,7 +80898,7 @@ done:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004bbcc origin=model_output original=tisp_ae_algo_init */
-int32_t tisp_ae_algo_init(uint32_t arg1, void *arg2)
+static int32_t tisp_ae_algo_init(uint32_t arg1, void *arg2)
 {
     uint8_t *out = arg2;
     uint8_t *hist;
@@ -80995,7 +81015,7 @@ static int regtrace_t23_ae_emit_event(uint32_t event_id, uint32_t value)
     return tisp_event_push(0, &event);
 }
 
-int32_t tisp_ae_algo_handle(uintptr_t arg1)
+static int32_t tisp_ae_algo_handle(uintptr_t arg1)
 {
     const uint32_t *input = (const uint32_t *)(uintptr_t)arg1;
     uint32_t *ctrl = (uint32_t *)(void *)tisp_ae_ctrls;
@@ -81097,7 +81117,7 @@ int32_t tisp_ae_algo_handle(uintptr_t arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004c260 origin=fragment_seed original=tisp_ae_get_converge_step */
-int16_t tisp_ae_get_converge_step(uint32_t a0, uintptr_t a1)
+static int16_t tisp_ae_get_converge_step(uint32_t a0, uintptr_t a1)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -81130,7 +81150,7 @@ int16_t tisp_ae_get_converge_step(uint32_t a0, uintptr_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004c29c origin=fragment_seed original=tisp_ae_set_converge_step */
-int64_t tisp_ae_set_converge_step(uint32_t a0, uintptr_t a1)
+static int64_t tisp_ae_set_converge_step(uint32_t a0, uintptr_t a1)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -81162,12 +81182,12 @@ int64_t tisp_ae_set_converge_step(uint32_t a0, uintptr_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004c2d4 origin=model_output original=tisp_api_ae_deflick_para_set */
-int tisp_api_ae_deflick_para_set(void) {
+static int tisp_api_ae_deflick_para_set(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004c318 origin=model_output original=tisp_api_ae_flick_t_set */
-int tisp_api_ae_flick_t_set(void *a1)
+static int tisp_api_ae_flick_t_set(void *a1)
 {
     memcpy(&_flicker_t, a1, 0x18);
     ((void **)data_982bc)[4] = 1;
@@ -81227,7 +81247,7 @@ int32_t tisp_api_ae_scene_pare_get(uint32_t a0, uint32_t a1, uintptr_t a2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004c3fc origin=model_output original=tisp_api_ae_roi_weight_set */
-int32_t tisp_api_ae_roi_weight_set(uint32_t context, const void *src)
+static int32_t tisp_api_ae_roi_weight_set(uint32_t context, const void *src)
 {
     uint32_t *flags = (uint32_t *)(void *)IspAeFlag;
 
@@ -81242,7 +81262,7 @@ int32_t tisp_api_ae_roi_weight_set(uint32_t context, const void *src)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004c440 origin=fragment_seed original=tisp_api_ae_roi_weight_get */
-int32_t tisp_api_ae_roi_weight_get(uint32_t a0, uint32_t a1, uintptr_t a2)
+static int32_t tisp_api_ae_roi_weight_get(uint32_t a0, uint32_t a1, uintptr_t a2)
 {
     uint32_t *flags = (uint32_t *)(void *)IspAeFlag;
 
@@ -81259,7 +81279,7 @@ int32_t tisp_api_ae_roi_weight_get(uint32_t a0, uint32_t a1, uintptr_t a2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004c49c origin=fragment_seed original=tisp_api_ae_roui_weight_set */
-int32_t tisp_api_ae_roui_weight_set(uint32_t context, const void *src)
+static int32_t tisp_api_ae_roui_weight_set(uint32_t context, const void *src)
 {
     uint32_t *flags = (uint32_t *)(void *)IspAeFlag;
 
@@ -81274,7 +81294,7 @@ int32_t tisp_api_ae_roui_weight_set(uint32_t context, const void *src)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004c4e0 origin=model_output original=tisp_api_ae_zone_weight_set */
-int32_t tisp_api_ae_zone_weight_set(uint32_t context, const void *src)
+static int32_t tisp_api_ae_zone_weight_set(uint32_t context, const void *src)
 {
     uint32_t *flags = (uint32_t *)(void *)IspAeFlag;
 
@@ -81289,7 +81309,7 @@ int32_t tisp_api_ae_zone_weight_set(uint32_t context, const void *src)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004c524 origin=fragment_seed original=tisp_api_ae_zone_weight_get */
-int32_t tisp_api_ae_zone_weight_get(uint32_t a0, uint32_t a1, uintptr_t a2)
+static int32_t tisp_api_ae_zone_weight_get(uint32_t a0, uint32_t a1, uintptr_t a2)
 {
     uint32_t *flags = (uint32_t *)(void *)IspAeFlag;
 
@@ -81305,7 +81325,7 @@ int32_t tisp_api_ae_zone_weight_get(uint32_t a0, uint32_t a1, uintptr_t a2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004c580 origin=fragment_seed original=tisp_af_get_statistics */
-int32_t tisp_af_get_statistics(void *arg1, int32_t *arg2, int32_t arg3, char arg4)
+static int32_t tisp_af_get_statistics(void *arg1, int32_t *arg2, int32_t arg3, char arg4)
 {
     uint32_t *t0 = 0;
     uint32_t t1 = 0;
@@ -81433,7 +81453,7 @@ end_block:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004c718 origin=fragment_seed original=Tiziano_af_fpga */
-int32_t Tiziano_af_fpga(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t arg4, uintptr_t arg5, uintptr_t arg6, uintptr_t arg7, uintptr_t arg8)
+static int32_t Tiziano_af_fpga(uintptr_t a0, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t arg4, uintptr_t arg5, uintptr_t arg6, uintptr_t arg7, uintptr_t arg8)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_18 = 0;
@@ -81739,7 +81759,7 @@ Tiziano_af_fpga0x324:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004caac origin=model_output original=tisp_af_process_impl */
-int32_t tisp_af_process_impl(void)
+static int32_t tisp_af_process_impl(void)
 {
 	/*
 	 * OEM: fill IspAfStaticParam with the AF statistic arrays, then call
@@ -81767,7 +81787,7 @@ int32_t tisp_af_process_impl(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004cba4 origin=model_output original=af_interrupt_static */
-int af_interrupt_static(void)
+static int af_interrupt_static(void)
 {
     uint32_t reg_val;
     void *tispinfo_ptr;
@@ -81847,7 +81867,7 @@ int32_t tiziano_af_params_refresh(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004ce2c origin=fragment_seed original=tiziano_af_dump */
-int32_t tiziano_af_dump(void)
+static int32_t tiziano_af_dump(void)
 {
     uint32_t *v0;
 
@@ -82332,7 +82352,7 @@ void tiziano_af_set_hardware_param(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004da80 origin=fragment_seed original=tiziano_af_init */
-int32_t tiziano_af_init(uint32_t a0, uint32_t a1)
+static int32_t tiziano_af_init(uint32_t a0, uint32_t a1)
 {
     uint32_t *local_14 = 0;
     uint32_t *local_18 = 0;
@@ -82408,7 +82428,7 @@ int32_t tiziano_af_init(uint32_t a0, uint32_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004db90 origin=fragment_seed original=tisp_af_get_metric */
-int tisp_af_get_metric(uint32_t *v)
+static int tisp_af_get_metric(uint32_t *v)
 {
 	uint8_t v1 = af_attr[0x11d - 0x10c];	/* OEM af_attr + 17 */
 	uint32_t v0 = *(uint32_t *)((char *)((char *)&rgbg_wght + 0x84));
@@ -82418,7 +82438,7 @@ int tisp_af_get_metric(uint32_t *v)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004dbb0 origin=fragment_seed original=tisp_af_get_attr */
-int32_t tisp_af_get_attr(uint32_t a0, uintptr_t a1)
+static int32_t tisp_af_get_attr(uint32_t a0, uintptr_t a1)
 {
     uintptr_t *a2 = 0;
     uint32_t *a3 = 0;
@@ -82581,7 +82601,7 @@ int32_t tisp_af_get_attr(uint32_t a0, uintptr_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004ddcc origin=model_output original=tisp_af_set_attr_refresh */
-int32_t tisp_af_set_attr_refresh(void)
+static int32_t tisp_af_set_attr_refresh(void)
 {
 	/*
 	 * OEM: spread the 88-byte af_attr over the AF parameter tables, then
@@ -82639,7 +82659,7 @@ int32_t tisp_af_set_attr_refresh(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004df8c origin=fragment_seed original=tisp_af_set_attr */
-int32_t tisp_af_set_attr(uint32_t a0, uint32_t a1)
+static int32_t tisp_af_set_attr(uint32_t a0, uint32_t a1)
 {
     /*
      * OEM: the 88-byte attribute arrives by value (a1.. and the stack);
@@ -82674,7 +82694,7 @@ lbl_4e034:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004e044 origin=fragment_seed original=tisp_af_param_array_get */
-int tisp_af_param_array_get(int param_id, void *out_buf, int *size_buf)
+static int tisp_af_param_array_get(int param_id, void *out_buf, int *size_buf)
 {
     uint32_t offset = 0;
 
@@ -82723,7 +82743,7 @@ int tisp_af_param_array_get(int param_id, void *out_buf, int *size_buf)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004e2e8 origin=fragment_seed original=tisp_af_param_array_set */
-int32_t tisp_af_param_array_set(uint32_t arg1, uint32_t arg2)
+static int32_t tisp_af_param_array_set(uint32_t arg1, uint32_t arg2)
 {
     uint32_t *s1 = arg2;
 
@@ -82753,13 +82773,13 @@ int32_t tisp_af_param_array_set(uint32_t arg1, uint32_t arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004e4a4 origin=fragment_seed original=tisp_af_get_zone */
-int32_t tisp_af_get_zone(void)
+static int32_t tisp_af_get_zone(void)
 {
     return (int32_t)memcpy((void *)0, (void *)((char *)&rgbg_wght + 0x90), 900);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004e4c0 origin=model_output original=tisp_api_af_weight_set */
-int tisp_api_af_weight_set(void)
+static int tisp_api_af_weight_set(void)
 {
     unsigned int ret;
     __asm__ volatile(
@@ -82776,7 +82796,7 @@ int tisp_api_af_weight_set(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004e4d8 origin=fragment_seed original=tisp_api_af_weight_get */
-int32_t tisp_api_af_weight_get(uint32_t a0, uint32_t a1, uintptr_t a2)
+static int32_t tisp_api_af_weight_get(uint32_t a0, uint32_t a1, uintptr_t a2)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -82808,12 +82828,12 @@ int32_t tisp_api_af_weight_get(uint32_t a0, uint32_t a1, uintptr_t a2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004e520 origin=model_output original=tisp_csccr_print_para */
-int tisp_csccr_print_para(void) {
+static int tisp_csccr_print_para(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004e528 origin=fragment_seed original=tisp_csccr_para_refresh_by_mode */
-int32_t tisp_csccr_para_refresh_by_mode(uint32_t a0, uint32_t a1, uintptr_t a2)
+static int32_t tisp_csccr_para_refresh_by_mode(uint32_t a0, uint32_t a1, uintptr_t a2)
 {
     uint32_t ra = 0;
     uint32_t t9 = 0;
@@ -82938,7 +82958,7 @@ tisp_csccr_para_refresh_by_mode0x6c:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004e610 origin=fragment_seed original=tisp_csccr_write_reg */
-int32_t tisp_csccr_write_reg(void)
+static int32_t tisp_csccr_write_reg(void)
 {
     static const uint16_t params[] = {
         0x400U, 0U, 0xffU, 0U, 0x400U, 0x180U, 0x7fU,
@@ -82957,7 +82977,7 @@ int32_t tisp_csccr_write_reg(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004e6c8 origin=fragment_seed original=tisp_csccr_update_para */
-int64_t tisp_csccr_update_para(void)
+static int64_t tisp_csccr_update_para(void)
 {
     uint32_t *a0 = 0;
     uint32_t *a1 = 0;
@@ -83117,7 +83137,7 @@ tisp_csccr_update_para0x114:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004e808 origin=fragment_seed original=tisp_csccr_sync_api_para */
-int32_t tisp_csccr_sync_api_para(uint32_t a0)
+static int32_t tisp_csccr_sync_api_para(uint32_t a0)
 {
     uintptr_t *a1 = 0;
     uint32_t ra = 0;
@@ -83231,7 +83251,7 @@ tisp_csccr_sync_api_para0x124:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004e934 origin=fragment_seed original=tiziano_csccr_init */
-int32_t tiziano_csccr_init(void)
+static int32_t tiziano_csccr_init(void)
 {
     uint32_t *local_14 = 0;
     uint32_t *a0 = 0;
@@ -83304,7 +83324,7 @@ int32_t tiziano_csccr_init(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004ea2c origin=fragment_seed original=tisp_csccr_param_array_get */
-int32_t tisp_csccr_param_array_get(uint32_t a0, uintptr_t a1, uintptr_t a2)
+static int32_t tisp_csccr_param_array_get(uint32_t a0, uintptr_t a1, uintptr_t a2)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -83355,7 +83375,7 @@ int32_t tisp_csccr_param_array_get(uint32_t a0, uintptr_t a1, uintptr_t a2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004eab0 origin=fragment_seed original=tisp_csccr_param_array_set */
-int32_t tisp_csccr_param_array_set(uint32_t a0, uintptr_t a1)
+static int32_t tisp_csccr_param_array_set(uint32_t a0, uintptr_t a1)
 {
     uint32_t *local_14 = 0;
     uintptr_t *a2 = 0;
@@ -83428,7 +83448,7 @@ int32_t tisp_csccr_param_array_set(uint32_t a0, uintptr_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004eb8c origin=model_output original=tisp_csccr_api_set */
-int tisp_csccr_api_set(int32_t * arg1) {
+static int tisp_csccr_api_set(int32_t * arg1) {
     *(uint8_t *)((char *)csccr_para_test + 0xa) = 2;
     memcpy(data_ca658, arg1, 0xc);
     tisp_csccr_para_refresh_by_mode(*arg1, 1, (uintptr_t)data_ca658);
@@ -83439,7 +83459,7 @@ int tisp_csccr_api_set(int32_t * arg1) {
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000004ec2c origin=fragment_seed original=tisp_csccr_api_get */
-int32_t tisp_csccr_api_get(uint32_t a0)
+static int32_t tisp_csccr_api_get(uint32_t a0)
 {
     uint32_t *local_14 = 0;
     uint32_t *a1 = 0;
@@ -83541,14 +83561,14 @@ int32_t tisp_dmsc_par_refresh(uint32_t arg1, uint32_t arg2, uint32_t arg3)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000051a28 origin=model_output original=tisp_dmsc_refresh */
-int32_t tisp_dmsc_refresh(int32_t arg1)
+static int32_t tisp_dmsc_refresh(int32_t arg1)
 {
     tisp_dmsc_par_refresh(arg1, 0x100, 1);
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000051a54 origin=fragment_seed original=tisp_dmsc_param_array_get */
-int32_t tisp_dmsc_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2)
+static int32_t tisp_dmsc_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -84554,7 +84574,7 @@ int32_t tisp_dmsc_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000053900 origin=fragment_seed original=tisp_dmsc_param_array_set */
-int32_t tisp_dmsc_param_array_set(uint32_t a0, uint32_t a1)
+static int32_t tisp_dmsc_param_array_set(uint32_t a0, uint32_t a1)
 {
     uint32_t *local_14 = 0;
     uint32_t *local_18 = 0;
@@ -85417,7 +85437,7 @@ int32_t tiziano_dmsc_init(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000056530 origin=fragment_seed original=tisp_dmsc_sharpness_get */
-uint32_t tisp_dmsc_sharpness_get(void)
+static uint32_t tisp_dmsc_sharpness_get(void)
 {
     return regtrace_t23_source_dmsc_sharpness & 0xffU;
 }
@@ -85473,7 +85493,7 @@ int32_t tisp_mdns_top_func_cfg(int32_t arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000566a8 origin=fragment_seed original=tisp_mdns_y_3d_param_cfg */
-int32_t tisp_mdns_y_3d_param_cfg(void)
+static int32_t tisp_mdns_y_3d_param_cfg(void)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -85723,7 +85743,7 @@ tisp_mdns_y_3d_param_cfg0x11c:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000057364 origin=model_output original=tisp_mdns_y_2d_param_cfg */
-int32_t tisp_mdns_y_2d_param_cfg(void)
+static int32_t tisp_mdns_y_2d_param_cfg(void)
 {
 	uint32_t v;
 
@@ -85790,7 +85810,7 @@ int32_t tisp_mdns_y_2d_param_cfg(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000057854 origin=model_output original=tisp_mdns_c_3d_param_cfg */
-int32_t tisp_mdns_c_3d_param_cfg(void)
+static int32_t tisp_mdns_c_3d_param_cfg(void)
 {
 	system_reg_write(0x1210,
 		(uint32_t)mdns_c_sad_ave_thres_intp << 3 |
@@ -85976,7 +85996,7 @@ int32_t tisp_mdns_c_3d_param_cfg(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000057e10 origin=fragment_seed original=tisp_mdns_c_2d_param_cfg */
-int32_t tisp_mdns_c_2d_param_cfg(void)
+static int32_t tisp_mdns_c_2d_param_cfg(void)
 {
     uint32_t val;
     uint32_t lo, a1_val;
@@ -86193,7 +86213,7 @@ int32_t tisp_mdns_intp(uint32_t a0)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000005ae34 origin=model_output original=tisp_mdns_wdr_en */
-int tisp_mdns_wdr_en(void) {
+static int tisp_mdns_wdr_en(void) {
     return 0;
 }
 
@@ -86269,7 +86289,7 @@ int32_t tisp_mdns_bypass(int32_t arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000005b070 origin=fragment_seed original=tisp_mdns_get_malloc_cfg */
-int32_t tisp_mdns_get_malloc_cfg(uint32_t a0, uint32_t a1, uint32_t a2)
+static int32_t tisp_mdns_get_malloc_cfg(uint32_t a0, uint32_t a1, uint32_t a2)
 {
     uint32_t *a3 = 0;
     uint32_t ra = 0;
@@ -86404,7 +86424,7 @@ int32_t tisp_mdns_malloc_reflash(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000005b4c0 origin=fragment_seed original=tisp_mdns_refresh */
-int32_t tisp_mdns_refresh(uint32_t a0)
+static int32_t tisp_mdns_refresh(uint32_t a0)
 {
 	uint32_t *a1;
 	uint32_t *a2;
@@ -86425,7 +86445,7 @@ int32_t tisp_mdns_refresh(uint32_t a0)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000005b4f8 origin=fragment_seed original=tisp_mdns_param_array_get */
-int32_t tisp_mdns_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2)
+static int32_t tisp_mdns_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -88351,7 +88371,7 @@ int32_t tisp_mdns_param_array_get(uint32_t a0, uint32_t a1, uintptr_t a2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000005f07c origin=fragment_seed original=tisp_mdns_param_array_set */
-int32_t tisp_mdns_param_array_set(uint32_t a0, uint32_t a1)
+static int32_t tisp_mdns_param_array_set(uint32_t a0, uint32_t a1)
 {
     uint32_t *local_14 = 0;
     uint32_t *local_18 = 0;
@@ -91644,7 +91664,7 @@ int32_t tisp_api_mdns_y_filter_set(int32_t arg1, const uint32_t *arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000064a44 origin=fragment_seed original=tisp_api_mdns_share_mem */
-int32_t tisp_api_mdns_share_mem(uintptr_t a0)
+static int32_t tisp_api_mdns_share_mem(uintptr_t a0)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -91665,7 +91685,7 @@ int32_t tisp_api_mdns_share_mem(uintptr_t a0)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000064a54 origin=fragment_seed original=tisp_api_mdns_share_mem_en */
-int32_t tisp_api_mdns_share_mem_en(uint32_t a0)
+static int32_t tisp_api_mdns_share_mem_en(uint32_t a0)
 {
     uint32_t *local_14 = 0;
     uint32_t *local_18 = 0;
@@ -91741,7 +91761,7 @@ tisp_api_mdns_share_mem_en0x8c:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000064b10 origin=fragment_seed original=tisp_ipc_frame_done_interrupt_static */
-int32_t tisp_ipc_frame_done_interrupt_static(void)
+static int32_t tisp_ipc_frame_done_interrupt_static(void)
 {
     uint32_t *local_14 = 0;
     uint32_t *a0 = 0;
@@ -91778,19 +91798,19 @@ tisp_ipc_frame_done_interrupt_static0x38:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000064b54 origin=model_output original=tisp_top_init */
-int32_t tisp_top_init(int32_t arg1)
+static int32_t tisp_top_init(int32_t arg1)
 {
 	return system_irq_func_set(arg1, 0xd, tisp_ipc_frame_done_interrupt_static);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000064b70 origin=model_output original=lib_tisp_debug_info */
-int32_t lib_tisp_debug_info(int32_t arg1) {
+static int32_t lib_tisp_debug_info(int32_t arg1) {
     private_seq_printf(arg1, "****************** LIB ISP INFO **********************\n", 0);
     return private_seq_printf(arg1, "isp version  : %s \n", "isp_20250722a");
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000064bd0 origin=model_output original=tisp_enable_tuning */
-int32_t tisp_enable_tuning(void)
+static int32_t tisp_enable_tuning(void)
 {
 	private_vmalloc(0x64);
 	tisp_tattr = 0;
@@ -91798,7 +91818,7 @@ int32_t tisp_enable_tuning(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000064c00 origin=fragment_seed original=tisp_disable_tuning */
-void tisp_disable_tuning(void)
+static void tisp_disable_tuning(void)
 {
     if (tisp_tattr) {
         private_vfree((void *)tisp_tattr);
@@ -91807,7 +91827,7 @@ void tisp_disable_tuning(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000064c3c origin=fragment_seed original=tisp_get_tuning */
-uint32_t tisp_get_tuning(void)
+static uint32_t tisp_get_tuning(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -92148,7 +92168,7 @@ uint32_t tisp_cust_mode_g_ctrl(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000651bc origin=fragment_seed original=tisp_day_or_night_g_ctrl */
-int32_t tisp_day_or_night_g_ctrl(uint32_t a0)
+static int32_t tisp_day_or_night_g_ctrl(uint32_t a0)
 {
     if (a0 >= sizeof(tisp_par_info) / 156U)
         return -EINVAL;
@@ -92196,7 +92216,7 @@ uint32_t tisp_switch_bin(uint32_t a0)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000654b4 origin=model_output original=tisp_mirror_enable */
-int32_t tisp_mirror_enable(int32_t arg1, char arg2)
+static int32_t tisp_mirror_enable(int32_t arg1, char arg2)
 {
 	void *s2;
 	char *s1;
@@ -92269,12 +92289,12 @@ int32_t tisp_hv_flip_enable(int32_t arg1, char arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000655e8 origin=model_output original=tisp_hv_flip_get */
-int tisp_hv_flip_get(void) {
+static int tisp_hv_flip_get(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000655f0 origin=model_output original=tisp_flip_enable */
-int32_t tisp_flip_enable(void)
+static int32_t tisp_flip_enable(void)
 {
     return 0;
 }
@@ -92660,12 +92680,12 @@ uint32_t tisp_set_fps(uint32_t a0, uint32_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000065770 origin=model_output original=tisp_set_brightness */
-int32_t tisp_set_brightness(int32_t arg1, uint8_t arg2) {
+static int32_t tisp_set_brightness(int32_t arg1, uint8_t arg2) {
     return tisp_bcsh_brightness(arg1, arg2);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000065780 origin=fragment_seed original=tisp_set_ae_comp */
-int32_t tisp_set_ae_comp(uint32_t a0, uint32_t a1)
+static int32_t tisp_set_ae_comp(uint32_t a0, uint32_t a1)
 {
     uint32_t t9 = 0;
 
@@ -92679,13 +92699,13 @@ int32_t tisp_set_ae_comp(uint32_t a0, uint32_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000065790 origin=model_output original=tisp_get_ae_comp */
-char tisp_get_ae_comp(int32_t arg1, char *arg2)
+static char tisp_get_ae_comp(int32_t arg1, char *arg2)
 {
 	return tisp_ae_g_comp(arg1, arg2);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000657a0 origin=fragment_seed original=tisp_get_ae_luma */
-int32_t tisp_get_ae_luma(uint32_t a0, uintptr_t a1)
+static int32_t tisp_get_ae_luma(uint32_t a0, uintptr_t a1)
 {
     uint32_t t9 = 0;
 
@@ -92725,31 +92745,31 @@ int32_t tisp_set_contrast(int32_t arg1, uint8_t arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000657e0 origin=model_output original=tisp_set_bcsh_hue */
-int32_t tisp_set_bcsh_hue(int32_t arg1, char arg2)
+static int32_t tisp_set_bcsh_hue(int32_t arg1, char arg2)
 {
 	return tisp_bcsh_s_hue(arg1, arg2 & 0xff);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000657f0 origin=model_output original=tisp_get_brightness */
-uint32_t tisp_get_brightness(void)
+static uint32_t tisp_get_brightness(void)
 {
 	return tisp_bcsh_g_brightness();
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000065800 origin=model_output original=tisp_get_sharpness */
-uint32_t tisp_get_sharpness(void)
+static uint32_t tisp_get_sharpness(void)
 {
 	return tisp_dmsc_sharpness_get();
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000065810 origin=model_output original=tisp_get_saturation */
-uint32_t tisp_get_saturation(void)
+static uint32_t tisp_get_saturation(void)
 {
 	return tisp_bcsh_g_saturation();
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000065820 origin=model_output original=tisp_get_contrast */
-uint32_t tisp_get_contrast(void)
+static uint32_t tisp_get_contrast(void)
 {
 	return tisp_bcsh_g_contrast();
 }
@@ -92767,7 +92787,7 @@ int32_t tisp_top_sel(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000065878 origin=fragment_seed original=tisp_top_read */
-int32_t tisp_top_read(void)
+static int32_t tisp_top_read(void)
 {
     uint32_t *a0 = 0;
     uint32_t t9 = 0;
@@ -92820,7 +92840,7 @@ tisp_g_ncuinfo0x34:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000658c4 origin=fragment_seed original=tisp_s_antiflick */
-int64_t tisp_s_antiflick(uint32_t a0, uintptr_t a1, uint32_t a2)
+static int64_t tisp_s_antiflick(uint32_t a0, uintptr_t a1, uint32_t a2)
 {
     uint32_t *var_38;
     uint32_t flicker_hz_1;
@@ -92935,7 +92955,7 @@ int tisp_g_BacklightComp(uint32_t *out)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000065d6c origin=fragment_seed original=tisp_s_Gamma */
-int32_t tisp_s_Gamma(uint32_t a0, uint32_t a1)
+static int32_t tisp_s_Gamma(uint32_t a0, uint32_t a1)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -92978,7 +92998,7 @@ int32_t tisp_s_Gamma(uint32_t a0, uint32_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000065e00 origin=fragment_seed original=tisp_g_Gamma */
-int32_t tisp_g_Gamma(uint32_t a0, uint32_t a1)
+static int32_t tisp_g_Gamma(uint32_t a0, uint32_t a1)
 {
 	int32_t *var_10 = 0;
 
@@ -92993,7 +93013,7 @@ int32_t tisp_g_Gamma(uint32_t a0, uint32_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000065e60 origin=fragment_seed original=tisp_s_aeroi_weight */
-int32_t tisp_s_aeroi_weight(uint32_t a0, uintptr_t a1)
+static int32_t tisp_s_aeroi_weight(uint32_t a0, uintptr_t a1)
 {
     const uint32_t *weights = (const uint32_t *)(uintptr_t)a1;
     uint32_t inverted[225];
@@ -93020,7 +93040,7 @@ int32_t tisp_s_aeroi_weight(uint32_t a0, uintptr_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000065f94 origin=fragment_seed original=tisp_g_aeroi_weight */
-int32_t tisp_g_aeroi_weight(uint32_t a0, uint32_t a1)
+static int32_t tisp_g_aeroi_weight(uint32_t a0, uint32_t a1)
 {
     uint32_t size = 0;
     int ret = tisp_api_ae_roi_weight_get(a0, a1, (uintptr_t)&size);
@@ -93031,7 +93051,7 @@ int32_t tisp_g_aeroi_weight(uint32_t a0, uint32_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000065ff4 origin=fragment_seed original=tisp_s_aezone_weight */
-int32_t tisp_s_aezone_weight(uint32_t a0, uint32_t a1)
+static int32_t tisp_s_aezone_weight(uint32_t a0, uint32_t a1)
 {
     const void *weights = (const void *)(uintptr_t)a1;
 
@@ -93050,7 +93070,7 @@ int32_t tisp_s_aezone_weight(uint32_t a0, uint32_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066098 origin=fragment_seed original=tisp_g_aezone_weight */
-int32_t tisp_g_aezone_weight(uint32_t a0, uint32_t a1)
+static int32_t tisp_g_aezone_weight(uint32_t a0, uint32_t a1)
 {
     uint32_t size = 0;
     int ret = tisp_api_ae_zone_weight_get(a0, a1, (uintptr_t)&size);
@@ -93061,7 +93081,7 @@ int32_t tisp_g_aezone_weight(uint32_t a0, uint32_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000660f8 origin=fragment_seed original=tisp_s_af_weight */
-int32_t tisp_s_af_weight(uint32_t a0, uint32_t a1)
+static int32_t tisp_s_af_weight(uint32_t a0, uint32_t a1)
 {
     uint32_t *local_14 = 0;
     uint32_t *local_18 = 0;
@@ -93108,7 +93128,7 @@ int32_t tisp_s_af_weight(uint32_t a0, uint32_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000006619c origin=fragment_seed original=tisp_g_af_weight */
-int32_t tisp_g_af_weight(uint32_t a0, uint32_t a1)
+static int32_t tisp_g_af_weight(uint32_t a0, uint32_t a1)
 {
     uint32_t *local_10 = 0;
     uint32_t local_1c = 0;
@@ -93224,7 +93244,7 @@ int32_t tisp_g_ev_attr(uint32_t arg1, uint32_t *arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000663d0 origin=fragment_seed original=tisp_g_wb_attr */
-int32_t tisp_g_wb_attr(uint32_t a0, uintptr_t a1)
+static int32_t tisp_g_wb_attr(uint32_t a0, uintptr_t a1)
 {
     uint32_t *local_14 = 0;
     uint32_t ra = 0;
@@ -93249,7 +93269,7 @@ int32_t tisp_g_wb_attr(uint32_t a0, uintptr_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000663f8 origin=fragment_seed original=tisp_s_wb_attr */
-int32_t tisp_s_wb_attr(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t arg4, uint32_t arg5, uint32_t arg6)
+static int32_t tisp_s_wb_attr(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t arg4, uint32_t arg5, uint32_t arg6)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -93290,7 +93310,7 @@ int32_t tisp_s_wb_attr(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint3
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066454 origin=fragment_seed original=tisp_g_wb_zone */
-int32_t tisp_g_wb_zone(uint32_t a0, uint32_t a1)
+static int32_t tisp_g_wb_zone(uint32_t a0, uint32_t a1)
 {
     uint32_t *local_14 = 0;
     uint32_t ra = 0;
@@ -93315,7 +93335,7 @@ int32_t tisp_g_wb_zone(uint32_t a0, uint32_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000006647c origin=fragment_seed original=tisp_g_wb_ct */
-int32_t tisp_g_wb_ct(uint32_t a0, uintptr_t a1)
+static int32_t tisp_g_wb_ct(uint32_t a0, uintptr_t a1)
 {
     uint32_t *local_14 = 0;
     uint32_t ra = 0;
@@ -93340,7 +93360,7 @@ int32_t tisp_g_wb_ct(uint32_t a0, uintptr_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000664a4 origin=fragment_seed original=tisp_s_wb_ct */
-int32_t tisp_s_wb_ct(uint32_t a0, uintptr_t a1)
+static int32_t tisp_s_wb_ct(uint32_t a0, uintptr_t a1)
 {
     uint32_t *local_14 = 0;
     uint32_t ra = 0;
@@ -93384,13 +93404,13 @@ tisp_s_awb_cluster(int32_t arg1,
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066534 origin=fragment_seed original=tisp_g_awb_cluster */
-int32_t tisp_g_awb_cluster(uint32_t a0, uintptr_t a1)
+static int32_t tisp_g_awb_cluster(uint32_t a0, uintptr_t a1)
 {
     return tisp_awb_get_cluster_awb_params(a0, a1);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000006655c origin=model_output original=tisp_s_awb_ct_trend */
-int32_t tisp_s_awb_ct_trend(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5)
+static int32_t tisp_s_awb_ct_trend(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5)
 {
 	/*
 	 * Assembly analysis:
@@ -93413,7 +93433,7 @@ int32_t tisp_s_awb_ct_trend(int32_t arg1, int32_t arg2, int32_t arg3, int32_t ar
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000665a4 origin=fragment_seed original=tisp_g_awb_ct_trend */
-int32_t tisp_g_awb_ct_trend(uint32_t a0, uintptr_t a1)
+static int32_t tisp_g_awb_ct_trend(uint32_t a0, uintptr_t a1)
 {
     uint32_t *local_14 = 0;
     uint32_t ra = 0;
@@ -93458,7 +93478,7 @@ int tisp_g_ccm_attr(uint32_t a0, void *a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066690 origin=fragment_seed original=tisp_s_ccm_attr */
-int tisp_s_ccm_attr(uintptr_t context, const void *in)
+static int tisp_s_ccm_attr(uintptr_t context, const void *in)
 {
     uint8_t ccm_attr[0x28];
     uint32_t mode;
@@ -93481,7 +93501,7 @@ int tisp_s_ccm_attr(uintptr_t context, const void *in)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066790 origin=fragment_seed original=tisp_s_ae_converge_step */
-int32_t tisp_s_ae_converge_step(uint32_t a0, uintptr_t a1)
+static int32_t tisp_s_ae_converge_step(uint32_t a0, uintptr_t a1)
 {
     uint32_t *local_14 = 0;
     uint32_t ra = 0;
@@ -93517,7 +93537,7 @@ tisp_s_ae_converge_step0x30:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000667c8 origin=model_output original=tisp_g_ae_converge_step */
-int32_t tisp_g_ae_converge_step(char arg1, int16_t *arg2)
+static int32_t tisp_g_ae_converge_step(char arg1, int16_t *arg2)
 {
 	if (arg2 == NULL)
 		return 0;
@@ -93527,7 +93547,7 @@ int32_t tisp_g_ae_converge_step(char arg1, int16_t *arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066800 origin=fragment_seed original=tisp_g_ae_hist */
-int32_t tisp_g_ae_hist(uint32_t a0, uint32_t a1)
+static int32_t tisp_g_ae_hist(uint32_t a0, uint32_t a1)
 {
     uint32_t *local_14 = 0;
     uint32_t ra = 0;
@@ -93552,7 +93572,7 @@ int32_t tisp_g_ae_hist(uint32_t a0, uint32_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066828 origin=model_output original=tisp_s_ae_hist */
-int32_t tisp_s_ae_hist(void)
+static int32_t tisp_s_ae_hist(void)
 {
     /*
      * OEM: the 1044-byte histogram attribute arrives by value and is passed
@@ -93564,7 +93584,7 @@ int32_t tisp_s_ae_hist(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066890 origin=fragment_seed original=tisp_s_ae_at_list */
-int32_t tisp_s_ae_at_list(uint32_t a0, uint32_t a1)
+static int32_t tisp_s_ae_at_list(uint32_t a0, uint32_t a1)
 {
     uint32_t *local_10 = 0;
     uint32_t local_34 = 0;
@@ -93653,21 +93673,21 @@ int32_t tisp_g_ae_at_list(uint32_t a0, uint32_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066920 origin=model_output original=tisp_s_3dns_ratio */
-int32_t tisp_s_3dns_ratio(int32_t arg1, int32_t arg2)
+static int32_t tisp_s_3dns_ratio(int32_t arg1, int32_t arg2)
 {
 	tisp_s_mdns_ratio(arg2);
 	return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066948 origin=model_output original=tisp_s_2dns_ratio */
-int32_t tisp_s_2dns_ratio(int32_t arg1, uint32_t arg2)
+static int32_t tisp_s_2dns_ratio(int32_t arg1, uint32_t arg2)
 {
     tisp_s_sdns_ratio(arg2);
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066970 origin=model_output original=tisp_s_ae_attr */
-int32_t tisp_s_ae_attr(int32_t arg1, int32_t arg2, int32_t arg3) {
+static int32_t tisp_s_ae_attr(int32_t arg1, int32_t arg2, int32_t arg3) {
     int *i = 0;
     char buf[176];
     char local_buf[168];
@@ -93685,7 +93705,7 @@ int32_t tisp_s_ae_attr(int32_t arg1, int32_t arg2, int32_t arg3) {
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066a24 origin=model_output original=tisp_g_ae_attr */
-int32_t tisp_g_ae_attr(int32_t arg1, int32_t *arg2)
+static int32_t tisp_g_ae_attr(int32_t arg1, int32_t *arg2)
 {
 	int32_t *var_b8;
 	int32_t var_ac;
@@ -93700,7 +93720,7 @@ int32_t tisp_g_ae_attr(int32_t arg1, int32_t *arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066a68 origin=fragment_seed original=tisp_g_ae_min */
-int32_t tisp_g_ae_min(uint32_t a0, uintptr_t a1)
+static int32_t tisp_g_ae_min(uint32_t a0, uintptr_t a1)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -93733,7 +93753,7 @@ int32_t tisp_g_ae_min(uint32_t a0, uintptr_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066aac origin=model_output original=tisp_s_ae_min */
-int32_t tisp_s_ae_min(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5)
+static int32_t tisp_s_ae_min(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5)
 {
 	(void)arg5; /* arg5 is stored on stack but never used in the call */
 	int32_t ret = tisp_ae_s_min(arg1, arg2, arg3, arg4);
@@ -93742,7 +93762,7 @@ int32_t tisp_s_ae_min(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, in
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066ae4 origin=fragment_seed original=tisp_g_ae_zone */
-int32_t tisp_g_ae_zone(uint32_t a0, uint32_t a1)
+static int32_t tisp_g_ae_zone(uint32_t a0, uint32_t a1)
 {
     uint32_t *local_14 = 0;
     uint32_t ra = 0;
@@ -93767,14 +93787,14 @@ int32_t tisp_g_ae_zone(uint32_t a0, uint32_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066b0c origin=model_output original=tisp_g_af_zone */
-int32_t tisp_g_af_zone(void)
+static int32_t tisp_g_af_zone(void)
 {
     tisp_af_get_zone();
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066b34 origin=fragment_seed original=tisp_g_af_metric */
-int32_t tisp_g_af_metric(uint32_t a0, uintptr_t a1)
+static int32_t tisp_g_af_metric(uint32_t a0, uintptr_t a1)
 {
     uint32_t *local_14 = 0;
     uint32_t ra = 0;
@@ -93799,7 +93819,7 @@ int32_t tisp_g_af_metric(uint32_t a0, uintptr_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066b5c origin=fragment_seed original=tisp_g_af_attr */
-int32_t tisp_g_af_attr(uint32_t a0, uintptr_t a1)
+static int32_t tisp_g_af_attr(uint32_t a0, uintptr_t a1)
 {
     uint32_t *local_14 = 0;
     uint32_t ra = 0;
@@ -93824,7 +93844,7 @@ int32_t tisp_g_af_attr(uint32_t a0, uintptr_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066b84 origin=fragment_seed original=tisp_s_af_attr */
-int32_t tisp_s_af_attr(uint32_t a0, uint32_t a1)
+static int32_t tisp_s_af_attr(uint32_t a0, uint32_t a1)
 {
     uint32_t *local_10 = 0;
     uint32_t local_64 = 0;
@@ -93888,7 +93908,7 @@ tisp_s_af_attr0x40:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066bec origin=model_output original=tisp_s_wb_frz */
-int32_t tisp_s_wb_frz(int32_t arg1, char arg2)
+static int32_t tisp_s_wb_frz(int32_t arg1, char arg2)
 {
     int (*fn)(int, char) = tisp_awb_set_frz;
     arg2 &= 0xff;
@@ -93896,7 +93916,7 @@ int32_t tisp_s_wb_frz(int32_t arg1, char arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066bfc origin=reference_derived original=tisp_g_wb_frz */
-int tisp_g_wb_frz(void *out_buf)
+static int tisp_g_wb_frz(void *out_buf)
 {
 	return tisp_awb_get_frz(out_buf, 0);
 }
@@ -93930,7 +93950,7 @@ int32_t tisp_g_module_control(int32_t arg1, int32_t *arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066d1c origin=model_output original=tisp_s_autozoom_control */
-int32_t tisp_s_autozoom_control(int32_t arg1, int32_t *arg2)
+static int32_t tisp_s_autozoom_control(int32_t arg1, int32_t *arg2)
 {
     int32_t t3 = arg2[0];
     void *v0 = &arg2[t3];
@@ -93986,7 +94006,7 @@ int32_t tisp_s_autozoom_control(int32_t arg1, int32_t *arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066e5c origin=fragment_seed original=tisp_g_autozoom_control */
-int32_t tisp_g_autozoom_control(int32_t arg1, uint32_t *arg2)
+static int32_t tisp_g_autozoom_control(int32_t arg1, uint32_t *arg2)
 {
     uint32_t *src = (uint32_t *)((char *)((char *)&cust_mode));
     uint32_t *dst = arg2 + 1;
@@ -94031,7 +94051,7 @@ int32_t tisp_g_autozoom_control(int32_t arg1, uint32_t *arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066ec4 origin=model_output original=tisp_s_scaler_level_control */
-int32_t tisp_s_scaler_level_control(int32_t arg1, int32_t arg2, int32_t arg3)
+static int32_t tisp_s_scaler_level_control(int32_t arg1, int32_t arg2, int32_t arg3)
 {
     int32_t local = arg2;
     return tisp_msca_api_set_scaler_level_control(arg1, &local, arg3);
@@ -94052,7 +94072,7 @@ int32_t tisp_g_fcrop_control(uint32_t a0, uintptr_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066f04 origin=fragment_seed original=tisp_s_fcrop_control */
-int32_t tisp_s_fcrop_control(uint32_t a0)
+static int32_t tisp_s_fcrop_control(uint32_t a0)
 {
     uint32_t local_4 = 0;
     uint32_t local_8 = 0;
@@ -94078,7 +94098,7 @@ int32_t tisp_s_fcrop_control(uint32_t a0)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066f20 origin=fragment_seed original=tisp_s_wdr_en */
-int32_t tisp_s_wdr_en(void)
+static int32_t tisp_s_wdr_en(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -94093,7 +94113,7 @@ int32_t tisp_s_wdr_en(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066f28 origin=fragment_seed original=tisp_s_wdr_init_en */
-int32_t tisp_s_wdr_init_en(void)
+static int32_t tisp_s_wdr_init_en(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -94108,7 +94128,7 @@ int32_t tisp_s_wdr_init_en(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066f30 origin=fragment_seed original=tisp_g_wdr_en */
-int32_t tisp_g_wdr_en(void)
+static int32_t tisp_g_wdr_en(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -94123,7 +94143,7 @@ int32_t tisp_g_wdr_en(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066f38 origin=model_output original=tisp_s_max_again */
-int32_t tisp_s_max_again(int32_t arg1, int32_t arg2)
+static int32_t tisp_s_max_again(int32_t arg1, int32_t arg2)
 {
 	int32_t ret = ((uintptr_t (*)(uintptr_t, uintptr_t))tiziano_ae_s_max_again)((uintptr_t)(arg1), (uintptr_t)(arg2));
 
@@ -94134,7 +94154,7 @@ int32_t tisp_s_max_again(int32_t arg1, int32_t arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066f48 origin=model_output original=tisp_s_max_isp_dgain */
-int32_t tisp_s_max_isp_dgain(int32_t arg1, int32_t arg2)
+static int32_t tisp_s_max_isp_dgain(int32_t arg1, int32_t arg2)
 {
 	int32_t ret = tiziano_ae_s_max_isp_dgain(arg1, arg2);
 
@@ -94170,14 +94190,14 @@ int32_t tisp_g_dpc_strength(uint32_t a0, uintptr_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066f80 origin=model_output original=tisp_s_dpc_strength */
-int32_t tisp_s_dpc_strength(int32_t arg1, uint32_t arg2)
+static int32_t tisp_s_dpc_strength(int32_t arg1, uint32_t arg2)
 {
     tisp_s_dpc_str_internal(arg2);
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066fa8 origin=fragment_seed original=tisp_g_drc_strength */
-int32_t tisp_g_drc_strength(uint32_t a0, uintptr_t a1)
+static int32_t tisp_g_drc_strength(uint32_t a0, uintptr_t a1)
 {
     uint32_t *local_14 = 0;
     uint32_t ra = 0;
@@ -94202,20 +94222,20 @@ int32_t tisp_g_drc_strength(uint32_t a0, uintptr_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066fd0 origin=model_output original=tisp_s_drc_strength */
-int32_t tisp_s_drc_strength(int32_t arg1, uint32_t arg2)
+static int32_t tisp_s_drc_strength(int32_t arg1, uint32_t arg2)
 {
     tisp_s_adr_str_internal(arg2);
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066ff8 origin=model_output original=tisp_mscaler_mask_change */
-int32_t tisp_mscaler_mask_change(void) {
+static int32_t tisp_mscaler_mask_change(void) {
     int32_t *result = 0;
     return result;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000067000 origin=model_output original=tisp_mscaler_mask_setreg */
-int32_t tisp_mscaler_mask_setreg(int32_t arg1, int32_t arg2, int32_t arg3)
+static int32_t tisp_mscaler_mask_setreg(int32_t arg1, int32_t arg2, int32_t arg3)
 {
     int32_t stack_arg1 = arg1;
     int32_t stack_arg2 = arg2;
@@ -94227,12 +94247,12 @@ int32_t tisp_mscaler_mask_setreg(int32_t arg1, int32_t arg2, int32_t arg3)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000067014 origin=model_output original=tisp_s_mscaler_mask_attr */
-int tisp_s_mscaler_mask_attr(void) {
+static int tisp_s_mscaler_mask_attr(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000067028 origin=fragment_seed original=tisp_g_mscaler_mask_attr */
-int32_t tisp_g_mscaler_mask_attr(void)
+static int32_t tisp_g_mscaler_mask_attr(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -94247,30 +94267,30 @@ int32_t tisp_g_mscaler_mask_attr(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000067030 origin=model_output original=tisp_s_mscaler_hvflip_mask */
-int tisp_s_mscaler_hvflip_mask(void) {
+static int tisp_s_mscaler_hvflip_mask(void) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000067038 origin=model_output original=tisp_s_ev_start */
-int32_t tisp_s_ev_start(int32_t arg1, uint32_t arg2)
+static int32_t tisp_s_ev_start(int32_t arg1, uint32_t arg2)
 {
 	return tiziano_ae_s_ev_start(arg1, arg2);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000067048 origin=model_output original=tisp_s_awb_start */
-int32_t tisp_s_awb_start(int32_t arg1, int32_t arg2, int32_t arg3)
+static int32_t tisp_s_awb_start(int32_t arg1, int32_t arg2, int32_t arg3)
 {
     return tiziano_s_awb_start(arg1, arg2, arg3);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000006705c origin=model_output original=tisp_g_awb_start */
 __attribute__((used))
-int32_t tisp_g_awb_start(int32_t arg1, int32_t *arg2) {
+static int32_t tisp_g_awb_start(int32_t arg1, int32_t *arg2) {
 	return tiziano_g_awb_start(arg1, arg2);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000006706c origin=fragment_seed original=tisp_s_awb_algo */
-int32_t tisp_s_awb_algo(uint32_t a0, uint32_t a1)
+static int32_t tisp_s_awb_algo(uint32_t a0, uint32_t a1)
 {
     uint32_t *local_14 = 0;
     uint32_t ra = 0;
@@ -94295,7 +94315,7 @@ int32_t tisp_s_awb_algo(uint32_t a0, uint32_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000067094 origin=fragment_seed original=isp_tlib_api_s_awb_zone_weight */
-int32_t isp_tlib_api_s_awb_zone_weight(uint32_t a0, uint32_t a1)
+static int32_t isp_tlib_api_s_awb_zone_weight(uint32_t a0, uint32_t a1)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -94350,7 +94370,7 @@ isp_tlib_api_s_awb_zone_weight0x98:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000067134 origin=fragment_seed original=isp_tlib_api_g_awb_zone_weight */
-int32_t isp_tlib_api_g_awb_zone_weight(uint32_t a0, uint32_t a1)
+static int32_t isp_tlib_api_g_awb_zone_weight(uint32_t a0, uint32_t a1)
 {
     uint32_t *local_10 = 0;
     uint32_t local_1c = 0;
@@ -94398,7 +94418,7 @@ isp_tlib_api_g_awb_zone_weight0x60:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000671a0 origin=model_output original=tisp_deinit_free */
-int32_t tisp_deinit_free(void)
+static int32_t tisp_deinit_free(void)
 {
     int32_t ret = 0;
     return ret;
@@ -94475,7 +94495,7 @@ tisp_s_ae_it_max0x64:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000006723c origin=fragment_seed original=tisp_g_ae_it_max */
-int32_t tisp_g_ae_it_max(uint32_t a0, uintptr_t a1)
+static int32_t tisp_g_ae_it_max(uint32_t a0, uintptr_t a1)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -94497,7 +94517,7 @@ int32_t tisp_g_ae_it_max(uint32_t a0, uintptr_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000067250 origin=fragment_seed original=tisp_s_adr_enable */
-int tisp_s_adr_enable(int arg1, int arg2)
+static int tisp_s_adr_enable(int arg1, int arg2)
 {
     int *s0;
     int *s1;
@@ -94537,7 +94557,7 @@ int tisp_s_adr_enable(int arg1, int arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000006730c origin=model_output original=tisp_s_defog_enable */
-int tisp_s_defog_enable(int arg1, int arg2) {
+static int tisp_s_defog_enable(int arg1, int arg2) {
     uint32_t v0 = system_reg_read(0xc);
     uint32_t v1 = (v0 >> 0xb) ^ 1;
     v1 = v1 & 1;
@@ -94563,7 +94583,7 @@ int tisp_s_defog_enable(int arg1, int arg2) {
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000673e8 origin=fragment_seed original=tisp_set_ae_freeze */
-int32_t tisp_set_ae_freeze(uint32_t a0, uint32_t a1)
+static int32_t tisp_set_ae_freeze(uint32_t a0, uint32_t a1)
 {
     uint32_t *local_10 = 0;
     uint32_t local_b8 = 0;
@@ -94664,32 +94684,32 @@ tisp_set_ae_freeze0xe0:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000674dc origin=model_output original=tisp_get_antiflicker_step */
-int32_t tisp_get_antiflicker_step(int32_t arg1, int32_t arg2, uint32_t *arg3)
+static int32_t tisp_get_antiflicker_step(int32_t arg1, int32_t arg2, uint32_t *arg3)
 {
     return tisp_ae_get_antiflicker_step(arg1, arg2, arg3);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000674ec origin=model_output original=tisp_set_ae_attr */
-int32_t tisp_set_ae_attr(int32_t arg1, int32_t *arg2)
+static int32_t tisp_set_ae_attr(int32_t arg1, int32_t *arg2)
 {
     /* one-off compile triage stub for malformed recovered body */
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000067540 origin=model_output original=tisp_get_ae_attr */
-int32_t tisp_get_ae_attr(int32_t arg1, int32_t arg2)
+static int32_t tisp_get_ae_attr(int32_t arg1, int32_t arg2)
 {
 	return tisp_ae_manual_get(arg1, arg2);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000067550 origin=model_output original=tisp_get_ae_state */
-int32_t tisp_get_ae_state(int32_t arg1, char *arg2)
+static int32_t tisp_get_ae_state(int32_t arg1, char *arg2)
 {
     return tisp_ae_state_get(arg1, arg2);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000067560 origin=fragment_seed original=tisp_get_blc_attr */
-int32_t tisp_get_blc_attr(void)
+static int32_t tisp_get_blc_attr(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -94704,7 +94724,7 @@ int32_t tisp_get_blc_attr(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000067568 origin=fragment_seed original=tisp_set_defog_strength */
-int32_t tisp_set_defog_strength(uint32_t a0, uintptr_t a1)
+static int32_t tisp_set_defog_strength(uint32_t a0, uintptr_t a1)
 {
     uint32_t *local_14 = 0;
     uint32_t ra = 0;
@@ -94729,7 +94749,7 @@ int32_t tisp_set_defog_strength(uint32_t a0, uintptr_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000067590 origin=fragment_seed original=tisp_get_defog_strength */
-int32_t tisp_get_defog_strength(uint32_t a0, uintptr_t a1)
+static int32_t tisp_get_defog_strength(uint32_t a0, uintptr_t a1)
 {
     uint32_t *local_14 = 0;
     uint32_t ra = 0;
@@ -94754,7 +94774,7 @@ int32_t tisp_get_defog_strength(uint32_t a0, uintptr_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000675b8 origin=model_output original=tisp_set_csc_attr */
-int32_t tisp_set_csc_attr(int32_t arg1, int32_t *arg2)
+static int32_t tisp_set_csc_attr(int32_t arg1, int32_t *arg2)
 {
 	int32_t v0 = arg2[0];
 
@@ -94779,19 +94799,19 @@ int32_t tisp_get_csc_attr(int32_t arg1, uint32_t *arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000006763c origin=model_output original=tisp_ae_algo_deinit */
-void *tisp_ae_algo_deinit(void)
+static void *tisp_ae_algo_deinit(void)
 {
 	return tisp_ae_deinit();
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000006764c origin=model_output original=tisp_awb_algo_deinit */
-int32_t tisp_awb_algo_deinit(void)
+static int32_t tisp_awb_algo_deinit(void)
 {
     return tisp_awb_deinit();
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000006765c origin=fragment_seed original=tisp_set_wdr_output_mode */
-int32_t tisp_set_wdr_output_mode(void)
+static int32_t tisp_set_wdr_output_mode(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -94806,7 +94826,7 @@ int32_t tisp_set_wdr_output_mode(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000067664 origin=fragment_seed original=tisp_get_wdr_output_mode */
-int32_t tisp_get_wdr_output_mode(void)
+static int32_t tisp_get_wdr_output_mode(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -94821,7 +94841,7 @@ int32_t tisp_get_wdr_output_mode(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000006766c origin=model_output original=tisp_set_bcsh_fixed_contrast */
-int32_t tisp_set_bcsh_fixed_contrast(int32_t arg1, char *arg2)
+static int32_t tisp_set_bcsh_fixed_contrast(int32_t arg1, char *arg2)
 {
 	tisp_bcsh_set_mjpeg_contrast(arg1, (uint8_t)arg2[0], (uint8_t)arg2[1], (uint8_t)arg2[2]);
 	return 0;
@@ -94868,7 +94888,7 @@ int64_t tisp_set_frame_drop(uint32_t arg1, uint32_t arg2, unsigned long arg3)
  *
  * Returns 0 on success.
  */
-int32_t tisp_get_frame_drop(int32_t arg1, int32_t arg2, int32_t *arg3)
+static int32_t tisp_get_frame_drop(int32_t arg1, int32_t arg2, int32_t *arg3)
 {
     int *i = 0;
 	int32_t *s1;
@@ -94902,13 +94922,13 @@ int32_t tisp_get_frame_drop(int32_t arg1, int32_t arg2, int32_t *arg3)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000677ac origin=model_output original=tisp_s_rgb_coefft */
-int32_t tisp_s_rgb_coefft(int32_t arg1, int16_t *arg2)
+static int32_t tisp_s_rgb_coefft(int32_t arg1, int16_t *arg2)
 {
     return tisp_bcsh_s_rgb_coefft(arg1, arg2);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000677bc origin=reference_derived original=tisp_g_rgb_coefft */
-int tisp_g_rgb_coefft(int32_t *out)
+static int tisp_g_rgb_coefft(int32_t *out)
 {
     return tisp_bcsh_g_rgb_coefft(out, 0);
 }
@@ -95100,7 +95120,7 @@ tisp_g_mscaler_mask_block_attr0x94:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000679ac origin=model_output original=tisp_s_osd_attr */
-int32_t tisp_s_osd_attr(int32_t arg1, uint8_t *arg2)
+static int32_t tisp_s_osd_attr(int32_t arg1, uint8_t *arg2)
 {
 	uint8_t *base1 = mscaler;
 	uint8_t a0 = base1[2300];
@@ -95137,7 +95157,7 @@ int32_t tisp_g_osd_attr(int32_t arg0, uint32_t *arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000067a2c origin=fragment_seed original=tisp_s_osd_block_attr */
-int32_t tisp_s_osd_block_attr(uint32_t a0, uintptr_t a1)
+static int32_t tisp_s_osd_block_attr(uint32_t a0, uintptr_t a1)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -95577,7 +95597,7 @@ tisp_s_draw_block_attr0x1c0:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000067f74 origin=fragment_seed original=tisp_msca_state */
-int32_t tisp_msca_state(void)
+static int32_t tisp_msca_state(void)
 {
     uint32_t ra = 0;
     uintptr_t *v0 = 0;
@@ -95592,7 +95612,7 @@ int32_t tisp_msca_state(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000067f7c origin=fragment_seed original=tisp_g_draw_block_attr */
-int32_t tisp_g_draw_block_attr(uint32_t a0, uintptr_t a1)
+static int32_t tisp_g_draw_block_attr(uint32_t a0, uintptr_t a1)
 {
     uint32_t *a2 = 0;
     uint32_t ra = 0;
@@ -95695,7 +95715,7 @@ int32_t tisp_msca_Shd_ctrl(char arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000068094 origin=model_output original=tisp_s_hldc_attr */
-int32_t tisp_s_hldc_attr(int32_t arg1, int16_t *arg2)
+static int32_t tisp_s_hldc_attr(int32_t arg1, int16_t *arg2)
 {
 	printk(fmt, "tisp_s_hldc_attr", 0xa41,
 		(int16_t)arg2[0], (int16_t)arg2[1], (int16_t)arg2[2],
@@ -95704,7 +95724,7 @@ int32_t tisp_s_hldc_attr(int32_t arg1, int16_t *arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000068114 origin=fragment_seed original=tisp_g_hldc_attr */
-int32_t tisp_g_hldc_attr(int32_t a0, int32_t a1)
+static int32_t tisp_g_hldc_attr(int32_t a0, int32_t a1)
 {
 	int16_t *v0;
 	int16_t v1;
@@ -96024,7 +96044,7 @@ int32_t isp_ch1_frame_dequeue_delay(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000006859c origin=model_output original=ispcore_frame_channel_dqbuf */
-int32_t ispcore_frame_channel_dqbuf(void *arg1, int32_t arg2)
+static int32_t ispcore_frame_channel_dqbuf(void *arg1, int32_t arg2)
 {
 	if (arg1 == 0)
 		return 0;
@@ -96293,14 +96313,14 @@ ispcore_core_ops_ioctl0x1a4:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000687a8 origin=fragment_seed original=isp_fw_process */
-int32_t isp_fw_process(void)
+static int32_t isp_fw_process(void)
 {
     /* one-off compile triage stub for malformed recovered body */
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000687fc origin=model_output original=ispcore_frame_channel_streamoff */
-int32_t ispcore_frame_channel_streamoff(int32_t *arg1)
+static int32_t ispcore_frame_channel_streamoff(int32_t *arg1)
 {
 	void *v0 = *(void **)arg1;
 	void *s0 = NULL;
@@ -96350,7 +96370,7 @@ int32_t ispcore_frame_channel_streamoff(int32_t *arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000068920 origin=fragment_seed original=dump_isp_info_open */
-int32_t dump_isp_info_open(uint32_t a0, uint32_t a1)
+static int32_t dump_isp_info_open(uint32_t a0, uint32_t a1)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -96392,7 +96412,7 @@ int32_t dump_isp_info_open(uint32_t a0, uint32_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000068968 origin=fragment_seed original=isp_core_cmd_set */
-int32_t isp_core_cmd_set(uint32_t a0, uint32_t a1, uint32_t a2)
+static int32_t isp_core_cmd_set(uint32_t a0, uint32_t a1, uint32_t a2)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -96897,7 +96917,7 @@ ispcore_irq_thread_handle0x258:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000068e08 origin=fragment_seed original=sub_68e08 */
-int32_t sub_68e08(uint32_t a0, uintptr_t a1, uintptr_t a2, uint32_t a3, uintptr_t arg4, uint32_t arg5, uint32_t arg6, uint32_t arg7, uintptr_t arg8)
+static int32_t sub_68e08(uint32_t a0, uintptr_t a1, uintptr_t a2, uint32_t a3, uintptr_t arg4, uint32_t arg5, uint32_t arg6, uint32_t arg7, uintptr_t arg8)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -97032,15 +97052,15 @@ ispcore_irq_thread_handle0xbc:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000068f3c origin=model_output original=sub_68f3c */
-int sub_68f3c(int arg1, int arg2, int arg3, int arg4, int arg5, int arg6, int arg7, int arg8, int arg9) {
+static int sub_68f3c(int arg1, int arg2, int arg3, int arg4, int arg5, int arg6, int arg7, int arg8, int arg9) {
     return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000068f70 origin=model_output original=ispcore_set_clk_parent.isra.0 */
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t ispcore_set_clk_parent_isra_0(char* arg1, char* arg2) __asm__("ispcore_set_clk_parent.isra.0");
+static int32_t ispcore_set_clk_parent_isra_0(char* arg1, char* arg2) __asm__("ispcore_set_clk_parent.isra.0");
 #endif
-int32_t ispcore_set_clk_parent_isra_0(char* arg1, char* arg2) {
+static int32_t ispcore_set_clk_parent_isra_0(char* arg1, char* arg2) {
     uint64_t** sclk_name_ptr;
     int32_t *result;
     int32_t parent_result;
@@ -97113,9 +97133,9 @@ int32_t ispcore_set_clk_parent_isra_0(char* arg1, char* arg2) {
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000690e4 origin=fragment_seed original=isp_info_show.isra.1 */
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t isp_info_show_isra_1(uintptr_t a0) __asm__("isp_info_show.isra.1");
+static int32_t isp_info_show_isra_1(uintptr_t a0) __asm__("isp_info_show.isra.1");
 #endif
-int32_t isp_info_show_isra_1(uintptr_t a0)
+static int32_t isp_info_show_isra_1(uintptr_t a0)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -98149,7 +98169,7 @@ isp_info_show_isra_10x99c:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000069aa8 origin=fragment_seed original=isp_core_debug_show */
-int isp_core_debug_show(void *arg1)
+static int isp_core_debug_show(void *arg1)
 {
 	uint8_t debug_val;
 	uint8_t measure_val;
@@ -98203,7 +98223,7 @@ out:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000069b70 origin=fragment_seed original=ispcore_pad_event_handle */
-int32_t ispcore_pad_event_handle(uintptr_t a0, uint32_t a1, uintptr_t a2)
+static int32_t ispcore_pad_event_handle(uintptr_t a0, uint32_t a1, uintptr_t a2)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_14 = 0;
@@ -99249,7 +99269,7 @@ int ispcore_activate_module(void *arg1) {
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000006a680 origin=model_output original=dump_msca_regs */
-int dump_msca_regs(void) {
+static int dump_msca_regs(void) {
     return 0;
 }
 
@@ -99305,9 +99325,9 @@ int32_t exception_handle(void) {
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000006a73c origin=fragment_seed original=tx_isp_enable_irq */
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t tx_isp_enable_irq_1(uintptr_t a0) __asm__("tx_isp_enable_irq");
+static int32_t tx_isp_enable_irq_1(uintptr_t a0) __asm__("tx_isp_enable_irq");
 #endif
-int32_t tx_isp_enable_irq_1(uintptr_t a0)
+static int32_t tx_isp_enable_irq_1(uintptr_t a0)
 {
     uint32_t *local_10 = 0;
     uint32_t local_1c = 0;
@@ -99353,9 +99373,9 @@ tx_isp_enable_irq0x48:
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000006a7a8 origin=model_output original=tx_isp_disable_irq */
 #ifndef REGTRACE_KERNEL_TREE_BUILD
-int32_t tx_isp_disable_irq_1(void *arg1) __asm__("tx_isp_disable_irq");
+static int32_t tx_isp_disable_irq_1(void *arg1) __asm__("tx_isp_disable_irq");
 #endif
-int32_t tx_isp_disable_irq_1(void *arg1)
+static int32_t tx_isp_disable_irq_1(void *arg1)
 {
 	int32_t var_18 = 0;
 	void *lock_ptr = (char *)arg1 + 0x80;
@@ -100492,7 +100512,7 @@ int32_t ispcore_slake_module(uintptr_t arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000006b3b4 origin=fragment_seed original=tx_isp_core_probe */
-int tx_isp_core_probe(struct platform_device *pdev)
+static int tx_isp_core_probe(struct platform_device *pdev)
 {
     int *i = 0;
     void *core_dev;
@@ -101474,7 +101494,7 @@ void cleanup_module(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000006bf60 origin=model_output original=tx_isp_vic_remove */
-int tx_isp_vic_remove(struct platform_device *pdev)
+static int tx_isp_vic_remove(struct platform_device *pdev)
 {
 	uintptr_t arg1 = (uintptr_t)pdev;
 
@@ -101498,7 +101518,7 @@ int tx_isp_vic_remove(struct platform_device *pdev)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000006bff0 origin=model_output original=tx_isp_vin_remove */
-int tx_isp_vin_remove(struct platform_device *pdev)
+static int tx_isp_vin_remove(struct platform_device *pdev)
 {
 	uintptr_t arg1 = (uintptr_t)pdev;
 
@@ -101527,7 +101547,7 @@ int tx_isp_vin_remove(struct platform_device *pdev)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000006c07c origin=model_output original=tx_isp_csi_remove */
-int tx_isp_csi_remove(struct platform_device *pdev)
+static int tx_isp_csi_remove(struct platform_device *pdev)
 {
 	void *drvdata;
 	void *reg_base;
@@ -101564,7 +101584,7 @@ int tx_isp_csi_remove(struct platform_device *pdev)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000006c170 origin=model_output original=tx_isp_ivdc_remove */
-int tx_isp_ivdc_remove(struct platform_device *pdev)
+static int tx_isp_ivdc_remove(struct platform_device *pdev)
 {
 	void *v0;
 	int32_t *s0;
@@ -101582,7 +101602,7 @@ int tx_isp_ivdc_remove(struct platform_device *pdev)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000006c1e4 origin=fragment_seed original=tx_isp_fs_remove */
-int tx_isp_fs_remove(struct platform_device *pdev)
+static int tx_isp_fs_remove(struct platform_device *pdev)
 {
     uint32_t *s0 = 0;
     private_platform_get_drvdata(0);
@@ -101613,7 +101633,7 @@ int tx_isp_fs_remove(struct platform_device *pdev)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000006c29c origin=fragment_seed original=tx_isp_remove */
-int tx_isp_remove(struct platform_device *pdev)
+static int tx_isp_remove(struct platform_device *pdev)
 {
     void *s0;
     struct platform_device *s1;
@@ -101631,7 +101651,7 @@ int tx_isp_remove(struct platform_device *pdev)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000006c330 origin=fragment_seed original=tx_isp_core_remove */
-int tx_isp_core_remove(struct platform_device *pdev)
+static int tx_isp_core_remove(struct platform_device *pdev)
 {
 	uintptr_t *v0;
 	uintptr_t *s0;

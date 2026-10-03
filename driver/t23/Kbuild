@@ -20,6 +20,17 @@ ccflags-y += -Wno-error=int-conversion
 ccflags-y += -Wno-error=incompatible-pointer-types
 ccflags-y += $(call cc-option,-Wa$(comma)-mno-pdr)
 
+# TX_ISP_T23_TRACE=y keeps the KERN_INFO bring-up trace in the module; n
+# (default) compiles it and its strings out. Warnings and errors stay.
+TX_ISP_T23_TRACE ?= n
+ifneq ($(TX_ISP_T23_TRACE),y)
+CFLAGS_tx_isp_t23_core.o += -DTX_ISP_T23_NO_TRACE
+endif
+
+# Rootfs size: address static data through section anchors (one lui/addiu
+# per block instead of a HI16/LO16 pair per object); halves .rel.text.
+ccflags-y += -fsection-anchors
+
 # Rootfs size: drop local (static) symbols from the module image. The kernel
 # resolves exports through __ksymtab, so .symtab/.strtab bulk is dead weight.
 LDFLAGS_MODULE += -x

@@ -10,7 +10,7 @@ u32 log2_fixed_to_fixed(u32 value, int input_precision, u8 output_precision)
 					 output_precision);
 }
 
-u32 multiplication_fixed_to_fixed(u32 first, u32 second,
+static u32 multiplication_fixed_to_fixed(u32 first, u32 second,
 				   int input_fraction, int output_fraction)
 {
 	(void)input_fraction;
@@ -18,13 +18,13 @@ u32 multiplication_fixed_to_fixed(u32 first, u32 second,
 					(unsigned int)output_fraction);
 }
 
-s32 solving_lin_equation_b(s32 y1, s32 slope, s32 x1,
+static s32 solving_lin_equation_b(s32 y1, s32 slope, s32 x1,
 			   s16 fraction_size)
 {
 	return tx_isp_solve_linear_b_s32(y1, slope, x1, fraction_size);
 }
 
-s32 solving_nth_root_045(s32 value, s16 fraction_size)
+static s32 solving_nth_root_045(s32 value, s16 fraction_size)
 {
 	return tx_isp_nth_root_045_s32(value, fraction_size);
 }
