@@ -301,6 +301,7 @@ static int tisp_g_dpc_str_internal(uint32_t *value);
 int tisp_g_defog_str_internal(uint32_t *v);
 int tisp_af_get_metric(uint32_t *v);
 int tisp_g_mscaler_mask_attr(void *buf);
+int tisp_s_mscaler_mask_attr(const void *buf);
 int tisp_s_dpc_strength(uint32_t strength);
 static int tisp_set_defog_strength(uint8_t *strength_ptr);
 static int defog_3x3_5x5_params_init(uint32_t width, uint32_t height);
@@ -358,6 +359,7 @@ extern void system_reg_write_gib(u32 arg1, u32 arg2, u32 arg3);
 extern void system_reg_write_gb(u32 arg1, u32 arg2, u32 arg3);
 extern uint32_t deir_en;
 extern uint32_t msca_dmaout_arb;
+extern uint32_t msca_ch_en;
 
 /* CLM (Color Luminance Mapping) constants and data — declared early for param_array_set/get */
 #define CLM_H_LUT_SIZE      0x41A   /* 1050 bytes */
@@ -9861,19 +9863,8 @@ static int apical_isp_core_ops_s_ctrl(struct tx_isp_dev *dev, struct isp_core_ct
                 ret = -EFAULT;
                 goto out;
             }
-            /* OEM: tisp_s_mscaler_mask_attr allocates and stores to data_ba480/data_ba47c */
-            if (!mscaler_mask_active)
-                mscaler_mask_active = kmalloc(0xac, GFP_KERNEL);
-            if (!mscaler_mask_saved)
-                mscaler_mask_saved = kmalloc(0xac, GFP_KERNEL);
-            if (mscaler_mask_active) {
-                memset(mscaler_mask_active, 0, 0xac);
-                memcpy(mscaler_mask_active, mask_buf, 0xac);
-            }
-            if (mscaler_mask_saved) {
-                memset(mscaler_mask_saved, 0, 0xac);
-                memcpy(mscaler_mask_saved, mask_buf, 0xac);
-            }
+            /* OEM apical_isp_mask_s_attr (0x5548) -> tisp_s_mscaler_mask_attr */
+            tisp_s_mscaler_mask_attr(mask_buf);
             break;
         }
 
@@ -16969,6 +16960,134 @@ int tisp_af_get_metric(uint32_t *v) { if (v) { *v = af_metric_sum >> (af_metric_
 int tisp_g_af_weight(void *buf) { if (buf) memset(buf, 0, 0xe4); return 0; }
 /* OEM: tisp_g_autozoom_control (0x64318) is __pure with empty body — return 0 is correct */
 int tisp_g_autozoom_control(uint32_t *v) { if (v) { *v = 0; return 0; } return -EINVAL; }
+/*
+ * MSCA privacy mask (OEM tisp_s_mscaler_mask_attr 0x65850,
+ * tisp_mscaler_mask_setreg 0x65114, tisp_mscaler_mask_change 0x64d14).
+ *
+ * The 0xac-byte user attr (IMPISPMASKAttr) holds 3 channels x 4 blocks of
+ * 14 bytes: +0 en (u8), +2 top, +4 left, +6 width, +8 height (u16),
+ * +10..+12 Y/U/V, then mask_type at +0xa8 (libimp already turned an RGB
+ * colour into YUV).  Channel c block b goes to 0x9938 + c*0x100 + b*0xc:
+ *   +0 left << 16 | top, +4 width << 16 | height, +8 Y << 16 | chroma,
+ * chroma U << 8 | V when the channel's 0x9968 + c*0x100 is non-zero, else
+ * V << 8 | U (system_yvu_or_yuv).  A disabled block gets three zero writes.  0x9804 bits 3..5
+ * enable the mask per channel (OEM ORs 0xe0000, not 0xf0000).  The getter
+ * returns the unflipped user copy; the programmed copy follows the MSCA
+ * mirror/flip (hvflip_last).
+ */
+#define MSCA_MASK_ATTR_SIZE	0xac
+#define MSCA_MASK_BLK_SIZE	0xe
+#define MSCA_MASK_CHN_SIZE	0x38
+
+static u32 hvflip_last; /* OEM hvflip_last: MSCA flip mask the copy follows */
+extern void tisp_mscaler_mask_frame(int channel_id, u16 *width, u16 *height);
+
+static inline u16 *msca_mask_u16(uint8_t *blk, int off)
+{
+	return (u16 *)(blk + off);
+}
+
+/* change: 1 mirror (left), 2 flip (top), 3 both, against each channel's
+ * output frame; every other value leaves the copy alone. */
+static void tisp_mscaler_mask_change(u32 change)
+{
+	int c, b;
+
+	if (!mscaler_mask_active || change < 1 || change > 3)
+		return;
+
+	for (c = 0; c < 3; c++) {
+		u16 fw, fh;
+
+		tisp_mscaler_mask_frame(c, &fw, &fh);
+		for (b = 0; b < 4; b++) {
+			uint8_t *blk = mscaler_mask_active +
+				       c * MSCA_MASK_CHN_SIZE + b * MSCA_MASK_BLK_SIZE;
+			u16 *top = msca_mask_u16(blk, 2);
+			u16 *left = msca_mask_u16(blk, 4);
+
+			if (blk[0] != 1)
+				continue;
+			if (change & 1)
+				*left = fw - *msca_mask_u16(blk, 6) - *left;
+			if (change & 2)
+				*top = fh - *msca_mask_u16(blk, 8) - *top;
+		}
+	}
+}
+
+int system_yvu_or_yuv(int arg1, int arg2, int arg3);
+
+static void tisp_mscaler_mask_setreg(const uint8_t *attr)
+{
+	u32 ch_on = 0;
+	int c, b;
+
+	if (msca_ch_en == ~0U)
+		msca_ch_en = 0;
+
+	for (c = 0; c < 3; c++) {
+		u32 base = 0x9938 + c * 0x100;
+		int uv = system_reg_read(0x9968 + c * 0x100) != 0;
+
+		for (b = 0; b < 4; b++) {
+			const uint8_t *blk = attr + c * MSCA_MASK_CHN_SIZE +
+					     b * MSCA_MASK_BLK_SIZE;
+			u32 reg = base + b * 0xc;
+
+			if (blk[0] == 1) {
+				u16 top = blk[2] | blk[3] << 8;
+				u16 left = blk[4] | blk[5] << 8;
+				u16 w = blk[6] | blk[7] << 8;
+				u16 h = blk[8] | blk[9] << 8;
+
+				system_reg_write(reg, (u32)left << 16 | top);
+				system_reg_write(reg + 4, (u32)w << 16 | h);
+				system_yvu_or_yuv(uv, reg + 8, blk[10] | blk[11] << 8 |
+						  blk[12] << 16);
+				ch_on |= 1U << c;
+			} else {
+				system_reg_write(reg, 0);
+				system_reg_write(reg + 4, 0);
+				system_reg_write(reg + 8, 0);
+			}
+		}
+	}
+
+	msca_ch_en = (msca_ch_en & ~0x38U) | ch_on << 3 | 0xe0000;
+	system_reg_write(0x9804, msca_ch_en);
+}
+
+int tisp_s_mscaler_mask_attr(const void *buf)
+{
+	if (!buf)
+		return -EINVAL;
+	if (!mscaler_mask_active)
+		mscaler_mask_active = kmalloc(MSCA_MASK_ATTR_SIZE, GFP_KERNEL);
+	if (!mscaler_mask_saved)
+		mscaler_mask_saved = kmalloc(MSCA_MASK_ATTR_SIZE, GFP_KERNEL);
+	/* OEM does not check the allocations. */
+	if (!mscaler_mask_active || !mscaler_mask_saved)
+		return -ENOMEM;
+	memcpy(mscaler_mask_active, buf, MSCA_MASK_ATTR_SIZE);
+	memcpy(mscaler_mask_saved, buf, MSCA_MASK_ATTR_SIZE);
+	if (hvflip_last)
+		tisp_mscaler_mask_change(hvflip_last);
+	tisp_mscaler_mask_setreg(mscaler_mask_active);
+	return 0;
+}
+
+/* OEM tisp_s_mscaler_hvflip_mask (0x659e0): move the programmed copy from
+ * the last flip to the new one and reprogram; no-op until a mask is set. */
+void tisp_s_mscaler_hvflip_mask(u8 mask)
+{
+	if (mscaler_mask_active) {
+		tisp_mscaler_mask_change(mask ^ hvflip_last);
+		tisp_mscaler_mask_setreg(mscaler_mask_active);
+	}
+	hvflip_last = mask;
+}
+
 /* OEM EXACT: tisp_g_mscaler_mask_attr (0x6599c) — copy from saved mask or zero-fill */
 int tisp_g_mscaler_mask_attr(void *buf) {
 	if (!buf) return -EINVAL;
@@ -29741,6 +29860,12 @@ void tisp_deinit_free(void)
     wdr_stats_pending = false;
     t31_wdr_buffers_free();
     mutex_unlock(&wdr_control_lock);
+
+    /* OEM tisp_deinit_free (0x65ae8): drop both mask copies. */
+    kfree(mscaler_mask_active);
+    mscaler_mask_active = NULL;
+    kfree(mscaler_mask_saved);
+    mscaler_mask_saved = NULL;
 }
 
 /* OEM EXACT: tisp_event_exit (0x1708c) — shutdown event system */
@@ -29933,13 +30058,6 @@ static void tisp_lsc_set_sensor_flip(u32 width, u32 height, u8 want)
 		tisp_lsc_write_lut_datas();
 		lsc_api_flag = 0;
 	}
-}
-
-static void tisp_s_mscaler_hvflip_mask(u8 mask)
-{
-	/* OEM writes MSCA scaler flip control based on mask bits.
-	 * bit 0 = horizontal flip, bit 1 = vertical flip */
-	pr_debug("tisp_s_mscaler_hvflip_mask: 0x%x\n", mask);
 }
 
 static void tisp_hv_flip_enable(u8 mask)
@@ -30233,8 +30351,6 @@ static int defog_3x3_5x5_params_init(uint32_t width, uint32_t height)
 	return 0;
 }
 void tisp_s_wdr_init_en(int en) { (void)en; }
-void tisp_mscaler_mask_change(void) { }
-void tisp_mscaler_mask_setreg(void) { }
 /* OEM: printf_func0 — AE0 statistics debug print (rate-limited).
  * Prints AE zone statistics for AE engine 0.
  * arg1/arg2 specify the range of stat blocks to dump.
