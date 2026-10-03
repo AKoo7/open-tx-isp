@@ -2603,6 +2603,29 @@ static void tisp_channel_attr_word_set(uint8_t *attr_bytes, size_t word_index,
     memcpy(attr_bytes + (word_index * sizeof(u32)), &value, sizeof(value));
 }
 
+/*
+ * Frame size of an MSCA channel as OEM tisp_mscaler_mask_change (0x64d64)
+ * takes it for the privacy-mask mirror/flip: sel = word0 << 1 | word3 of
+ * dsN_attr; sel 2 -> words 1/2, sel 0/1/3 -> words 6/7, otherwise 0.
+ */
+void tisp_mscaler_mask_frame(int channel_id, u16 *width, u16 *height)
+{
+    const uint8_t *attr = tisp_channel_attr_store(channel_id);
+    u32 sel = (tisp_channel_attr_word(attr, 0) << 1) |
+              tisp_channel_attr_word(attr, 3);
+
+    if (sel == 2) {
+        *width = tisp_channel_attr_word(attr, 1);
+        *height = tisp_channel_attr_word(attr, 2);
+    } else if ((int32_t)sel >= 0 && sel <= 3) {
+        *width = tisp_channel_attr_word(attr, 6);
+        *height = tisp_channel_attr_word(attr, 7);
+    } else {
+        *width = 0;
+        *height = 0;
+    }
+}
+
 static u32 tisp_channel_sensor_width(struct tx_isp_dev *isp_dev)
 {
     u32 width = 0;
