@@ -716,6 +716,19 @@ module_param(t20_simple_sharpen, bool, 0644);
 MODULE_PARM_DESC(t20_simple_sharpen,
 	"always apply gain-driven ISP sharpening from the compact AE (it already runs whenever the firmware thread is parked)");
 extern bool tx_isp_t20_fw_parked(void);
+/*
+ * Colour-matrix updates since the last AE frame.  The OEM firmware runs
+ * color_matrix_update() (CT-blended CCM with the gain-modulated or manual
+ * saturation, LSC CT banks/blend and LSC strength) from the colour-matrix
+ * FSM on every AE-statistics event 11, whether or not AWB found usable
+ * zones.  With the firmware thread parked only the simple AWB called it,
+ * after an AWB update with valid zones, so in dark/IR scenes the CCM,
+ * saturation and LSC state froze.  The AE frame path below now runs it
+ * once per frame unless the AWB already did.
+ */
+static unsigned int t20_ccm_awb_updates;
+static unsigned int t20_ccm_frame_updates;
+module_param(t20_ccm_frame_updates, uint, 0444);
 static bool t20_simple_awb = true;
 module_param(t20_simple_awb, bool, 0644);
 MODULE_PARM_DESC(t20_simple_awb,
@@ -11550,6 +11563,16 @@ int32_t color_matrix_setup(int16_t *arg1, int16_t arg2, int16_t arg3, int16_t ar
 	return result;
 }
 
+/*
+ * Orientation of the LSC mesh as last written by shading_mesh_reload():
+ * the reload mirrors the table columns unless the ISP mirror block is
+ * bypassed (top 0x40 bit 1), so it follows the ISP hflip at reload time
+ * (mode/WDR switch), like the vendor firmware.  -1 = never loaded.
+ * Read-only state for /proc/jz/isp/isp-m0.
+ */
+int t20_mesh_mirrored = -1;
+int t20_mesh_mode = -1;
+
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000207d4 origin=model_output original=shading_mesh_reload */
 int32_t shading_mesh_reload(int32_t arg1)
 {
@@ -11568,6 +11591,8 @@ int32_t shading_mesh_reload(int32_t arg1)
 
 	v0 = APICAL_READ_32(0x40);
 	s3 = (v0 & 2) ? 1 : 0;
+	t20_mesh_mirrored = s3 ? 0 : 1;
+	t20_mesh_mode = arg1;
 	APICAL_WRITE_32(0x40, APICAL_READ_32(0x40) & 0xffffbfff);
 	APICAL_WRITE_32(0x380, APICAL_READ_32(0x380) & 0xfffffcff);
 	APICAL_WRITE_32(0x380, (APICAL_READ_32(0x380) & 0xfffff3ff) | 0x400);
@@ -18416,8 +18441,15 @@ int32_t AE_fsm_process_interrupt(int32_t *arg1, char arg2)
 				int32_t *iridix = (void *)(isp + 0xfd4);
 				int iridix_result;
 
-				if (tuning_feedback)
+				if (tx_isp_t20_fw_parked() && !t20_ccm_awb_updates) {
+					/* OEM: color_matrix_update() per event 11;
+					 * includes mesh_shading_modulate_strength() */
+					color_matrix_update(color);
+					t20_ccm_frame_updates++;
+				} else if (tuning_feedback) {
 					mesh_shading_modulate_strength(color);
+				}
+				t20_ccm_awb_updates = 0;
 				if (!simple_iridix_initialized) {
 					iridix_initialize(iridix);
 					simple_iridix_initialized = true;
@@ -19878,10 +19910,12 @@ apply_gains:
 	t20_awb_last_gain_11 = gains[3];
 	t20_awb_last_color_temperature = t20_simple_awb_color_temperature;
 	tx_isp_t20_awb_write_gains();
-	if (awb_fsm[0])
+	if (awb_fsm[0]) {
 		/* Consume the active saturation and CCM calibrations for this CT. */
 		color_matrix_update((int32_t *)((u8 *)(uintptr_t)awb_fsm[0] +
 			0xee8));
+		t20_ccm_awb_updates++;
+	}
 	t20_simple_awb_updates++;
 	if (t20_trace_events && (t20_simple_awb_updates <= 12 ||
 				 !(t20_simple_awb_updates & 0x1f)))
