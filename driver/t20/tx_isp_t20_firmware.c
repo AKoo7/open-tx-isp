@@ -1782,8 +1782,8 @@ int32_t apical_init_calibrations(int32_t arg1);
 int32_t init_stab(void);
 int32_t apical_process(void);
 int32_t apical_init(void);
-int32_t apical_frame_buffer_configure_temper(uint32_t arg1);
-int32_t apical_change_resolution(uint32_t arg1);
+static int32_t apical_frame_buffer_configure_temper(uint32_t arg1);
+static int32_t apical_change_resolution(uint32_t arg1);
 int32_t apical_interrupt_frame_start(int32_t *arg1);
 int32_t apical_interrupt_ae_stats(int32_t *arg1);
 int32_t apical_interrupt_awb_stats(int32_t *arg1);
@@ -1795,7 +1795,7 @@ int32_t apical_interrupt_fpga_frame_wdr(int32_t *arg1);
 int32_t apical_program_interrupt_event_part_0(int32_t arg1, int32_t arg2) __asm__("apical_program_interrupt_event.part.0");
 #endif
 int32_t apical_program_interrupt_event_part_0(int32_t arg1, int32_t arg2);
-int32_t apical_get_current_isp_index(void);
+static int32_t apical_get_current_isp_index(void);
 char * load_isp_sequence(char arg1);
 int32_t apical_fw_interrupts_init(void *arg1);
 int32_t apical_fw_init(int32_t *arg1);
@@ -1804,29 +1804,29 @@ uint32_t apical_fw_raise_event(void *arg1, int32_t arg2);
 int32_t apical_interrupt_frame_end(int32_t *arg1);
 uint32_t apical_isp_raise_event(void *arg1, int32_t arg2);
 uint32_t calc_modulation_u16(uint16_t val, uint16_t *table, int32_t count);
-uint32_t calc_modulation_u32(uint32_t arg1, int32_t *arg2, uint32_t arg3);
+static uint32_t calc_modulation_u32(uint32_t arg1, int32_t *arg2, uint32_t arg3);
 uint32_t calc_adjust_modulation_u16(uint32_t a0, uint32_t a1, uint32_t a2, uintptr_t a3, uint32_t arg4);
 uint32_t calc_scaled_modulation_u16(int16_t arg1, int16_t arg2, int16_t arg3, int16_t *arg4, int32_t arg5);
 uint32_t calc_equidistant_modulation_u16(uint16_t pos, uint16_t *table, uint16_t len);
-uint32_t calc_equidistant_modulation_u32(uint32_t arg1, uint32_t *arg2, uint32_t arg3);
+static uint32_t calc_equidistant_modulation_u32(uint32_t arg1, uint32_t *arg2, uint32_t arg3);
 uint32_t calc_inv_equidistant_modulation_u16(uint16_t arg1, uint16_t *arg2, uint16_t arg3);
-uint32_t calc_inv_equidistant_modulation_u32(uint32_t arg1, uint32_t *arg2, uint32_t arg3);
+static uint32_t calc_inv_equidistant_modulation_u32(uint32_t arg1, uint32_t *arg2, uint32_t arg3);
 int32_t leading_one_position(uint32_t arg1);
-int32_t log2_int_to_fixed(uint32_t arg1, char arg2, char arg3);
+static int32_t log2_int_to_fixed(uint32_t arg1, char arg2, char arg3);
 int32_t log2_fixed_to_fixed(uint32_t arg1, int32_t arg2, char arg3);
 uint32_t math_exp2(int32_t arg1, char arg2, char arg3);
 int32_t sqrt32(int32_t arg1);
-int32_t sqrt16(int16_t arg1);
+static int32_t sqrt16(int16_t arg1);
 uint32_t log16(uint32_t arg1);
-int32_t multiplication_fixed_to_fixed(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4);
+static int32_t multiplication_fixed_to_fixed(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4);
 int32_t math_log2(uint32_t arg1, char arg2, char arg3);
-int32_t solving_lin_equation_a(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int16_t arg5);
-int32_t solving_lin_equation_b(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4);
-int32_t div_fixed(int32_t arg1, int32_t arg2, int32_t arg3);
-int32_t solving_nth_root_045(int32_t arg1, int32_t arg2);
+static int32_t solving_lin_equation_a(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int16_t arg5);
+static int32_t solving_lin_equation_b(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4);
+static int32_t div_fixed(int32_t arg1, int32_t arg2, int32_t arg3);
+static int32_t solving_nth_root_045(int32_t arg1, int32_t arg2);
 int32_t line_offset(uint32_t a0, uint32_t a1);
-int32_t apical_cosine(int32_t arg1);
-int32_t apical_sine(int32_t arg1);
+static int32_t apical_cosine(int32_t arg1);
+static int32_t apical_sine(int32_t arg1);
 uint32_t apical_event_queue_push(int32_t *arg1, char arg2);
 uint32_t apical_event_queue_pop(int32_t *arg1);
 int32_t apical_loop_buffer_init(int32_t *arg1, int32_t arg2, int32_t arg3);
@@ -1838,23 +1838,23 @@ int32_t apical_sbus_isp_init(void *arg1);
 int32_t i2c_io_read_sample(int32_t *arg1, uint32_t arg2, char arg3);
 int32_t i2c_io_write_sample(uintptr_t a0, uint32_t a1, uint32_t a2, uint32_t a3);
 int32_t apical_sbus_i2c_init(void *arg1);
-int32_t i2c_init_access(void);
+static int32_t i2c_init_access(void);
 int32_t spi_io_write_sample(uintptr_t a0, uint32_t a1, uint32_t a2, uint32_t a3);
 int32_t spi_io_read_sample(uint32_t *arg1, uint32_t arg2, char arg3);
 int32_t apical_sbus_spi_init(void *arg1);
 void sensor_write_data(int32_t *dev, int32_t reg, char *buf, int32_t len);
-int64_t sequence_read_u16(uintptr_t a0);
-int64_t sequence_read_u32(uintptr_t a0);
-uint8_t sequence_write_u16(uintptr_t a0, uint32_t a1);
-uint8_t sequence_write_u32(uintptr_t a0, uint32_t a1);
+static int64_t sequence_read_u16(uintptr_t a0);
+static int64_t sequence_read_u32(uintptr_t a0);
+static uint8_t sequence_write_u16(uintptr_t a0, uint32_t a1);
+static uint8_t sequence_write_u32(uintptr_t a0, uint32_t a1);
 char * sensor_load_binary_sequence(int32_t *dev, void *base, int32_t idx);
-int32_t sensor_load_array_sequence(int32_t *dev, void *array, int32_t count);
+static int32_t sensor_load_array_sequence(int32_t *dev, void *array, int32_t count);
 int32_t APICAL_READ_32(int32_t addr);
 uint32_t APICAL_READ_16(int32_t arg1);
 uint32_t APICAL_READ_8(int32_t arg1);
 int32_t APICAL_WRITE_32(int32_t arg1, uint32_t arg2);
-void * APICAL_WRITE_16(void *arg1, int16_t arg2);
-char * APICAL_WRITE_8(void *arg1, char arg2);
+static void * APICAL_WRITE_16(void *arg1, int16_t arg2);
+static char * APICAL_WRITE_8(void *arg1, char arg2);
 int32_t read_data(void);
 int32_t write_data(int32_t arg1);
 int32_t apical_cmd_process(void);
@@ -1927,13 +1927,13 @@ int32_t selftest_fw_revision(int32_t a1, int32_t a2, char arg3, int32_t *arg4);
 int32_t selftest_api_revision(int32_t arg1, int32_t arg2, char arg3, int32_t *arg4);
 int32_t selftest_calibration_revision(uint32_t a0, uint32_t a1, uint32_t a2, uintptr_t a3);
 int32_t isp_system_state(void *arg1, int32_t arg2, char arg3, int32_t *arg4);
-int32_t system_sensor_select(uint32_t a0, uint32_t a1, uint32_t a2, uintptr_t a3);
+static int32_t system_sensor_select(uint32_t a0, uint32_t a1, uint32_t a2, uintptr_t a3);
 int32_t test_pattern_enable(int32_t arg1, int32_t arg2, char arg3, int32_t *arg4);
 int32_t test_pattern(int32_t arg1, int32_t arg2, char arg3, int32_t *arg4);
 int32_t fr_pipe_status(int32_t arg1, int32_t arg2, char arg3, int32_t *arg4);
 int32_t ds1_pipe_status(int32_t arg1, int32_t arg2, char arg3, int32_t *arg4);
 int32_t ds2_pipe_status(int32_t arg1, int32_t arg2, char arg3, int32_t *arg4);
-int32_t system_frame_buffer(void);
+static int32_t system_frame_buffer(void);
 int32_t resolution_active_image(void *arg1, int32_t arg2, char arg3, int32_t *arg4);
 int32_t fps_mode(void *arg1, int32_t arg2, char arg3, int32_t *arg4);
 int set_sensor_fps(void *arg1, int32_t arg2, char arg3, int32_t *arg4);
@@ -1985,7 +1985,7 @@ int32_t register_size(void *arg1, int32_t arg2, char arg3, int32_t *arg4);
 int32_t register_source(void *arg1, int16_t arg2, char arg3, int32_t *arg4);
 int32_t register_value(void *arg1, char arg2, char arg3, uint32_t *arg4);
 int32_t scene_mode(void *arg1, int32_t arg2, char arg3, int32_t *arg4);
-int32_t sharpening_mode(uint32_t a0, uint32_t a1, uint32_t a2, uintptr_t a3);
+static int32_t sharpening_mode(uint32_t a0, uint32_t a1, uint32_t a2, uintptr_t a3);
 int32_t sharpening_strength(void *arg1, int32_t arg2, char arg3, int32_t *arg4);
 int32_t fr_output_mode(void *arg1, int32_t arg2, char arg3, int32_t *arg4);
 int32_t ds1_output_mode(void *arg1, int32_t arg2, char arg3, int32_t *arg4);
@@ -2032,9 +2032,9 @@ int32_t get_quantised_long_integration_time(int32_t *arg1, int32_t arg2, int32_t
 int32_t cmos_antiflicker_update(int32_t *arg1);
 uint32_t cmos_long_exposure_update(uint32_t *arg1);
 int32_t cmos_calc_target_gain(void *arg1);
-int32_t cmos_update_wdr_mode(void);
+static int32_t cmos_update_wdr_mode(void);
 int32_t cmos_set_exposure_target(void *arg1, int32_t arg2, int32_t arg3);
-int32_t defect_pixel_table_read(uint32_t *arg1, uint32_t arg2);
+static int32_t defect_pixel_table_read(uint32_t *arg1, uint32_t arg2);
 int32_t defect_pixel_table_write(uint32_t *table, uint32_t count);
 int32_t defect_pixel_initialize(uintptr_t a0);
 int32_t defect_pixel_update(int32_t *arg1);
@@ -2042,15 +2042,15 @@ int32_t mesh_shading_modulate_strength(int32_t *arg1);
 int32_t saturation_modulate_strength(int32_t *arg1);
 void color_matrix_fsm_process_interrupt(void);
 int32_t matrix_matrix_multiply(void *arg1, void *arg2, void *arg3, int32_t arg4, int32_t arg5, int32_t arg6);
-int32_t matrix_vector_multiply(void *arg1, void *arg2, void *arg3, int32_t arg4, int32_t arg5);
+static int32_t matrix_vector_multiply(void *arg1, void *arg2, void *arg3, int32_t arg4, int32_t arg5);
 int32_t complement_to_direct(int32_t arg1);
 int32_t direct_to_complement(int32_t arg1);
 int32_t color_matrix_recalculate(int32_t *arg1);
 int32_t color_matrix_setup(int16_t *arg1, int16_t arg2, int16_t arg3, int16_t arg4, int16_t arg5, int16_t arg6, int16_t arg7, int16_t arg8, int16_t arg9, int16_t arg10);
 int32_t shading_mesh_reload(int32_t arg1);
 int32_t shading_mesh_load(int32_t arg1);
-int32_t is_yuv_format(int16_t arg1);
-int32_t shading_mesh_init(void);
+static int32_t is_yuv_format(int16_t arg1);
+static int32_t shading_mesh_init(void);
 int32_t color_matrix_write(void *arg1);
 int32_t color_matrix_update(int32_t *arg1);
 int32_t color_matrix_change_CCMs(int32_t *arg1);
@@ -2074,7 +2074,7 @@ uint32_t general_frame_start(uint32_t *arg1);
 uint32_t general_frame_end(uint32_t *arg1);
 int32_t general_fsm_process_interrupt(int32_t *arg1, char arg2);
 uint32_t calc_fe_lut_output(int32_t *arg1, int16_t arg2);
-uint32_t calc_fe_lut_input(uint32_t *arg1, uint16_t arg2);
+static uint32_t calc_fe_lut_input(uint32_t *arg1, uint16_t arg2);
 int16_t * matrix_compute_hue_saturation(int32_t arg1, int16_t *arg2);
 int32_t update_composite_matrix(void *arg1, void *arg2);
 uint32_t compute_transfrom_matrix(void *arg1, void *arg2, char arg3);
@@ -2089,7 +2089,7 @@ int32_t apical_isp_init(uintptr_t a0);
 int32_t apical_isp_process_interrupt(void *arg1, char arg2);
 int32_t apical_isp_process_events(void *arg1, int32_t arg2);
 int32_t sensor_fsm_clear(void *arg1);
-int32_t sensor_request_interrupt(int32_t *arg1, int32_t arg2);
+static int32_t sensor_request_interrupt(int32_t *arg1, int32_t arg2);
 uint32_t sensor_fsm_switch_state(int32_t *arg1, int32_t arg2);
 uint32_t sensor_fsm_process_state(int32_t *arg1);
 int32_t sensor_fsm_process_event(int32_t *arg1, int32_t arg2);
@@ -2099,7 +2099,7 @@ int cmos_fsm_switch_state(int32_t *arg1, int32_t arg2);
 int32_t cmos_fsm_process_state(int32_t *arg1);
 int32_t cmos_fsm_process_event(int32_t *fsm, int32_t event);
 int defect_pixel_fsm_clear(void);
-int32_t defect_pixel_request_interrupt(int32_t *arg1, int32_t arg2);
+static int32_t defect_pixel_request_interrupt(int32_t *arg1, int32_t arg2);
 int defect_pixel_fsm_switch_state(int32_t *fsm, int32_t new_state);
 void defect_pixel_fsm_process_state(int32_t *fsm);
 int32_t defect_pixel_fsm_process_event(int32_t *fsm, int32_t event);
@@ -2124,17 +2124,17 @@ void iridix_fsm_switch_state(int32_t *arg1, int32_t arg2);
 void iridix_fsm_process_state(int32_t *arg1);
 int32_t iridix_fsm_process_event(int32_t *fsm, int32_t event);
 int32_t noise_reduction_fsm_clear(void *arg1);
-int32_t noise_reduction_request_interrupt(int32_t *arg1, int32_t arg2);
+static int32_t noise_reduction_request_interrupt(int32_t *arg1, int32_t arg2);
 int32_t noise_reduction_fsm_switch_state(void *arg1, int32_t arg2);
 int32_t noise_reduction_fsm_process_state(void *arg1);
 int32_t noise_reduction_fsm_process_event(uintptr_t a0, uint32_t a1);
 int32_t sharpening_fsm_clear(uintptr_t a0);
-int32_t sharpening_request_interrupt(int32_t *arg1, int32_t arg2);
+static int32_t sharpening_request_interrupt(int32_t *arg1, int32_t arg2);
 int32_t sharpening_fsm_switch_state(int32_t *arg1, int32_t arg2);
 void sharpening_fsm_process_state(int32_t *arg1);
 int32_t sharpening_fsm_process_event(int32_t *fsm, int32_t event);
 int32_t flash_fsm_clear(void *arg1);
-int32_t flash_request_interrupt(int32_t *arg1, int32_t arg2);
+static int32_t flash_request_interrupt(int32_t *arg1, int32_t arg2);
 void flash_fsm_switch_state(int32_t *arg1, int32_t arg2);
 void flash_fsm_process_state(int32_t *arg1);
 int32_t flash_fsm_process_event(int32_t *fsm, int32_t event);
@@ -2165,20 +2165,20 @@ void* mem_write_u32(uintptr_t a0, uint32_t a1);
 uint32_t apical_sbus_read_u8(int32_t *arg1, uint32_t arg2);
 uint32_t apical_sbus_read_u16(uint32_t *dev, uint32_t addr);
 uint32_t apical_sbus_read_u32(int32_t *base, uint32_t offset);
-int32_t apical_sbus_read_data_u8(int32_t *arg1, int32_t arg2, void *arg3, int32_t arg4);
-int32_t apical_sbus_read_data_u16(uint32_t *arg1, uint32_t arg2, void *arg3, int32_t arg4);
-int32_t apical_sbus_read_data_u32(uintptr_t a0, uint32_t a1, uintptr_t a2, uint32_t a3);
+static int32_t apical_sbus_read_data_u8(int32_t *arg1, int32_t arg2, void *arg3, int32_t arg4);
+static int32_t apical_sbus_read_data_u16(uint32_t *arg1, uint32_t arg2, void *arg3, int32_t arg4);
+static int32_t apical_sbus_read_data_u32(uintptr_t a0, uint32_t a1, uintptr_t a2, uint32_t a3);
 int32_t apical_sbus_write_u8(int32_t *arg1, int32_t arg2, char arg3);
 int32_t apical_sbus_write_u16(int32_t *arg1, uint32_t arg2, int16_t arg3);
 int32_t apical_sbus_write_u32(struct apical_sbus_dev *dev, uint32_t reg, uint32_t val);
 int32_t apical_sbus_write_data_u8(int32_t *arg1, int32_t arg2, void *arg3, int32_t arg4);
 int32_t apical_sbus_write_data_u16(int32_t *dev, uint32_t addr, void *data, int32_t count);
 int32_t apical_sbus_write_data_u32(uint32_t *arg1, uint32_t arg2, void *arg3, int32_t arg4);
-int32_t apical_sbus_write_data(uintptr_t a0, uint32_t a1, uintptr_t a2, uint32_t a3);
-int32_t apical_sbus_copy(int32_t *dst, uint32_t dst_off, int32_t *src, uint32_t src_off, int32_t count);
-uint32_t sensor_sync_get_output_resolution(void *arg1, int16_t *arg2);
-int32_t apply_dvi_sync_param(int16_t *arg1);
-int32_t apply_dvi_fpga_sync_param(int16_t *arg1);
+static int32_t apical_sbus_write_data(uintptr_t a0, uint32_t a1, uintptr_t a2, uint32_t a3);
+static int32_t apical_sbus_copy(int32_t *dst, uint32_t dst_off, int32_t *src, uint32_t src_off, int32_t count);
+static uint32_t sensor_sync_get_output_resolution(void *arg1, int16_t *arg2);
+static int32_t apply_dvi_sync_param(int16_t *arg1);
+static int32_t apply_dvi_fpga_sync_param(int16_t *arg1);
 int32_t sensor_init_output(void *arg1, int32_t arg2);
 int32_t sensor_hw_init(int32_t *arg1);
 int32_t sensor_update_black(int32_t *arg1);
@@ -2186,8 +2186,8 @@ int32_t sensor_sw_init(int32_t *arg1);
 int32_t sensor_load_vars(void);
 void sensor_start_calibrate(void);
 int32_t sensor_stop_calibrate(void);
-int32_t sensor_fps_change(void);
-int32_t sensor_get_lines_second(void *arg1);
+static int32_t sensor_fps_change(void);
+static int32_t sensor_get_lines_second(void *arg1);
 int32_t ae_initialize(int32_t *arg1);
 uint32_t ae_read_full_histogram_data(uintptr_t a0);
 int32_t AE_fsm_process_interrupt(int32_t *arg1, char arg2);
@@ -2197,7 +2197,7 @@ int tx_isp_t20_simple_ae_apply(int32_t *total_exposure_log2,
 	uint32_t partition_step_count);
 uint32_t ae_calculate_exposure_ratio(int32_t *arg1);
 uint16_t* ae_calculate_target(uintptr_t a0);
-int32_t set_integrator_ae(void *arg1, int32_t arg2, int32_t arg3, int32_t arg4);
+static int32_t set_integrator_ae(void *arg1, int32_t arg2, int32_t arg3, int32_t arg4);
 int32_t ae_calculate_exposure(int32_t *arg1);
 int32_t ae_exposure_correction(uintptr_t a0, uint32_t a1);
 uint32_t luts_fetch(uint32_t arg1, uint32_t arg2, uint32_t arg3, uint32_t arg4, uint16_t *arg5, uint16_t arg6);
@@ -2216,7 +2216,7 @@ int32_t AWB_mesh_LUT(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int
 int32_t mesh_AWB_getKnownSourceLight_weight_LUT(int32_t arg1, int16_t arg2, int16_t arg3, int32_t arg4, int32_t arg5);
 int32_t awb_coeffs_write(void);
 uint32_t awb_init(void *arg1);
-int32_t awb_set_identity(void *arg1);
+static int32_t awb_set_identity(void *arg1);
 int32_t awb_read_statistics(void *arg1);
 int32_t AWB_fsm_process_interrupt(int32_t *arg1, char arg2);
 int32_t awb_zones_calculate(void);
@@ -2246,36 +2246,36 @@ int32_t flash_processing(int32_t *arg1);
 int32_t dis_initialize(uintptr_t a0);
 int32_t dis_update_stats(int32_t *arg1);
 int32_t dis_update_settings(uintptr_t arg1);
-int32_t dis_update_output(void *arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5);
+static int32_t dis_update_output(void *arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5);
 void dis_analyze_stats(void *arg1);
 int32_t dis_fsm_process_interrupt(int32_t *arg1, char arg2);
 int32_t dis_get_default_settings(int32_t *arg1);
 int32_t dis_reset(void *arg1);
 int32_t dis_set_settings(int32_t arg1, int32_t arg2);
 int32_t dis_get_settings(int32_t arg1, int32_t arg2);
-int32_t dis_check_settings(int32_t a0, int32_t a1, int32_t a2, int32_t a3);
+static int32_t dis_check_settings(int32_t a0, int32_t a1, int32_t a2, int32_t a3);
 int32_t dis_open(void **arg1, int32_t setting0, int32_t setting1,
 		 int32_t setting2, int32_t setting3, int32_t setting4,
 		 int32_t setting5, int32_t setting6, int32_t setting7,
 		 int32_t use_global);
-int32_t dis_close(int32_t arg1);
+static int32_t dis_close(int32_t arg1);
 int32_t dis_clip_gmv_vector(void *arg1, int32_t *arg2);
 int32_t dis_analyze(void *arg1, void *arg2, int32_t *arg3, int32_t *arg4);
 int32_t dis_update_bg_map(void *arg1, int32_t arg2, int32_t *arg3);
-int32_t get_common_estimations(void *arg1, int32_t arg2, int32_t arg3, uint32_t *arg4, int32_t *arg5);
-int32_t validate_smooth_test(void *arg1, int32_t arg2);
+static int32_t get_common_estimations(void *arg1, int32_t arg2, int32_t arg3, uint32_t *arg4, int32_t *arg5);
+static int32_t validate_smooth_test(void *arg1, int32_t arg2);
 int32_t validate_complexity_test(void *arg1, int32_t arg2);
-int32_t validate_borders(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5);
+static int32_t validate_borders(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5);
 int32_t validate_motion_vectors(int32_t arg1, void *arg2, int32_t arg3, int32_t arg4);
 int32_t get_exp(uint32_t a0, uintptr_t a1);
 int32_t get_gmv_gauss_init(void **arg1, int32_t arg2);
-int32_t get_gmv_gauss_method_fast_v1(void *arg1, int32_t *arg2, int32_t arg3, int32_t arg4, int32_t *arg5);
+static int32_t get_gmv_gauss_method_fast_v1(void *arg1, int32_t *arg2, int32_t arg3, int32_t arg4, int32_t *arg5);
 int32_t get_gmv_gauss_method_fast_v2(void *arg1, int32_t arg2, int32_t *arg3);
-int32_t get_gmv_gauss_method_fast_v3(void *arg1, int32_t arg2, int32_t *arg3);
+static int32_t get_gmv_gauss_method_fast_v3(void *arg1, int32_t arg2, int32_t *arg3);
 int32_t iir_filter_reset(void *arg1);
 int32_t iir_filter_v2(int32_t arg1, int32_t arg2, int32_t arg3, int32_t *arg4);
-int32_t iir_filter_v4(int32_t arg1, int32_t arg2, int32_t arg3, int32_t *arg4);
-int32_t iir_filter_v3(int32_t arg1, int32_t arg2, int32_t arg3, int32_t *arg4);
+static int32_t iir_filter_v4(int32_t arg1, int32_t arg2, int32_t arg3, int32_t *arg4);
+static int32_t iir_filter_v3(int32_t arg1, int32_t arg2, int32_t arg3, int32_t *arg4);
 int32_t apical_wdr_fs_isp_setup(int32_t arg1);
 int32_t vic_core_reset(void);
 int32_t dump_vic_reg(uintptr_t a0);
@@ -2402,7 +2402,7 @@ int32_t apical_init(void)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000158a4 origin=model_output original=apical_frame_buffer_configure_temper */
-int32_t apical_frame_buffer_configure_temper(uint32_t arg1)
+static int32_t apical_frame_buffer_configure_temper(uint32_t arg1)
 {
     APICAL_WRITE_32(0xa18, arg1);
     APICAL_WRITE_32(0xa1c, arg1);
@@ -2414,7 +2414,7 @@ int32_t apical_frame_buffer_configure_temper(uint32_t arg1)
 
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000015a74 origin=model_output original=apical_change_resolution */
-int32_t apical_change_resolution(uint32_t arg1)
+static int32_t apical_change_resolution(uint32_t arg1)
 {
 	int32_t log2_val;
 	int32_t reg;
@@ -2672,7 +2672,7 @@ uint32_t t20_fw_context_word(unsigned int offset)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000161f8 origin=model_output original=apical_get_current_isp_index */
-int32_t apical_get_current_isp_index(void)
+static int32_t apical_get_current_isp_index(void)
 {
     int32_t fw = apical_get_fw();
     return *(int32_t *)(uintptr_t)fw;
@@ -2881,7 +2881,7 @@ uint32_t calc_modulation_u16(uint16_t val, uint16_t *table, int32_t count)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000016834 origin=model_output original=calc_modulation_u32 */
-uint32_t calc_modulation_u32(uint32_t arg1, int32_t *arg2, uint32_t arg3)
+static uint32_t calc_modulation_u32(uint32_t arg1, int32_t *arg2, uint32_t arg3)
 {
     if ((uint32_t)*arg2 >= arg1)
         return arg2[1];
@@ -3233,7 +3233,7 @@ uint32_t calc_equidistant_modulation_u16(uint16_t pos, uint16_t *table, uint16_t
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000016c70 origin=model_output original=calc_equidistant_modulation_u32 */
-uint32_t calc_equidistant_modulation_u32(uint32_t arg1, uint32_t *arg2, uint32_t arg3)
+static uint32_t calc_equidistant_modulation_u32(uint32_t arg1, uint32_t *arg2, uint32_t arg3)
 {
     if (arg1 == 0)
         return *arg2;
@@ -3381,7 +3381,7 @@ calc_inv_equidistant_modulation_u16_0x60:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000016e3c origin=model_output original=calc_inv_equidistant_modulation_u32 */
-uint32_t calc_inv_equidistant_modulation_u32(uint32_t arg1, uint32_t *arg2, uint32_t arg3)
+static uint32_t calc_inv_equidistant_modulation_u32(uint32_t arg1, uint32_t *arg2, uint32_t arg3)
 {
 	uint32_t result;
 	/* OEM uses a scalar modulation-node index.  The recovered pointer type
@@ -3474,7 +3474,7 @@ int32_t leading_one_position(uint32_t arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000016fac origin=model_output original=log2_int_to_fixed */
-int32_t log2_int_to_fixed(uint32_t arg1, char arg2, char arg3)
+static int32_t log2_int_to_fixed(uint32_t arg1, char arg2, char arg3)
 {
 	uint32_t s1 = (uint32_t)(uint8_t)arg2;
 	uint32_t s2 = (uint32_t)(uint8_t)arg3;
@@ -3538,7 +3538,7 @@ int32_t sqrt32(int32_t arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000171d0 origin=model_output original=sqrt16 */
-int32_t sqrt16(int16_t arg1)
+static int32_t sqrt16(int16_t arg1)
 {
 	int32_t *i = 0;
 	int32_t result = 0;
@@ -3614,7 +3614,7 @@ int32_t math_log2(uint32_t arg1, char arg2, char arg3)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000017358 origin=model_output original=solving_lin_equation_a */
-int32_t solving_lin_equation_a(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int16_t arg5)
+static int32_t solving_lin_equation_a(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int16_t arg5)
 {
     if (arg3 == arg4)
         return arg3;
@@ -3633,7 +3633,7 @@ int32_t solving_lin_equation_a(int32_t arg1, int32_t arg2, int32_t arg3, int32_t
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000017394 origin=model_output original=div_fixed */
-int32_t div_fixed(int32_t arg1, int32_t arg2, int32_t arg3)
+static int32_t div_fixed(int32_t arg1, int32_t arg2, int32_t arg3)
 {
     int32_t shift = (arg3 << 16) >> 16;
 
@@ -3645,7 +3645,7 @@ int32_t div_fixed(int32_t arg1, int32_t arg2, int32_t arg3)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000017434 origin=model_output original=apical_cosine */
-int32_t apical_cosine(int32_t arg1)
+static int32_t apical_cosine(int32_t arg1)
 {
     uint32_t q = (uint32_t)arg1 / 0x6488;
     int32_t r = arg1 - (int32_t)((q & 0xffff) * 0x6488);
@@ -3671,7 +3671,7 @@ int32_t apical_cosine(int32_t arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000017544 origin=model_output original=apical_sine */
-int32_t apical_sine(int32_t arg1)
+static int32_t apical_sine(int32_t arg1)
 {
     int32_t *q = arg1 / 25736;
     int32_t r = arg1 - ((uintptr_t)q & 0xffff) * 25736;
@@ -4097,7 +4097,7 @@ int32_t apical_sbus_i2c_init(void *arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000017c88 origin=model_output original=i2c_init_access */
-int32_t i2c_init_access(void)
+static int32_t i2c_init_access(void)
 {
 	return I2C_init();
 }
@@ -4476,7 +4476,7 @@ void sensor_write_data(int32_t *dev, int32_t reg, char *buf, int32_t len)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000018338 origin=fragment_seed original=sequence_read_u16 */
-int64_t sequence_read_u16(uintptr_t a0)
+static int64_t sequence_read_u16(uintptr_t a0)
 {
     uint32_t ra = 0;
     uintptr_t v0 = 0;
@@ -4497,7 +4497,7 @@ int64_t sequence_read_u16(uintptr_t a0)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001834c origin=fragment_seed original=sequence_read_u32 */
-int64_t sequence_read_u32(uintptr_t a0)
+static int64_t sequence_read_u32(uintptr_t a0)
 {
     uint32_t ra = 0;
     uintptr_t v0 = 0;
@@ -4524,7 +4524,7 @@ int64_t sequence_read_u32(uintptr_t a0)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000018378 origin=fragment_seed original=sequence_write_u16 */
-uint8_t sequence_write_u16(uintptr_t a0, uint32_t a1)
+static uint8_t sequence_write_u16(uintptr_t a0, uint32_t a1)
 {
     uint32_t ra = 0;
     uint32_t v0 = 0;
@@ -4546,7 +4546,7 @@ uint8_t sequence_write_u16(uintptr_t a0, uint32_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001838c origin=fragment_seed original=sequence_write_u32 */
-uint8_t sequence_write_u32(uintptr_t a0, uint32_t a1)
+static uint8_t sequence_write_u32(uintptr_t a0, uint32_t a1)
 {
     uint32_t ra = 0;
     uintptr_t v0 = 0;
@@ -4753,7 +4753,7 @@ handle_op:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001886c origin=model_output original=sensor_load_array_sequence */
-int32_t sensor_load_array_sequence(int32_t *dev, void *array, int32_t count)
+static int32_t sensor_load_array_sequence(int32_t *dev, void *array, int32_t count)
 {
 	uint16_t *p = (uint16_t *)((char *)array + (count << 2));
 	int32_t *i;
@@ -4861,7 +4861,7 @@ int32_t APICAL_WRITE_32(int32_t arg1, uint32_t arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000018ae0 origin=model_output original=APICAL_WRITE_16 */
-void *APICAL_WRITE_16(void *arg1, int16_t arg2)
+static void *APICAL_WRITE_16(void *arg1, int16_t arg2)
 {
 	uint32_t addr = (uint32_t)(uintptr_t)arg1;
 	uint32_t offset;
@@ -4880,7 +4880,7 @@ void *APICAL_WRITE_16(void *arg1, int16_t arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000018b48 origin=model_output original=APICAL_WRITE_8 */
-char *APICAL_WRITE_8(void *arg1, char arg2)
+static char *APICAL_WRITE_8(void *arg1, char arg2)
 {
     char *result;
 
@@ -6436,7 +6436,7 @@ int32_t isp_system_state(void *arg1, int32_t arg2, char arg3, int32_t *arg4)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001a5a8 origin=fragment_seed original=system_sensor_select */
-int32_t system_sensor_select(uint32_t a0, uint32_t a1, uint32_t a2, uintptr_t a3)
+static int32_t system_sensor_select(uint32_t a0, uint32_t a1, uint32_t a2, uintptr_t a3)
 {
     uint32_t ra = 0;
     uintptr_t v0 = 0;
@@ -6607,7 +6607,7 @@ int32_t ds2_pipe_status(int32_t arg1, int32_t arg2, char arg3, int32_t *arg4)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001a9a4 origin=fragment_seed original=system_frame_buffer */
-int32_t system_frame_buffer(void)
+static int32_t system_frame_buffer(void)
 {
     uint32_t ra = 0;
     uintptr_t v0 = 0;
@@ -8840,7 +8840,7 @@ label_1d5dc:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001d6b8 origin=fragment_seed original=sharpening_mode */
-int32_t sharpening_mode(uint32_t a0, uint32_t a1, uint32_t a2, uintptr_t a3)
+static int32_t sharpening_mode(uint32_t a0, uint32_t a1, uint32_t a2, uintptr_t a3)
 {
     uint32_t ra = 0;
     uintptr_t v0 = 0;
@@ -11248,7 +11248,7 @@ int32_t cmos_calc_target_gain(void *arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001fe10 origin=model_output original=cmos_update_wdr_mode */
-int32_t cmos_update_wdr_mode(void)
+static int32_t cmos_update_wdr_mode(void)
 {
 	int32_t wdr_mode = 0;
 	return wdr_mode;
@@ -11295,7 +11295,7 @@ int32_t cmos_set_exposure_target(void *arg1, int32_t arg2, int32_t arg3)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001fee0 origin=model_output original=defect_pixel_table_read */
-int32_t defect_pixel_table_read(uint32_t *arg1, uint32_t arg2)
+static int32_t defect_pixel_table_read(uint32_t *arg1, uint32_t arg2)
 {
     uint32_t count;
     uint32_t i;
@@ -11486,7 +11486,7 @@ int32_t matrix_matrix_multiply(void *arg1, void *arg2, void *arg3, int32_t arg4,
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000204d4 origin=model_output original=matrix_vector_multiply */
-int32_t matrix_vector_multiply(void *arg1, void *arg2, void *arg3, int32_t arg4, int32_t arg5)
+static int32_t matrix_vector_multiply(void *arg1, void *arg2, void *arg3, int32_t arg4, int32_t arg5)
 {
 	const int16_t *matrix = arg1;
 	const uint16_t *vector = arg2;
@@ -11659,7 +11659,7 @@ int32_t shading_mesh_load(int32_t arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000020bb0 origin=model_output original=is_yuv_format */
-int32_t is_yuv_format(int16_t arg1)
+static int32_t is_yuv_format(int16_t arg1)
 {
 	uint32_t v = (uint32_t)(uint16_t)arg1;
 	int32_t a0;
@@ -11682,7 +11682,7 @@ int32_t is_yuv_format(int16_t arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000020bf4 origin=model_output original=shading_mesh_init */
-int32_t shading_mesh_init(void)
+static int32_t shading_mesh_init(void)
 {
 	/* shading mesh initialization entry point;
 	 * the ISP pipeline registers this hook during module load.
@@ -13185,7 +13185,7 @@ uint32_t calc_fe_lut_output(int32_t *arg1, int16_t arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000023d04 origin=model_output original=calc_fe_lut_input */
-uint32_t calc_fe_lut_input(uint32_t *arg1, uint16_t arg2)
+static uint32_t calc_fe_lut_input(uint32_t *arg1, uint16_t arg2)
 {
 	uint32_t *base = *arg1;
 	uint8_t mode = *(uint8_t *)((char *)base + 0x1524);
@@ -15068,7 +15068,7 @@ t20_fsm_request_interrupt(int32_t *fsm, int32_t mask)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000027328 origin=model_output original=sensor_request_interrupt */
-int32_t sensor_request_interrupt(int32_t *arg1, int32_t arg2)
+static int32_t sensor_request_interrupt(int32_t *arg1, int32_t arg2)
 {
 	return t20_fsm_request_interrupt(arg1, arg2);
 }
@@ -15451,7 +15451,7 @@ int defect_pixel_fsm_clear(void) {
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000027bc8 origin=model_output original=defect_pixel_request_interrupt */
-int32_t defect_pixel_request_interrupt(int32_t *arg1, int32_t arg2)
+static int32_t defect_pixel_request_interrupt(int32_t *arg1, int32_t arg2)
 {
     int32_t *p = *(int32_t **)(arg1 + 1);
     int32_t result = *(int32_t *)(p + 1);
@@ -16074,7 +16074,7 @@ int32_t noise_reduction_fsm_clear(void *arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000028958 origin=model_output original=noise_reduction_request_interrupt */
-int32_t noise_reduction_request_interrupt(int32_t *arg1, int32_t arg2)
+static int32_t noise_reduction_request_interrupt(int32_t *arg1, int32_t arg2)
 {
 	return t20_fsm_request_interrupt(arg1, arg2);
 }
@@ -16185,7 +16185,7 @@ int32_t sharpening_fsm_clear(uintptr_t a0)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000028b64 origin=model_output original=sharpening_request_interrupt */
-int32_t sharpening_request_interrupt(int32_t *arg1, int32_t arg2)
+static int32_t sharpening_request_interrupt(int32_t *arg1, int32_t arg2)
 {
 	return t20_fsm_request_interrupt(arg1, arg2);
 }
@@ -16276,7 +16276,7 @@ int32_t flash_fsm_clear(void *arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000028dd8 origin=model_output original=flash_request_interrupt */
-int32_t flash_request_interrupt(int32_t *arg1, int32_t arg2)
+static int32_t flash_request_interrupt(int32_t *arg1, int32_t arg2)
 {
 	return t20_fsm_request_interrupt(arg1, arg2);
 }
@@ -16995,7 +16995,7 @@ uint32_t apical_sbus_read_u32(int32_t *base, uint32_t offset)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000029bcc origin=model_output original=apical_sbus_read_data_u8 */
-int32_t apical_sbus_read_data_u8(int32_t *arg1, int32_t arg2, void *arg3, int32_t arg4)
+static int32_t apical_sbus_read_data_u8(int32_t *arg1, int32_t arg2, void *arg3, int32_t arg4)
 {
 	int32_t *i = 0;
 	int32_t result;
@@ -17012,7 +17012,7 @@ int32_t apical_sbus_read_data_u8(int32_t *arg1, int32_t arg2, void *arg3, int32_
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000029c50 origin=model_output original=apical_sbus_read_data_u16 */
-int32_t apical_sbus_read_data_u16(uint32_t *arg1, uint32_t arg2, void *arg3, int32_t arg4)
+static int32_t apical_sbus_read_data_u16(uint32_t *arg1, uint32_t arg2, void *arg3, int32_t arg4)
 {
 	uint32_t *dev = arg1;
 	uint32_t reg = arg2;
@@ -17060,7 +17060,7 @@ done:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000029d5c origin=fragment_seed original=apical_sbus_read_data_u32 */
-int32_t apical_sbus_read_data_u32(uintptr_t a0, uint32_t a1, uintptr_t a2, uint32_t a3)
+static int32_t apical_sbus_read_data_u32(uintptr_t a0, uint32_t a1, uintptr_t a2, uint32_t a3)
 {
     uint32_t *local_10 = 0;
     uint32_t local_14 = 0;
@@ -17448,7 +17448,7 @@ int32_t apical_sbus_write_data_u32(uint32_t *arg1, uint32_t arg2, void *arg3, in
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002a51c origin=fragment_seed original=apical_sbus_write_data */
-int32_t apical_sbus_write_data(uintptr_t a0, uint32_t a1, uintptr_t a2, uint32_t a3)
+static int32_t apical_sbus_write_data(uintptr_t a0, uint32_t a1, uintptr_t a2, uint32_t a3)
 {
     uint32_t local_14 = 0;
     uint32_t local_18 = 0;
@@ -17692,7 +17692,7 @@ apical_sbus_write_data0x244:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002a780 origin=model_output original=apical_sbus_copy */
-int32_t apical_sbus_copy(int32_t *dst, uint32_t dst_off, int32_t *src, uint32_t src_off, int32_t count)
+static int32_t apical_sbus_copy(int32_t *dst, uint32_t dst_off, int32_t *src, uint32_t src_off, int32_t count)
 {
 	int32_t dst_flags = *dst;
 	int32_t src_flags = *src;
@@ -17776,7 +17776,7 @@ tail:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002aae0 origin=model_output original=sensor_sync_get_output_resolution */
-uint32_t sensor_sync_get_output_resolution(void *arg1, int16_t *arg2)
+static uint32_t sensor_sync_get_output_resolution(void *arg1, int16_t *arg2)
 {
 	uint16_t val = *(uint16_t *)((uintptr_t)arg1 + 0xe6);
 	uint32_t result;
@@ -17793,7 +17793,7 @@ uint32_t sensor_sync_get_output_resolution(void *arg1, int16_t *arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002ab0c origin=model_output original=apply_dvi_sync_param */
-int32_t apply_dvi_sync_param(int16_t *arg1)
+static int32_t apply_dvi_sync_param(int16_t *arg1)
 {
 	/*
 	 * OEM 0x2ab0c (vendor build 0x2a1b8) programs five 0x4000x words.  The
@@ -17816,7 +17816,7 @@ int32_t apply_dvi_sync_param(int16_t *arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002acc4 origin=model_output original=apply_dvi_fpga_sync_param */
-int32_t apply_dvi_fpga_sync_param(int16_t *arg1)
+static int32_t apply_dvi_fpga_sync_param(int16_t *arg1)
 {
 	uint32_t v;
 
@@ -18030,14 +18030,14 @@ int32_t sensor_stop_calibrate(void)
  * The current ISP driver build does not expose a runtime FPS switch for
  * this sensor, so the query always reports "no change available".
  */
-int32_t sensor_fps_change(void)
+static int32_t sensor_fps_change(void)
 {
 	/* No FPS change path is wired up for this sensor. */
 	return 0;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002b3cc origin=model_output original=sensor_get_lines_second */
-int32_t sensor_get_lines_second(void *arg1)
+static int32_t sensor_get_lines_second(void *arg1)
 {
 	struct sensor_ops {
 		int32_t pad[51];
@@ -18958,7 +18958,7 @@ ae_calculate_target0x474:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002bc00 origin=model_output original=set_integrator_ae */
-int32_t set_integrator_ae(void *arg1, int32_t arg2, int32_t arg3, int32_t arg4)
+static int32_t set_integrator_ae(void *arg1, int32_t arg2, int32_t arg3, int32_t arg4)
 {
 	*(int32_t *)((uintptr_t)arg1 + 0x20) = arg3;
 	*(int32_t *)((uintptr_t)arg1 + 0x24) = arg4;
@@ -19462,7 +19462,7 @@ out:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002cca4 origin=model_output original=awb_set_identity */
-int32_t awb_set_identity(void *arg1)
+static int32_t awb_set_identity(void *arg1)
 {
 	uint16_t *p = (uint16_t *)((uintptr_t)arg1 + 0x46);
 	int i;
@@ -22030,7 +22030,7 @@ int32_t dis_update_settings(uintptr_t arg1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000030668 origin=model_output original=dis_update_output */
-int32_t dis_update_output(void *arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5)
+static int32_t dis_update_output(void *arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5)
 {
     uint32_t *p = (uint32_t *)arg1;
     ((void **)(uintptr_t)p)[0x182c / 4] = (uint32_t)arg2;
@@ -22153,7 +22153,7 @@ int32_t dis_get_settings(int32_t arg1, int32_t arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003090c origin=model_output original=dis_check_settings */
-int32_t dis_check_settings(int32_t a0, int32_t a1, int32_t a2, int32_t a3)
+static int32_t dis_check_settings(int32_t a0, int32_t a1, int32_t a2, int32_t a3)
 {
 	(void)a0;
 	(void)a1;
@@ -22195,7 +22195,7 @@ int32_t dis_open(void **arg1, int32_t setting0, int32_t setting1,
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000030a5c origin=model_output original=dis_close */
-int32_t dis_close(int32_t arg1)
+static int32_t dis_close(int32_t arg1)
 {
 	return arg1 ? 0 : -1;
 }
@@ -22343,7 +22343,7 @@ int32_t dis_update_bg_map(void *arg1, int32_t arg2, int32_t *arg3)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000030d70 origin=model_output original=get_common_estimations */
-int32_t get_common_estimations(void *arg1, int32_t arg2, int32_t arg3, uint32_t *arg4, int32_t *arg5)
+static int32_t get_common_estimations(void *arg1, int32_t arg2, int32_t arg3, uint32_t *arg4, int32_t *arg5)
 {
     if (arg1 == 0)
         return -1;
@@ -22375,7 +22375,7 @@ int32_t get_common_estimations(void *arg1, int32_t arg2, int32_t arg3, uint32_t 
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000030de8 origin=model_output original=validate_smooth_test */
-int32_t validate_smooth_test(void *arg1, int32_t arg2)
+static int32_t validate_smooth_test(void *arg1, int32_t arg2)
 {
 	uint32_t *p = (uint32_t *)arg1;
 	uint32_t diff = p[4] - p[2];
@@ -22400,7 +22400,7 @@ int32_t validate_complexity_test(void *arg1, int32_t arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000030e30 origin=model_output original=validate_borders */
-int32_t validate_borders(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5)
+static int32_t validate_borders(int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4, int32_t arg5)
 {
 	int32_t result;
 
@@ -22539,7 +22539,7 @@ int32_t get_gmv_gauss_init(void **arg1, int32_t arg2)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000031040 origin=model_output original=get_gmv_gauss_method_fast_v1 */
-int32_t get_gmv_gauss_method_fast_v1(void *arg1, int32_t *arg2, int32_t arg3, int32_t arg4, int32_t *arg5)
+static int32_t get_gmv_gauss_method_fast_v1(void *arg1, int32_t *arg2, int32_t arg3, int32_t arg4, int32_t *arg5)
 {
     int32_t total;
     int32_t *row;
@@ -22662,7 +22662,7 @@ int32_t get_gmv_gauss_method_fast_v2(void *arg1, int32_t arg2, int32_t *arg3)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000003131c origin=model_output original=get_gmv_gauss_method_fast_v3 */
-int32_t get_gmv_gauss_method_fast_v3(void *arg1, int32_t arg2, int32_t *arg3)
+static int32_t get_gmv_gauss_method_fast_v3(void *arg1, int32_t arg2, int32_t *arg3)
 {
 	int32_t *base = (int32_t *)arg1;
 	int32_t count = base[2] * base[3];
@@ -22807,7 +22807,7 @@ int32_t iir_filter_v2(int32_t arg1, int32_t arg2, int32_t arg3, int32_t *arg4)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000316ec origin=model_output original=iir_filter_v4 */
-int32_t iir_filter_v4(int32_t arg1, int32_t arg2, int32_t arg3, int32_t *arg4)
+static int32_t iir_filter_v4(int32_t arg1, int32_t arg2, int32_t arg3, int32_t *arg4)
 {
     int32_t *base = (int32_t *)((char *)&csp_9009 + 0x4);
     int32_t *cbase = (int32_t *)((char *)&csp_9017);
@@ -22880,7 +22880,7 @@ int32_t iir_filter_v4(int32_t arg1, int32_t arg2, int32_t arg3, int32_t *arg4)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000031868 origin=model_output original=iir_filter_v3 */
-int32_t iir_filter_v3(int32_t arg1, int32_t arg2, int32_t arg3, int32_t *arg4)
+static int32_t iir_filter_v3(int32_t arg1, int32_t arg2, int32_t arg3, int32_t *arg4)
 {
     int32_t *s0;
     int32_t *s1;
