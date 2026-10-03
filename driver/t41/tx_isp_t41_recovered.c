@@ -52434,74 +52434,42 @@ int32_t tisp_sync_ivdc_state(uint32_t a0, uint32_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001fe30 origin=fragment_seed original=tiziano_reserve_reg_write */
+/* H20250310a tiziano_reserve_reg_write: block+0x180 holds up to eight
+ * {address, value} pairs, block+0x1c0 their count.  Stock writes every pair
+ * when the matching dnw flag is 1 and logs (without writing) for count > 8.
+ * Only accept 4-byte aligned KSEG1 (uncached MMIO) addresses: a malformed or
+ * mis-offset tuning block must not turn into a kernel paging oops. */
 void* tiziano_reserve_reg_write(uint32_t a0, uintptr_t a1, uint32_t a2)
 {
-    uint32_t ra = 0;
-    uint32_t *t9 = 0;
-    uintptr_t *v0 = 0;
-    uintptr_t *v1 = 0;
+    const uint32_t *entry;
+    int32_t count;
+    int32_t i;
 
-    /* fragment 0: Arithmetic */
-    v0 = 1;
+    (void)a2;
+    if (a0 != 1 || !a1)
+        return NULL;
 
-    /* fragment 1: Branch */
-    if (a0 != v0) { goto tiziano_reserve_reg_write0x58; }
+    count = *(const int32_t *)((const char *)a1 + 0x1c0);
+    if (count <= 0)
+        return NULL;
+    if (count > 8) {
+        isp_printf(2, "tiziano_reserve_reg_write: invalid count %d\n", count);
+        return NULL;
+    }
 
-    /* fragment 2: MemoryAccess */
-    v0 = *(uint32_t *)((char *)a1 + 448);
+    entry = (const uint32_t *)((const char *)a1 + 0x180);
+    for (i = 0; i < count; i++, entry += 2) {
+        uint32_t addr = entry[0];
 
-    /* fragment 3: Branch */
-    v1 = v0 < 9;
-    if (v0 <= 0) { goto tiziano_reserve_reg_write0x3c; }
-
-    /* fragment 4: Branch */
-    v0 = (uintptr_t)v0 << 3;
-    if (v1 == 0) { goto tiziano_reserve_reg_write0x44; }
-
-    /* fragment 5: Arithmetic */
-    v0 = a1 + (uintptr_t)v0;
-
-tiziano_reserve_reg_write0x24:
-    /* fragment 6: MemoryAccess */
-    v1 = *(uint32_t *)((char *)a1 + 384);
-    a0 = *(uint32_t *)((char *)a1 + 388);
-    a1 = a1 + 8;
-    *(uint32_t *)((char *)v1 + 0) = a0;
-
-    /* fragment 7: Branch */
-    if (a1 != v0) { goto tiziano_reserve_reg_write0x24; }
-
-tiziano_reserve_reg_write0x3c:
-    /* fragment 8: Epilogue */
-    /* function epilogue: restore registers and return */
-    return (void*)v0;
-
-    /* fragment 9: Unknown */
-    /* unmatched fragment 9 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 1fe70:	00000000 	nop */
-
-tiziano_reserve_reg_write0x44:
-    /* fragment 10: Arithmetic */
-    a1 = (uintptr_t)&LC7;
-    t9 = (uint32_t *)&isp_printf;
-    t9 = t9;
-
-    /* fragment 11: Unknown */
-    /* unmatched fragment 11 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 1fe80:	03200408 	jr.hb	t9 */
-
-    /* fragment 12: Arithmetic */
-    a1 = a1;
-
-tiziano_reserve_reg_write0x58:
-    /* fragment 13: Epilogue */
-    /* function epilogue: restore registers and return */
-
-    /* fragment 14: Unknown */
-    /* unmatched fragment 14 (Unknown): no deterministic matcher for Unknown */
-    /* asm: 1fe8c:	00000000 	nop */
-
-    return (void*)v0;
+        if (addr < 0xa0000000U || addr > 0xbffffffcU || (addr & 3U)) {
+            isp_printf(2,
+                       "tiziano_reserve_reg_write: skip invalid reg %08x=%08x\n",
+                       addr, entry[1]);
+            continue;
+        }
+        *(volatile uint32_t *)(uintptr_t)addr = entry[1];
+    }
+    return NULL;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000001fe90 origin=fragment_seed original=tiziano_load_parameters */
@@ -52881,9 +52849,13 @@ int tiziano_load_parameters(uint32_t channel, uintptr_t load_request)
         (uint32_t)(uintptr_t)night_params;
     memcpy((void *)&dnw, payload + 16, sizeof(dnw));
 
-    if (payload + 0xf94 + 452 <= payload_end)
+    /* Stock (ELF 0x204fc) passes day_params + 0x1ee40 for the day block,
+     * mirroring the night block.  The former payload + 0xf94 pointed into
+     * ordinary tuning data: harmless for os04d10, but gc5603 has a non-zero
+     * "count" there followed by a NULL address -> oops at boot. */
+    if (day_params + 0x1ee40 + 452 <= payload_end)
         tiziano_reserve_reg_write((int8_t)((unsigned char *)&dnw)[0],
-                                  (uintptr_t)(payload + 0xf94),
+                                  (uintptr_t)(day_params + 0x1ee40),
                                   (uintptr_t)night_params);
     printk(KERN_WARNING
            "tx_isp_t41_recovered: tisp-load day reserve complete\n");
