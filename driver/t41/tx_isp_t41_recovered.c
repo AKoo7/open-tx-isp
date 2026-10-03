@@ -771,6 +771,18 @@ MODULE_PARM_DESC(tx_isp_core_ioctl_mask, "isp ioctl calls mask");
 static int tx_isp_bringup_level;
 module_param(tx_isp_bringup_level, int, 0);
 MODULE_PARM_DESC(tx_isp_bringup_level, "bring-up gate: -1 exports only, 0 shallow, 1 graph, 2 mem, 3 core tuning");
+/*
+ * Load-time copy in .data, used by the unload path.  The .bss parameter
+ * sits among recovered globals that decompiled code addresses as a base
+ * (a stray cdev_init() there once made rmmod skip the whole teardown).
+ */
+static int t41_bringup_at_load = INT_MIN;
+static int t41_bringup(void)
+{
+    int level = READ_ONCE(t41_bringup_at_load);
+
+    return level == INT_MIN ? tx_isp_bringup_level : level;
+}
 
 static unsigned int t41_checkpoint_ms;
 module_param(t41_checkpoint_ms, uint, 0);
@@ -33854,7 +33866,7 @@ int32_t tx_isp_video_link_stream(uintptr_t a0, uint32_t a1)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000013a6c origin=fragment_seed original=tx_isp_exit */
 int32_t tx_isp_exit(void)
 {
-    if (tx_isp_bringup_level < 0)
+    if (t41_bringup() < 0)
         return 0;
 
     private_platform_driver_unregister(&tx_isp_driver);
@@ -34168,6 +34180,7 @@ int32_t tx_isp_init(void)
     /* fragment 0: Prologue */
     /* function prologue: stack frame and callee-saved register setup */
 
+    WRITE_ONCE(t41_bringup_at_load, tx_isp_bringup_level);
     if (tx_isp_bringup_level < 0)
         return 0;
 
@@ -42906,6 +42919,20 @@ tisp_code_tuning_ioctl0xc20:
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000199f8 origin=fragment_seed original=tisp_code_create_tuning_node */
 int32_t tisp_code_create_tuning_node(void)
 {
+#ifdef REGTRACE_KERNEL_TREE_BUILD
+    /*
+     * Disabled: the recovered body used the 4-byte module parameter
+     * ivdc_threshold_line as a struct cdev.  cdev_init() then zeroed and
+     * cdev_add() kept live ~60 bytes of neighbouring .bss, among them
+     * tx_isp_bringup_level (set to the kobject ktype pointer, i.e. < 0).
+     * tx_isp_exit() then skipped the whole platform teardown on rmmod:
+     * drivers, devices, misc nodes, IRQs and kthreads stayed registered
+     * inside the freed module, and the cdev stayed in cdev_map.  The node
+     * was unreachable anyway (class_create is a stub, so no /dev entry),
+     * and no OpenIMP/libimp path opens it.
+     */
+    return 0;
+#endif
     uint32_t *local_10 = 0;
     uint32_t *local_18 = 0;
     uint32_t *local_20 = 0;
@@ -42986,6 +43013,20 @@ tisp_code_create_tuning_node0xd8:
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000019afc origin=fragment_seed original=tisp_code_destroy_tuning_node */
 int32_t tisp_code_destroy_tuning_node(void)
 {
+#ifdef REGTRACE_KERNEL_TREE_BUILD
+    /*
+     * Disabled: the recovered body used the 4-byte module parameter
+     * ivdc_threshold_line as a struct cdev.  cdev_init() then zeroed and
+     * cdev_add() kept live ~60 bytes of neighbouring .bss, among them
+     * tx_isp_bringup_level (set to the kobject ktype pointer, i.e. < 0).
+     * tx_isp_exit() then skipped the whole platform teardown on rmmod:
+     * drivers, devices, misc nodes, IRQs and kthreads stayed registered
+     * inside the freed module, and the cdev stayed in cdev_map.  The node
+     * was unreachable anyway (class_create is a stub, so no /dev entry),
+     * and no OpenIMP/libimp path opens it.
+     */
+    return 0;
+#endif
     uint32_t *local_10 = 0;
     uint32_t local_14 = 0;
     uint32_t *local_18 = 0;
@@ -168565,7 +168606,7 @@ int tx_isp_core_remove(struct platform_device *pdev)
 	if (!core)
 		return 0;
 
-	if (tx_isp_bringup_level >= 3) {
+	if (t41_bringup() >= 3) {
 		void *tuning = *(void **)((char *)core + 0x230);
 
 		if (tuning) {
