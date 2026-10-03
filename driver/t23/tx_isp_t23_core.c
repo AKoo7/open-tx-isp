@@ -9904,7 +9904,7 @@ static bool regtrace_t23_ae_hlil_resume;
 /* sensor the resume point was reached with */
 static char regtrace_t23_ae_hlil_resume_sensor[32];
 static bool regtrace_t23_source_ae_hlil = true;
-static bool regtrace_t23_source_ae_oem = false; /* tx_isp_t23_ae_oem_glue.inc */
+static bool regtrace_t23_source_ae_oem = true; /* tx_isp_t23_ae_oem_glue.inc */
 static uint32_t t23_aelift_stream_packed(void);  /* ditto */
 static uint regtrace_t23_source_ae_hlil_interval = 32;
 /*
