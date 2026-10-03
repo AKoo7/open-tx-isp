@@ -9810,7 +9810,8 @@ static bool regtrace_t23_ae_hlil_resume;
 /* sensor the resume point was reached with */
 static char regtrace_t23_ae_hlil_resume_sensor[32];
 static bool regtrace_t23_source_ae_hlil = true;
-static bool regtrace_t23_source_ae_oem;   /* tx_isp_t23_ae_oem_glue.inc */
+static bool regtrace_t23_source_ae_oem = true; /* tx_isp_t23_ae_oem_glue.inc */
+static uint32_t t23_aelift_stream_packed(void);  /* ditto */
 static uint regtrace_t23_source_ae_hlil_interval = 32;
 static uint regtrace_t23_source_ae_hlil_target = 60;
 static uint regtrace_t23_source_ae_hlil_deadband = 5;
@@ -11321,9 +11322,14 @@ static int regtrace_t23_call_sensor_stream(int enable, const char *reason)
             ret = regtrace_t23_sensor_fps_stream_on(reason);
         if (enable && !ret)
             ret = regtrace_t23_source_resolve_sensor_config();
-        packed = regtrace_t23_ae_hlil_stream_packed();
+        /* the lifted stock AE0 owns the exposure: the sensor gets the one
+         * it last set (stock keeps the sensor exposure across a stream
+         * restart), not the substitute's bootstrap */
+        packed = regtrace_t23_source_ae_oem ? t23_aelift_stream_packed() :
+                 regtrace_t23_ae_hlil_stream_packed();
         if (enable && !ret && packed)
             ret = regtrace_t23_call_sensor_exposure(packed,
+                regtrace_t23_source_ae_oem ? "ae-oem-after-stream" :
                 regtrace_t23_source_ae_force_packed ?
                 "source-ae-force-after-stream" :
                 regtrace_t23_ae_hlil_resume ?
@@ -92069,6 +92075,13 @@ static void regtrace_t23_source_dn_params_refresh(const char *reason)
         else
             failed |= BIT(11);
     }
+    /* OEM order: tiziano_ae_dn_params_refresh after defog.  The lifted
+     * stock AE0 reloads its parameters from the new bank like stock; the
+     * HLIL substitute keeps its state. */
+    if (regtrace_t23_source_ae_oem && t23_aelift_ready) {
+        flush_work(&t23_aelift_work);
+        T23_AELIFT_CALL(LA_tiziano_ae_dn_params_refresh, 0, 0, 0, 0);
+    }
     /* OEM: curves from the new bank, all registers at the current gain. */
     if (regtrace_t23_source_sharpen_initialized &&
         tiziano_sharpen_dn_params_refresh())
@@ -94192,13 +94205,23 @@ int32_t tisp_g_wdr_en(void)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066f38 origin=model_output original=tisp_s_max_again */
 int32_t tisp_s_max_again(int32_t arg1, int32_t arg2)
 {
-	return ((uintptr_t (*)(uintptr_t, uintptr_t))tiziano_ae_s_max_again)((uintptr_t)(arg1), (uintptr_t)(arg2));
+	int32_t ret = ((uintptr_t (*)(uintptr_t, uintptr_t))tiziano_ae_s_max_again)((uintptr_t)(arg1), (uintptr_t)(arg2));
+
+	/* the lifted stock AE0 has its own ae_exp_th: stock slot 1 */
+	if (!ret)
+		t23_aelift_s_max_gain(1U, 0x14U, (uint32_t)arg2);
+	return ret;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066f48 origin=model_output original=tisp_s_max_isp_dgain */
 int32_t tisp_s_max_isp_dgain(int32_t arg1, int32_t arg2)
 {
-	return tiziano_ae_s_max_isp_dgain(arg1, arg2);
+	int32_t ret = tiziano_ae_s_max_isp_dgain(arg1, arg2);
+
+	/* stock slot 3 */
+	if (!ret)
+		t23_aelift_s_max_gain(3U, 0x1cU, (uint32_t)arg2);
+	return ret;
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000066f58 origin=fragment_seed original=tisp_g_dpc_strength */

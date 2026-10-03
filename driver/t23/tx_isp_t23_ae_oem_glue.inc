@@ -2,8 +2,9 @@
 /*
  * Stock T23 AE0 chain lifted instruction for instruction from tx-isp-t23.ko
  * (audit/dolift_ae.py -> tx_isp_t23_ae_oem.inc), with the glue it needs in
- * this driver.  Off by default (source_ae_oem=0): then nothing here runs and
- * the HLIL substitute in tx_isp_t23_ae_runtime.inc stays in charge.
+ * this driver.  On by default (source_ae_oem=1); with source_ae_oem=0 nothing
+ * here runs and the HLIL substitute in tx_isp_t23_ae_runtime.inc is in
+ * charge.
  *
  * The lifted code keeps private copies of every stock object it touches
  * (oem_*), only tparams (the active IQ bank, same layout) is shared.  The
@@ -16,14 +17,19 @@
  *  - tisp_event_push: event 1 (AE0 histogram ready) schedules the AE run,
  *    the gain events the AE run emits are applied after it.
  *
- * NOT DEVICE TESTED.  Verified in the MIPS emulator only (register writes,
- * events and sensor calls identical to stock for the scene set in
- * audit/aelift_emu.py).
+ * Verified in the MIPS emulator (register writes, events and sensor calls
+ * identical to stock for the scene set in audit/aelift_emu.py) and on
+ * vorne (sc2336): startup, AE comp / backlight / highlight, day/night and
+ * stream restarts.
  */
 
 module_param_named(source_ae_oem, regtrace_t23_source_ae_oem, bool, 0444);
 MODULE_PARM_DESC(source_ae_oem,
-		 "experimental: run the stock AE0 algorithm lifted from the OEM module instead of the AE substitute (default 0, needs reload)");
+		 "run the stock AE0 algorithm lifted from the OEM module (default 1); 0 = the HLIL AE substitute (needs reload)");
+
+static bool t23_aelift_debug;
+module_param_named(ae_oem_debug, t23_aelift_debug, bool, 0644);
+MODULE_PARM_DESC(ae_oem_debug, "log the lifted stock AE0's exposure and gain changes");
 
 static noinline __attribute__((noipa)) uint32_t t23_aelift_event_push(uint32_t channel, uint32_t event);
 static void *t23_aelift_buf;
@@ -44,6 +50,22 @@ static noinline __attribute__((noipa)) void *t23_aelift_kmalloc(uint32_t size)
 
 static noinline __attribute__((noipa)) void t23_aelift_reg_write(uint32_t reg, uint32_t value)
 {
+	if (t23_aelift_debug) {
+		static uint32_t regs[32], vals[32];
+		static unsigned int used;
+		unsigned int i;
+
+		for (i = 0; i < used && regs[i] != reg; i++)
+			;
+		if (i == used && used < ARRAY_SIZE(regs))
+			regs[used++] = reg;
+		if (i < ARRAY_SIZE(regs) && vals[i] != value) {
+			vals[i] = value;
+			printk_ratelimited(KERN_WARNING
+			       "tx_isp_t23_recovered: ae-oem reg 0x%x=0x%x\n",
+			       reg, value);
+		}
+	}
 	system_reg_write(reg, value);
 }
 
@@ -281,22 +303,216 @@ static int t23_aelift_init(uint32_t width, uint32_t height, uint32_t fps)
 	return 0;
 }
 
+/*
+ * Stream restarts.  The stock module runs tiziano_ae_init once in tisp_init
+ * and keeps the AE state and the sensor exposure across FrameSource
+ * restarts; this driver starts the core (and calls t23_aelift_init) at
+ * every stream start.  So a restart with the same picture size and frame
+ * rate keeps the AE: the lifted state (every writable stock object but the
+ * sensor callbacks, the sensor info and the DMA ring pointers, and the AE
+ * buffer tiziano_ae_init allocates) is taken before tiziano_ae_init writes
+ * the AE hardware registers again and is put back afterwards, then the
+ * last exposure and total gain go to the sensor and the ISP at once.
+ * Without it the first pictures after a restart are taken at the
+ * tiziano_ae_init start exposure (measured on vorne at night: mean luma 1
+ * instead of 19 in the first snapshot).
+ */
+static const struct {
+	void *p;
+	size_t n;
+} t23_aelift_state[] = {
+	{ oem_EffectCount0, sizeof(oem_EffectCount0) },
+	{ oem_EffectFrame, sizeof(oem_EffectFrame) },
+	{ oem_IspAe0WmeanParam, sizeof(oem_IspAe0WmeanParam) },
+	{ oem_IspAe1WmeanParam, sizeof(oem_IspAe1WmeanParam) },
+	{ oem_IspAeExp, sizeof(oem_IspAeExp) },
+	{ oem_IspAeFlag, sizeof(oem_IspAeFlag) },
+	{ oem_IspAeStatic, sizeof(oem_IspAeStatic) },
+	{ oem_IspAeTuneParam, sizeof(oem_IspAeTuneParam) },
+	{ oem__AePointPos, sizeof(oem__AePointPos) },
+	{ oem__ae_ev, sizeof(oem__ae_ev) },
+	{ oem__ae_parameter, sizeof(oem__ae_parameter) },
+	{ oem__ae_reg, sizeof(oem__ae_reg) },
+	{ oem__ae_result, sizeof(oem__ae_result) },
+	{ oem__ae_stat, sizeof(oem__ae_stat) },
+	{ oem__ae_wm_q, sizeof(oem__ae_wm_q) },
+	{ oem__ae_zone_weight, sizeof(oem__ae_zone_weight) },
+	{ oem__at_list, sizeof(oem__at_list) },
+	{ oem__at_list_wdr, sizeof(oem__at_list_wdr) },
+	{ oem__deflick_lut, sizeof(oem__deflick_lut) },
+	{ oem__deflicker_para, sizeof(oem__deflicker_para) },
+	{ oem__exp_parameter, sizeof(oem__exp_parameter) },
+	{ oem__flicker_t, sizeof(oem__flicker_t) },
+	{ oem__log2_lut, sizeof(oem__log2_lut) },
+	{ oem__lum_list, sizeof(oem__lum_list) },
+	{ oem__lum_list_wdr, sizeof(oem__lum_list_wdr) },
+	{ oem__nodes_num, sizeof(oem__nodes_num) },
+	{ oem__scene_para, sizeof(oem__scene_para) },
+	{ oem__scene_para_wdr, sizeof(oem__scene_para_wdr) },
+	{ oem__scene_roi_weight, sizeof(oem__scene_roi_weight) },
+	{ oem__scene_roui_weight, sizeof(oem__scene_roui_weight) },
+	{ oem__weight_lut, sizeof(oem__weight_lut) },
+	{ oem_ad0_cache, sizeof(oem_ad0_cache) },
+	{ oem_ae0_ev_list, sizeof(oem_ae0_ev_list) },
+	{ oem_ae0_ev_list_wdr, sizeof(oem_ae0_ev_list_wdr) },
+	{ oem_ae1_comp_ev_list, sizeof(oem_ae1_comp_ev_list) },
+	{ oem_ae1_ev_list, sizeof(oem_ae1_ev_list) },
+	{ oem_ae_algo_comp, sizeof(oem_ae_algo_comp) },
+	{ oem_ae_comp_at_list, sizeof(oem_ae_comp_at_list) },
+	{ oem_ae_comp_default, sizeof(oem_ae_comp_default) },
+	{ oem_ae_comp_ev_list, sizeof(oem_ae_comp_ev_list) },
+	{ oem_ae_comp_param, sizeof(oem_ae_comp_param) },
+	{ oem_ae_comp_param_wdr, sizeof(oem_ae_comp_param_wdr) },
+	{ oem_ae_comp_x, sizeof(oem_ae_comp_x) },
+	{ oem_ae_ctrls, sizeof(oem_ae_ctrls) },
+	{ oem_ae_ev_init_en, sizeof(oem_ae_ev_init_en) },
+	{ oem_ae_ev_init_strict, sizeof(oem_ae_ev_init_strict) },
+	{ oem_ae_ev_step, sizeof(oem_ae_ev_step) },
+	{ oem_ae_exp_th, sizeof(oem_ae_exp_th) },
+	{ oem_ae_extra_at_list, sizeof(oem_ae_extra_at_list) },
+	{ oem_ae_extra_at_list_wdr, sizeof(oem_ae_extra_at_list_wdr) },
+	{ oem_ae_scene_mode_th, sizeof(oem_ae_scene_mode_th) },
+	{ oem_ae_scene_mode_th_wdr, sizeof(oem_ae_scene_mode_th_wdr) },
+	{ oem_ae_show_info, sizeof(oem_ae_show_info) },
+	{ oem_ae_stable_tol, sizeof(oem_ae_stable_tol) },
+	{ oem_ag0_cache, sizeof(oem_ag0_cache) },
+	{ oem_ag_new, sizeof(oem_ag_new) },
+	{ oem_again_new, sizeof(oem_again_new) },
+	{ oem_again_old, sizeof(oem_again_old) },
+	{ oem_dg0_cache, sizeof(oem_dg0_cache) },
+	{ oem_dg_new, sizeof(oem_dg_new) },
+	{ oem_ev0_cache, sizeof(oem_ev0_cache) },
+	{ oem_frameNum, sizeof(oem_frameNum) },
+	{ oem_frame_cunt, sizeof(oem_frame_cunt) },
+	{ oem_ftune_wmeans_36425, sizeof(oem_ftune_wmeans_36425) },
+	{ oem_scene_luma_old, sizeof(oem_scene_luma_old) },
+	{ oem_scene_luma_weight, sizeof(oem_scene_luma_weight) },
+	{ oem_scene_luma_wmean, sizeof(oem_scene_luma_wmean) },
+	{ oem_ta_custom_en, sizeof(oem_ta_custom_en) },
+	{ oem_tisp_ae_ctrls, sizeof(oem_tisp_ae_ctrls) },
+	{ oem_tisp_ae_hist, sizeof(oem_tisp_ae_hist) },
+	{ oem_tisp_ae_hist_last, sizeof(oem_tisp_ae_hist_last) },
+	{ oem_total_gain_new, sizeof(oem_total_gain_new) },
+	{ oem_total_gain_old, sizeof(oem_total_gain_old) },
+};
+#define T23_AELIFT_BUF_SIZE 0x3580U
+#define T23_AELIFT_STATE_BYTES (37752U)
+static uint8_t *t23_aelift_saved;
+static bool t23_aelift_inited;
+static uint32_t t23_aelift_init_w, t23_aelift_init_h, t23_aelift_init_fps;
+static uint32_t t23_aelift_tgain;		/* last event-4 total gain, Q16 */
+
+static void t23_aelift_state_copy(bool save)
+{
+	uint8_t *q = t23_aelift_saved;
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(t23_aelift_state); i++) {
+		if (save)
+			memcpy(q, t23_aelift_state[i].p, t23_aelift_state[i].n);
+		else
+			memcpy(t23_aelift_state[i].p, q, t23_aelift_state[i].n);
+		q += t23_aelift_state[i].n;
+	}
+	if (t23_aelift_buf) {
+		if (save)
+			memcpy(q, t23_aelift_buf, T23_AELIFT_BUF_SIZE);
+		else
+			memcpy(t23_aelift_buf, q, T23_AELIFT_BUF_SIZE);
+	}
+}
+
+static void t23_aelift_s_max_gain(unsigned int slot, unsigned int flag_off,
+				  uint32_t value);
+static uint32_t t23_aelift_max_set[4];	/* value + 1 per slot, 0 = unset */
+
 static void t23_aelift_start(void)
 {
 	uint32_t fps = regtrace_t23_sensor_held_fps();
+	uint32_t width = regtrace_t23_source_sensor_width;
+	uint32_t height = regtrace_t23_source_sensor_height;
+	uint32_t it = t23_aelift_it, again = t23_aelift_again;
+	unsigned long flags;
+	bool resume;
 	int ret;
 
 	if (!regtrace_t23_source_ae_oem)
 		return;
-	ret = t23_aelift_init(regtrace_t23_source_sensor_width,
-			      regtrace_t23_source_sensor_height, fps);
+	/* no AE run of the previous stream is left over */
+	flush_work(&t23_aelift_work);
+	if (!t23_aelift_saved)
+		t23_aelift_saved = kmalloc(T23_AELIFT_STATE_BYTES, GFP_KERNEL);
+	resume = t23_aelift_inited && t23_aelift_saved && it && again &&
+		 width == t23_aelift_init_w && height == t23_aelift_init_h &&
+		 fps == t23_aelift_init_fps;
+	if (resume)
+		t23_aelift_state_copy(true);
+	ret = t23_aelift_init(width, height, fps);
+	if (!ret) {
+		t23_aelift_inited = true;
+		t23_aelift_init_w = width;
+		t23_aelift_init_h = height;
+		t23_aelift_init_fps = fps;
+	}
+	if (!ret && resume) {
+		t23_aelift_state_copy(false);
+		spin_lock_irqsave(&t23_aelift_ev_lock, flags);
+		t23_aelift_ev_count = 0;	/* tiziano_ae_init's start gain */
+		spin_unlock_irqrestore(&t23_aelift_ev_lock, flags);
+		t23_aelift_it = it;
+		t23_aelift_again = again;
+		t23_aelift_expo_dirty = false;
+		regtrace_t23_call_sensor_exposure((again << 16) | it,
+						  "ae-oem-resume");
+		if (t23_aelift_tgain)
+			regtrace_t23_source_apply_total_gain_value(
+				t23_aelift_tgain, 0, false, false);
+		printk(KERN_WARNING
+		       "tx_isp_t23_recovered: stock AE0 resumed it=%u again=%u tgain=0x%x\n",
+		       it, again, t23_aelift_tgain);
+	}
+	/* maximum gains set before the lift ran (fresh start only: a resumed
+	 * state already holds them) */
+	if (!ret && !resume) {
+		if (t23_aelift_max_set[1])
+			t23_aelift_s_max_gain(1U, 0x14U, t23_aelift_max_set[1] - 1U);
+		if (t23_aelift_max_set[3])
+			t23_aelift_s_max_gain(3U, 0x1cU, t23_aelift_max_set[3] - 1U);
+	}
 	/* an AE compensation set before the lift ran (it is stored only) */
 	if (!ret && regtrace_t23_source_ae_compensation != 128U)
 		T23_AELIFT_CALL(LA_tisp_ae_s_comp,
 				regtrace_t23_source_ae_compensation, 0, 0, 0);
 	printk(KERN_WARNING
-	       "tx_isp_t23_recovered: stock AE0 (lifted, experimental) %s ret=%d fps=0x%x\n",
+	       "tx_isp_t23_recovered: stock AE0 (lifted) %s ret=%d fps=0x%x\n",
 	       ret ? "NOT started" : "active", ret, fps);
+}
+
+/*
+ * Stock tiziano_ae_s_max_again / tiziano_ae_s_max_isp_dgain on the lifted
+ * copies: the reload flag in ae_extra_at_list_wdr (+0x14 again, +0x1c ISP
+ * dgain), ae_exp_th[slot] = 2^(value/32) in Q10, IspAeFlag[7] = 0.  The
+ * values are kept across a stream restart's tiziano_ae_init by the state
+ * copy (t23_aelift_start).
+ */
+static void t23_aelift_s_max_gain(unsigned int slot, unsigned int flag_off,
+				  uint32_t value)
+{
+	if (!regtrace_t23_source_ae_oem)
+		return;
+	t23_aelift_max_set[slot & 3U] = value + 1U;
+	*(uint32_t *)(void *)(oem_ae_extra_at_list_wdr + flag_off) = 1;
+	((uint32_t *)(void *)oem_ae_exp_th)[slot] =
+		tisp_math_exp2(value, 5, 10);
+	((uint32_t *)(void *)oem_IspAeFlag)[7] = 0;
+}
+
+/* Sensor stream on: the exposure the lifted AE set last (0 = none yet). */
+static uint32_t t23_aelift_stream_packed(void)
+{
+	if (!t23_aelift_ready || !t23_aelift_it || !t23_aelift_again)
+		return 0;
+	return (t23_aelift_again << 16) | t23_aelift_it;
 }
 
 /* core interrupt: status bits 26 (AE0 statistics) and 27 (histogram) */
@@ -322,6 +538,10 @@ static void t23_aelift_work_fn(struct work_struct *work)
 	T23_AELIFT_CALL(LA_tisp_ae0_process, 0, 0, 0, 0);
 	if (t23_aelift_expo_dirty) {
 		t23_aelift_expo_dirty = false;
+		if (t23_aelift_debug)
+			printk(KERN_WARNING
+			       "tx_isp_t23_recovered: ae-oem exposure it=%u again=%u\n",
+			       t23_aelift_it, t23_aelift_again);
 		regtrace_t23_call_sensor_exposure(
 			(t23_aelift_again << 16) | t23_aelift_it, "ae-oem");
 	}
@@ -332,10 +552,15 @@ static void t23_aelift_work_fn(struct work_struct *work)
 	spin_unlock_irqrestore(&t23_aelift_ev_lock, flags);
 	for (i = 0; i < n; i++) {
 		/* stock tisp_long_tgain_update: arg0 = log2 total gain, Q16 */
-		if (ev[i].id == 4U)
+		if (ev[i].id == 4U) {
+			t23_aelift_tgain = tisp_math_exp2(ev[i].args[0], 16, 16);
+			if (t23_aelift_debug)
+				printk(KERN_WARNING
+				       "tx_isp_t23_recovered: ae-oem total gain 0x%x\n",
+				       t23_aelift_tgain);
 			regtrace_t23_source_apply_total_gain_value(
-				tisp_math_exp2(ev[i].args[0], 16, 16), 0,
-				false, false);
+				t23_aelift_tgain, 0, false, false);
+		}
 	}
 }
 
