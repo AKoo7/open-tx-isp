@@ -1088,10 +1088,16 @@ void tx_isp_sinfo_exit(void)
 	struct proc_dir_entry *jz_root = NULL;
 #endif
 
-	if (tx_isp_sinfo_module_nb_registered) {
-		unregister_module_notifier(&tx_isp_sinfo_module_nb);
-		tx_isp_sinfo_module_nb_registered = false;
-	}
+	/*
+	 * Unregister unconditionally: the flag lives in .bss next to the
+	 * recovered T41 core's anonymous BSS tail and can be overwritten.  A
+	 * skipped unregister leaves a notifier_block inside the freed module,
+	 * and the next load_module() oopses in notifier_call_chain.
+	 * unregister_module_notifier() only returns -ENOENT when the block is
+	 * not on the chain.
+	 */
+	unregister_module_notifier(&tx_isp_sinfo_module_nb);
+	tx_isp_sinfo_module_nb_registered = false;
 	mutex_lock(&tx_isp_sinfo_lock);
 	if (tx_isp_sinfo_heap_slots) {
 		root = tx_isp_sinfo_root;
