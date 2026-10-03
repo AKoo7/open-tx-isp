@@ -6794,6 +6794,26 @@ static noinline uint64_t LA_tisp_ae_tune(uint32_t r_a0, uint32_t r_a1, uint32_t 
 
 static noinline uint64_t LA_dispatch(uint32_t fn, uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, uint32_t r_a3, uint32_t sp_base)
 {
+	/* hot helpers first (fixed point, exp/log, subsection, 64-bit shifts,
+	 * register access): same callee, same arguments, fewer compares */
+	if (fn == (uint32_t)(uintptr_t)&LA_fix_point_div_64) return LA_fix_point_div_64(r_a0, r_a1, r_a2, r_a3, sp_base);
+	if (fn == (uint32_t)(uintptr_t)&LA_fix_point_div_32) return LA_fix_point_div_32(r_a0, r_a1, r_a2, r_a3, sp_base);
+	if (fn == (uint32_t)(uintptr_t)&LA_fix_point_mult2_32) return LA_fix_point_mult2_32(r_a0, r_a1, r_a2, r_a3, sp_base);
+	if (fn == (uint32_t)(uintptr_t)&LA_fix_point_mult3_32) return LA_fix_point_mult3_32(r_a0, r_a1, r_a2, r_a3, sp_base);
+	if (fn == (uint32_t)(uintptr_t)&LA_fix_point_mult2_64) return LA_fix_point_mult2_64(r_a0, r_a1, r_a2, r_a3, sp_base);
+	if (fn == (uint32_t)(uintptr_t)&LA_fix_point_mult3_64) return LA_fix_point_mult3_64(r_a0, r_a1, r_a2, r_a3, sp_base);
+	if (fn == (uint32_t)(uintptr_t)&LA_fix_point_mult2) return LA_fix_point_mult2(r_a0, r_a1, r_a2, r_a3, sp_base);
+	if (fn == (uint32_t)(uintptr_t)&LA_fix_point_div) return LA_fix_point_div(r_a0, r_a1, r_a2, r_a3, sp_base);
+	if (fn == (uint32_t)(uintptr_t)&LA_tisp_math_exp2) return LA_tisp_math_exp2(r_a0, r_a1, r_a2, r_a3, sp_base);
+	if (fn == (uint32_t)(uintptr_t)&LA_tisp_log2_fixed_to_fixed) return LA_tisp_log2_fixed_to_fixed(r_a0, r_a1, r_a2, r_a3, sp_base);
+	if (fn == (uint32_t)(uintptr_t)&LA_tisp_log2_int_to_fixed) return LA_tisp_log2_int_to_fixed(r_a0, r_a1, r_a2, r_a3, sp_base);
+	if (fn == (uint32_t)(uintptr_t)&__ashldi3) { uint32_t r_v0 = 0, r_v1 = 0; { uint64_t v_ = (((uint64_t)r_a1 << 32) | r_a0) << (r_a2 & 63); r_v0 = (uint32_t)v_; r_v1 = (uint32_t)(v_ >> 32); } return ((uint64_t)r_v1 << 32) | r_v0; }
+	if (fn == (uint32_t)(uintptr_t)&__lshrdi3) { uint32_t r_v0 = 0, r_v1 = 0; { uint64_t v_ = (((uint64_t)r_a1 << 32) | r_a0) >> (r_a2 & 63); r_v0 = (uint32_t)v_; r_v1 = (uint32_t)(v_ >> 32); } return ((uint64_t)r_v1 << 32) | r_v0; }
+	if (fn == (uint32_t)(uintptr_t)&div64_u64) { uint32_t r_v0 = 0, r_v1 = 0; { uint64_t q_ = div64_u64(((uint64_t)r_a1 << 32) | r_a0, ((uint64_t)r_a3 << 32) | r_a2); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); } return ((uint64_t)r_v1 << 32) | r_v0; }
+	if (fn == (uint32_t)(uintptr_t)&memcpy) { uint32_t r_v0 = 0, r_v1 = 0; r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2); return ((uint64_t)r_v1 << 32) | r_v0; }
+	if (fn == (uint32_t)(uintptr_t)&memset) { uint32_t r_v0 = 0, r_v1 = 0; r_v0 = (uint32_t)(uintptr_t)memset((void *)(uintptr_t)r_a0, (int)r_a1, r_a2); return ((uint64_t)r_v1 << 32) | r_v0; }
+	if (fn == (uint32_t)(uintptr_t)&system_reg_read) { uint32_t r_v0 = 0, r_v1 = 0; r_v0 = t23_aelift_reg_read(r_a0); return ((uint64_t)r_v1 << 32) | r_v0; }
+	if (fn == (uint32_t)(uintptr_t)&system_reg_write) { uint32_t r_v0 = 0, r_v1 = 0; t23_aelift_reg_write(r_a0, r_a1); r_v0 = 0; return ((uint64_t)r_v1 << 32) | r_v0; }
 	if (fn == (uint32_t)(uintptr_t)&LA_tiziano_ae_init) return LA_tiziano_ae_init(r_a0, r_a1, r_a2, r_a3, sp_base);
 	if (fn == (uint32_t)(uintptr_t)&LA_tiziano_ae_dn_params_refresh) return LA_tiziano_ae_dn_params_refresh(r_a0, r_a1, r_a2, r_a3, sp_base);
 	if (fn == (uint32_t)(uintptr_t)&LA_tisp_ae0_process) return LA_tisp_ae0_process(r_a0, r_a1, r_a2, r_a3, sp_base);
@@ -6806,7 +6826,6 @@ static noinline uint64_t LA_dispatch(uint32_t fn, uint32_t r_a0, uint32_t r_a1, 
 	if (fn == (uint32_t)(uintptr_t)&LA_tisp_set_sensor_integration_time) return LA_tisp_set_sensor_integration_time(r_a0, r_a1, r_a2, r_a3, sp_base);
 	if (fn == (uint32_t)(uintptr_t)&LA_tisp_set_sensor_analog_gain) return LA_tisp_set_sensor_analog_gain(r_a0, r_a1, r_a2, r_a3, sp_base);
 	if (fn == (uint32_t)(uintptr_t)&LA_system_reg_write_ae) return LA_system_reg_write_ae(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&LA_fix_point_mult3_32) return LA_fix_point_mult3_32(r_a0, r_a1, r_a2, r_a3, sp_base);
 	if (fn == (uint32_t)(uintptr_t)&LA_tisp_set_sensor_integration_time_short) return LA_tisp_set_sensor_integration_time_short(r_a0, r_a1, r_a2, r_a3, sp_base);
 	if (fn == (uint32_t)(uintptr_t)&LA_tisp_set_sensor_analog_gain_short) return LA_tisp_set_sensor_analog_gain_short(r_a0, r_a1, r_a2, r_a3, sp_base);
 	if (fn == (uint32_t)(uintptr_t)&LA_tiziano_deflicker_expt) return LA_tiziano_deflicker_expt(r_a0, r_a1, r_a2, r_a3, sp_base);
@@ -6815,39 +6834,22 @@ static noinline uint64_t LA_dispatch(uint32_t fn, uint32_t r_a0, uint32_t r_a1, 
 	if (fn == (uint32_t)(uintptr_t)&LA_tisp_ae0_process_impl) return LA_tisp_ae0_process_impl(r_a0, r_a1, r_a2, r_a3, sp_base);
 	if (fn == (uint32_t)(uintptr_t)&LA_tisp_ae0_get_statistics) return LA_tisp_ae0_get_statistics(r_a0, r_a1, r_a2, r_a3, sp_base);
 	if (fn == (uint32_t)(uintptr_t)&LA_tisp_ae0_get_hist) return LA_tisp_ae0_get_hist(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&LA_tisp_math_exp2) return LA_tisp_math_exp2(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&LA_fix_point_mult2_32) return LA_fix_point_mult2_32(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&LA_fix_point_div_32) return LA_fix_point_div_32(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&LA_tisp_log2_fixed_to_fixed) return LA_tisp_log2_fixed_to_fixed(r_a0, r_a1, r_a2, r_a3, sp_base);
 	if (fn == (uint32_t)(uintptr_t)&LA_Tiziano_ae0_fpga) return LA_Tiziano_ae0_fpga(r_a0, r_a1, r_a2, r_a3, sp_base);
 	if (fn == (uint32_t)(uintptr_t)&LA_tisp_set_ae0_ag) return LA_tisp_set_ae0_ag(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&LA_fix_point_mult3_64) return LA_fix_point_mult3_64(r_a0, r_a1, r_a2, r_a3, sp_base);
 	if (fn == (uint32_t)(uintptr_t)&LA_JZ_Isp_Ae_Dg2reg) return LA_JZ_Isp_Ae_Dg2reg(r_a0, r_a1, r_a2, r_a3, sp_base);
 	if (fn == (uint32_t)(uintptr_t)&LA_tisp_ae_g_scene_luma) return LA_tisp_ae_g_scene_luma(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&LA_fix_point_mult2) return LA_fix_point_mult2(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&LA_fix_point_div) return LA_fix_point_div(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&LA_tisp_log2_int_to_fixed) return LA_tisp_log2_int_to_fixed(r_a0, r_a1, r_a2, r_a3, sp_base);
 	if (fn == (uint32_t)(uintptr_t)&LA_ae0_weight_mean2) return LA_ae0_weight_mean2(r_a0, r_a1, r_a2, r_a3, sp_base);
 	if (fn == (uint32_t)(uintptr_t)&LA_ae0_tune2) return LA_ae0_tune2(r_a0, r_a1, r_a2, r_a3, sp_base);
 	if (fn == (uint32_t)(uintptr_t)&LA_tisp_set_sensor_digital_gain_short) return LA_tisp_set_sensor_digital_gain_short(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&LA_fix_point_mult2_64) return LA_fix_point_mult2_64(r_a0, r_a1, r_a2, r_a3, sp_base);
 	if (fn == (uint32_t)(uintptr_t)&LA_tisp_ae_g_luma) return LA_tisp_ae_g_luma(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&LA_fix_point_div_64) return LA_fix_point_div_64(r_a0, r_a1, r_a2, r_a3, sp_base);
 	if (fn == (uint32_t)(uintptr_t)&LA_AePweightCalculate) return LA_AePweightCalculate(r_a0, r_a1, r_a2, r_a3, sp_base);
 	if (fn == (uint32_t)(uintptr_t)&LA_tisp_ae_target) return LA_tisp_ae_target(r_a0, r_a1, r_a2, r_a3, sp_base);
 	if (fn == (uint32_t)(uintptr_t)&LA_tisp_ae_tune) return LA_tisp_ae_tune(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&__ashldi3) { uint32_t r_v0 = 0, r_v1 = 0; { uint64_t v_ = (((uint64_t)r_a1 << 32) | r_a0) << (r_a2 & 63); r_v0 = (uint32_t)v_; r_v1 = (uint32_t)(v_ >> 32); } return ((uint64_t)r_v1 << 32) | r_v0; }
-	if (fn == (uint32_t)(uintptr_t)&__lshrdi3) { uint32_t r_v0 = 0, r_v1 = 0; { uint64_t v_ = (((uint64_t)r_a1 << 32) | r_a0) >> (r_a2 & 63); r_v0 = (uint32_t)v_; r_v1 = (uint32_t)(v_ >> 32); } return ((uint64_t)r_v1 << 32) | r_v0; }
-	if (fn == (uint32_t)(uintptr_t)&div64_u64) { uint32_t r_v0 = 0, r_v1 = 0; { uint64_t q_ = div64_u64(((uint64_t)r_a1 << 32) | r_a0, ((uint64_t)r_a3 << 32) | r_a2); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); } return ((uint64_t)r_v1 << 32) | r_v0; }
 	if (fn == (uint32_t)(uintptr_t)&isp_printf) { uint32_t r_v0 = 0, r_v1 = 0; r_v0 = 0; return ((uint64_t)r_v1 << 32) | r_v0; }
-	if (fn == (uint32_t)(uintptr_t)&memcpy) { uint32_t r_v0 = 0, r_v1 = 0; r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2); return ((uint64_t)r_v1 << 32) | r_v0; }
-	if (fn == (uint32_t)(uintptr_t)&memset) { uint32_t r_v0 = 0, r_v1 = 0; r_v0 = (uint32_t)(uintptr_t)memset((void *)(uintptr_t)r_a0, (int)r_a1, r_a2); return ((uint64_t)r_v1 << 32) | r_v0; }
 	if (fn == (uint32_t)(uintptr_t)&private_complete) { uint32_t r_v0 = 0, r_v1 = 0; r_v0 = 0; return ((uint64_t)r_v1 << 32) | r_v0; }
 	if (fn == (uint32_t)(uintptr_t)&private_dma_cache_sync) { uint32_t r_v0 = 0, r_v1 = 0; private_dma_cache_sync(NULL, (void *)(uintptr_t)r_a1, r_a2, (enum dma_data_direction)r_a3); r_v0 = 0; return ((uint64_t)r_v1 << 32) | r_v0; }
 	if (fn == (uint32_t)(uintptr_t)&private_kmalloc) { uint32_t r_v0 = 0, r_v1 = 0; r_v0 = (uint32_t)(uintptr_t)t23_aelift_kmalloc(r_a0); return ((uint64_t)r_v1 << 32) | r_v0; }
 	if (fn == (uint32_t)(uintptr_t)&system_irq_func_set) { uint32_t r_v0 = 0, r_v1 = 0; r_v0 = 0; return ((uint64_t)r_v1 << 32) | r_v0; }
-	if (fn == (uint32_t)(uintptr_t)&system_reg_read) { uint32_t r_v0 = 0, r_v1 = 0; r_v0 = t23_aelift_reg_read(r_a0); return ((uint64_t)r_v1 << 32) | r_v0; }
-	if (fn == (uint32_t)(uintptr_t)&system_reg_write) { uint32_t r_v0 = 0, r_v1 = 0; t23_aelift_reg_write(r_a0, r_a1); r_v0 = 0; return ((uint64_t)r_v1 << 32) | r_v0; }
 	if (fn == (uint32_t)(uintptr_t)&tisp_event_push) { uint32_t r_v0 = 0, r_v1 = 0; r_v0 = (uint32_t)t23_aelift_event_push(r_a0, r_a1); return ((uint64_t)r_v1 << 32) | r_v0; }
 	if (fn == (uint32_t)(uintptr_t)&tisp_event_set_cb) { uint32_t r_v0 = 0, r_v1 = 0; r_v0 = 0; return ((uint64_t)r_v1 << 32) | r_v0; }
 	return t23_aelift_call(fn, r_a0, r_a1, r_a2, r_a3);

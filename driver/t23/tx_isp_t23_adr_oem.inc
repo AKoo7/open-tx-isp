@@ -18982,6 +18982,24 @@ L_2a5ec:
 
 static noinline uint64_t LD_dispatch(uint32_t fn, uint32_t r_a0, uint32_t r_a1, uint32_t r_a2, uint32_t r_a3, uint32_t sp_base)
 {
+	/* hot helpers first (fixed point, exp/log, subsection, 64-bit shifts,
+	 * register access): same callee, same arguments, fewer compares */
+	if (fn == (uint32_t)(uintptr_t)&LD_fix_point_div_64) return LD_fix_point_div_64(r_a0, r_a1, r_a2, r_a3, sp_base);
+	if (fn == (uint32_t)(uintptr_t)&LD_fix_point_div_32) return LD_fix_point_div_32(r_a0, r_a1, r_a2, r_a3, sp_base);
+	if (fn == (uint32_t)(uintptr_t)&LD_fix_point_mult2_32) return LD_fix_point_mult2_32(r_a0, r_a1, r_a2, r_a3, sp_base);
+	if (fn == (uint32_t)(uintptr_t)&LD_tisp_math_exp2) return LD_tisp_math_exp2(r_a0, r_a1, r_a2, r_a3, sp_base);
+	if (fn == (uint32_t)(uintptr_t)&LD_subsection) return LD_subsection(r_a0, r_a1, r_a2, r_a3, sp_base);
+	if (fn == (uint32_t)(uintptr_t)&LD_subsection_up) return LD_subsection_up(r_a0, r_a1, r_a2, r_a3, sp_base);
+	if (fn == (uint32_t)(uintptr_t)&LD_subsection_light) return LD_subsection_light(r_a0, r_a1, r_a2, r_a3, sp_base);
+	if (fn == (uint32_t)(uintptr_t)&LD_subsection_map) return LD_subsection_map(r_a0, r_a1, r_a2, r_a3, sp_base);
+	if (fn == (uint32_t)(uintptr_t)&LD_defog_wei_interpcot) return LD_defog_wei_interpcot(r_a0, r_a1, r_a2, r_a3, sp_base);
+	if (fn == (uint32_t)(uintptr_t)&__ashldi3) { uint32_t r_v0 = 0, r_v1 = 0; { uint64_t v_ = (((uint64_t)r_a1 << 32) | r_a0) << (r_a2 & 63); r_v0 = (uint32_t)v_; r_v1 = (uint32_t)(v_ >> 32); } return ((uint64_t)r_v1 << 32) | r_v0; }
+	if (fn == (uint32_t)(uintptr_t)&__lshrdi3) { uint32_t r_v0 = 0, r_v1 = 0; { uint64_t v_ = (((uint64_t)r_a1 << 32) | r_a0) >> (r_a2 & 63); r_v0 = (uint32_t)v_; r_v1 = (uint32_t)(v_ >> 32); } return ((uint64_t)r_v1 << 32) | r_v0; }
+	if (fn == (uint32_t)(uintptr_t)&div64_u64) { uint32_t r_v0 = 0, r_v1 = 0; { uint64_t q_ = div64_u64(((uint64_t)r_a1 << 32) | r_a0, ((uint64_t)r_a3 << 32) | r_a2); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); } return ((uint64_t)r_v1 << 32) | r_v0; }
+	if (fn == (uint32_t)(uintptr_t)&memcpy) { uint32_t r_v0 = 0, r_v1 = 0; r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2); return ((uint64_t)r_v1 << 32) | r_v0; }
+	if (fn == (uint32_t)(uintptr_t)&memset) { uint32_t r_v0 = 0, r_v1 = 0; r_v0 = (uint32_t)(uintptr_t)memset((void *)(uintptr_t)r_a0, (int)r_a1, r_a2); return ((uint64_t)r_v1 << 32) | r_v0; }
+	if (fn == (uint32_t)(uintptr_t)&system_reg_read) { uint32_t r_v0 = 0, r_v1 = 0; r_v0 = t23_adrlift_reg_read(r_a0); return ((uint64_t)r_v1 << 32) | r_v0; }
+	if (fn == (uint32_t)(uintptr_t)&system_reg_write) { uint32_t r_v0 = 0, r_v1 = 0; t23_adrlift_reg_write(r_a0, r_a1); r_v0 = 0; return ((uint64_t)r_v1 << 32) | r_v0; }
 	if (fn == (uint32_t)(uintptr_t)&LD_tiziano_adr_init) return LD_tiziano_adr_init(r_a0, r_a1, r_a2, r_a3, sp_base);
 	if (fn == (uint32_t)(uintptr_t)&LD_tiziano_adr_dn_params_refresh) return LD_tiziano_adr_dn_params_refresh(r_a0, r_a1, r_a2, r_a3, sp_base);
 	if (fn == (uint32_t)(uintptr_t)&LD_tisp_adr_ev_update) return LD_tisp_adr_ev_update(r_a0, r_a1, r_a2, r_a3, sp_base);
@@ -19010,7 +19028,6 @@ static noinline uint64_t LD_dispatch(uint32_t fn, uint32_t r_a0, uint32_t r_a1, 
 	if (fn == (uint32_t)(uintptr_t)&LD_tiziano_adr_algorithm) return LD_tiziano_adr_algorithm(r_a0, r_a1, r_a2, r_a3, sp_base);
 	if (fn == (uint32_t)(uintptr_t)&LD_tiziano_defog_params_refresh) return LD_tiziano_defog_params_refresh(r_a0, r_a1, r_a2, r_a3, sp_base);
 	if (fn == (uint32_t)(uintptr_t)&LD_defog_3x3_5x5_params_init) return LD_defog_3x3_5x5_params_init(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&LD_fix_point_div_64) return LD_fix_point_div_64(r_a0, r_a1, r_a2, r_a3, sp_base);
 	if (fn == (uint32_t)(uintptr_t)&LD_tiziano_defog_params_init) return LD_tiziano_defog_params_init(r_a0, r_a1, r_a2, r_a3, sp_base);
 	if (fn == (uint32_t)(uintptr_t)&LD_tiziano_defog_set_reg_params) return LD_tiziano_defog_set_reg_params(r_a0, r_a1, r_a2, r_a3, sp_base);
 	if (fn == (uint32_t)(uintptr_t)&LD_tiziano_defog_get_data) return LD_tiziano_defog_get_data(r_a0, r_a1, r_a2, r_a3, sp_base);
@@ -19019,31 +19036,16 @@ static noinline uint64_t LD_dispatch(uint32_t fn, uint32_t r_a0, uint32_t r_a1, 
 	if (fn == (uint32_t)(uintptr_t)&LD_tiziano_adr_gamma_refresh) return LD_tiziano_adr_gamma_refresh(r_a0, r_a1, r_a2, r_a3, sp_base);
 	if (fn == (uint32_t)(uintptr_t)&LD_tiziano_adr_5x5_param_distance) return LD_tiziano_adr_5x5_param_distance(r_a0, r_a1, r_a2, r_a3, sp_base);
 	if (fn == (uint32_t)(uintptr_t)&LD_Tiziano_adr_fpga) return LD_Tiziano_adr_fpga(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&LD_defog_wei_interpcot) return LD_defog_wei_interpcot(r_a0, r_a1, r_a2, r_a3, sp_base);
 	if (fn == (uint32_t)(uintptr_t)&LD_tisp_defog_soft_process) return LD_tisp_defog_soft_process(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&LD_fix_point_div_32) return LD_fix_point_div_32(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&LD_subsection) return LD_subsection(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&LD_fix_point_mult2_32) return LD_fix_point_mult2_32(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&LD_tisp_math_exp2) return LD_tisp_math_exp2(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&LD_subsection_up) return LD_subsection_up(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&LD_subsection_light) return LD_subsection_light(r_a0, r_a1, r_a2, r_a3, sp_base);
 	if (fn == (uint32_t)(uintptr_t)&LD_tisp_defog_max_filter3) return LD_tisp_defog_max_filter3(r_a0, r_a1, r_a2, r_a3, sp_base);
 	if (fn == (uint32_t)(uintptr_t)&LD_tisp_defog_img_filter5) return LD_tisp_defog_img_filter5(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&LD_subsection_map) return LD_subsection_map(r_a0, r_a1, r_a2, r_a3, sp_base);
-	if (fn == (uint32_t)(uintptr_t)&__ashldi3) { uint32_t r_v0 = 0, r_v1 = 0; { uint64_t v_ = (((uint64_t)r_a1 << 32) | r_a0) << (r_a2 & 63); r_v0 = (uint32_t)v_; r_v1 = (uint32_t)(v_ >> 32); } return ((uint64_t)r_v1 << 32) | r_v0; }
-	if (fn == (uint32_t)(uintptr_t)&__lshrdi3) { uint32_t r_v0 = 0, r_v1 = 0; { uint64_t v_ = (((uint64_t)r_a1 << 32) | r_a0) >> (r_a2 & 63); r_v0 = (uint32_t)v_; r_v1 = (uint32_t)(v_ >> 32); } return ((uint64_t)r_v1 << 32) | r_v0; }
-	if (fn == (uint32_t)(uintptr_t)&div64_u64) { uint32_t r_v0 = 0, r_v1 = 0; { uint64_t q_ = div64_u64(((uint64_t)r_a1 << 32) | r_a0, ((uint64_t)r_a3 << 32) | r_a2); r_v0 = (uint32_t)q_; r_v1 = (uint32_t)(q_ >> 32); } return ((uint64_t)r_v1 << 32) | r_v0; }
 	if (fn == (uint32_t)(uintptr_t)&isp_printf) { uint32_t r_v0 = 0, r_v1 = 0; r_v0 = 0; return ((uint64_t)r_v1 << 32) | r_v0; }
 	if (fn == (uint32_t)(uintptr_t)&kfree) { uint32_t r_v0 = 0, r_v1 = 0; kfree((void *)(uintptr_t)r_a0); r_v0 = 0; return ((uint64_t)r_v1 << 32) | r_v0; }
 	if (fn == (uint32_t)(uintptr_t)&kmem_cache_alloc) { uint32_t r_v0 = 0, r_v1 = 0; r_v0 = (uint32_t)(uintptr_t)kmem_cache_alloc((struct kmem_cache *)(uintptr_t)r_a0, (gfp_t)r_a1); return ((uint64_t)r_v1 << 32) | r_v0; }
-	if (fn == (uint32_t)(uintptr_t)&memcpy) { uint32_t r_v0 = 0, r_v1 = 0; r_v0 = (uint32_t)(uintptr_t)memcpy((void *)(uintptr_t)r_a0, (const void *)(uintptr_t)r_a1, r_a2); return ((uint64_t)r_v1 << 32) | r_v0; }
-	if (fn == (uint32_t)(uintptr_t)&memset) { uint32_t r_v0 = 0, r_v1 = 0; r_v0 = (uint32_t)(uintptr_t)memset((void *)(uintptr_t)r_a0, (int)r_a1, r_a2); return ((uint64_t)r_v1 << 32) | r_v0; }
 	if (fn == (uint32_t)(uintptr_t)&private_dma_cache_sync) { uint32_t r_v0 = 0, r_v1 = 0; private_dma_cache_sync(NULL, (void *)(uintptr_t)r_a1, r_a2, (enum dma_data_direction)r_a3); r_v0 = 0; return ((uint64_t)r_v1 << 32) | r_v0; }
 	if (fn == (uint32_t)(uintptr_t)&private_vfree) { uint32_t r_v0 = 0, r_v1 = 0; vfree((void *)(uintptr_t)r_a0); r_v0 = 0; return ((uint64_t)r_v1 << 32) | r_v0; }
 	if (fn == (uint32_t)(uintptr_t)&private_vmalloc) { uint32_t r_v0 = 0, r_v1 = 0; r_v0 = (uint32_t)(uintptr_t)vmalloc(r_a0); return ((uint64_t)r_v1 << 32) | r_v0; }
 	if (fn == (uint32_t)(uintptr_t)&system_irq_func_set) { uint32_t r_v0 = 0, r_v1 = 0; r_v0 = t23_adrlift_irq_set(r_a0, r_a1, r_a2); return ((uint64_t)r_v1 << 32) | r_v0; }
-	if (fn == (uint32_t)(uintptr_t)&system_reg_read) { uint32_t r_v0 = 0, r_v1 = 0; r_v0 = t23_adrlift_reg_read(r_a0); return ((uint64_t)r_v1 << 32) | r_v0; }
-	if (fn == (uint32_t)(uintptr_t)&system_reg_write) { uint32_t r_v0 = 0, r_v1 = 0; t23_adrlift_reg_write(r_a0, r_a1); r_v0 = 0; return ((uint64_t)r_v1 << 32) | r_v0; }
 	if (fn == (uint32_t)(uintptr_t)&tisp_event_push) { uint32_t r_v0 = 0, r_v1 = 0; r_v0 = t23_adrlift_event_push(r_a0, r_a1); return ((uint64_t)r_v1 << 32) | r_v0; }
 	if (fn == (uint32_t)(uintptr_t)&tisp_event_set_cb) { uint32_t r_v0 = 0, r_v1 = 0; r_v0 = t23_adrlift_event_set_cb(r_a0, r_a1, r_a2); return ((uint64_t)r_v1 << 32) | r_v0; }
 	if (fn == (uint32_t)(uintptr_t)&tisp_gamma_param_array_get) { uint32_t r_v0 = 0, r_v1 = 0; r_v0 = (uint32_t)tisp_gamma_param_array_get((int32_t)r_a0, (int32_t *)(uintptr_t)r_a1, (int32_t *)(uintptr_t)r_a2); return ((uint64_t)r_v1 << 32) | r_v0; }
