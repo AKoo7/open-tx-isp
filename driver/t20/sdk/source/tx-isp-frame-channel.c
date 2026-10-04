@@ -574,6 +574,12 @@ static int frame_channel_vidioc_reqbufs(struct file *file, void *priv,
 		return -EINVAL;
 	}
 
+	if (p->memory == V4L2_MEMORY_MMAP && p->count) {
+		ret = frame_buffer_mmap_check(vdev->vbm, p->count,
+					      vdev->attr.output.fmt.pix.sizeimage);
+		if (ret)
+			return ret;
+	}
 	ret = vb2_reqbufs(&vdev->vbq, p);
 	if(!ret){
 		vdev->reqbufs = p->count;

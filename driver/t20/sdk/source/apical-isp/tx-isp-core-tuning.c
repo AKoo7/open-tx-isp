@@ -9,6 +9,27 @@
 /** the kernel command line whether the mem of WDR and Temper exist. **/
 extern unsigned long ispmem_base;
 extern unsigned long ispmem_size;
+
+/* Reserved-memory shortfall: log once per module load, never per frame.
+ * need: bytes this feature wants; have: ispmem bytes left for it;
+ * total: ispmem size that would make it fit. */
+static void tuning_ispmem_shortfall(const char *what, unsigned int w, unsigned int h,
+				    unsigned long need, unsigned long have, unsigned long total)
+{
+	static unsigned int warned;
+	unsigned int bit = what[0] == 't' ? 1 : 2;
+	unsigned long cur = ispmem_base != -1 ? ispmem_size : 0;
+
+	if (warned & bit)
+		return;
+	warned |= bit;
+	printk(KERN_WARNING "tx-isp: ispmem %lu KB too small for %s at %ux%u "
+	       "(need %lu KB, %lu KB available) - %s disabled; set ispmem >= %lu KB "
+	       "(ispmem=%luM, missing %lu KB)\n",
+	       cur >> 10, what, w, h, need >> 10, have >> 10, what, total >> 10,
+	       (total + (1 << 20) - 1) >> 20, total > cur ? (total - cur) >> 10 : 0);
+}
+
 extern system_tab stab;
 
 static inline int wb_value_v4l2_to_apical(int val)
@@ -861,6 +882,18 @@ static inline int apical_isp_wdr_s_control(struct tx_isp_core_device *core, stru
 	int ret = ISP_SUCCESS;
 
 	if(tuning->wdr_paddr == 0){
+		if (wdr->val != ISPCORE_MODULE_DISABLE) {
+			unsigned long need = (unsigned long)core->vin.vi_max_width *
+					     core->vin.vi_max_height * 4;
+			unsigned long cur = ispmem_base != -1 ? ispmem_size : 0;
+			unsigned long temper = tuning->temper_buffer_size;
+
+			/* temper sits first in ispmem, WDR right behind it */
+			tuning_ispmem_shortfall("WDR", core->vin.vi_max_width,
+						core->vin.vi_max_height, need,
+						cur > temper ? cur - temper : 0,
+						2 * need);
+		}
 		return -EPERM;
 	}
 
@@ -4555,6 +4588,10 @@ static int image_tuning_v4l2_open(struct file *file)
 		apical_isp_temper_frame_buffer_frame_write_on_write(1);
 		apical_isp_temper_frame_buffer_frame_read_on_write(1);
 	}else{
+		tuning_ispmem_shortfall("temper (3DNR)", vin->vi_max_width, vin->vi_max_height,
+					tuning->temper_buffer_size,
+					ispmem_base != -1 ? ispmem_size : 0,
+					tuning->temper_buffer_size);
 		tuning->temper_paddr = 0;
 		tuning->temper_buffer_size = 0;
 	}

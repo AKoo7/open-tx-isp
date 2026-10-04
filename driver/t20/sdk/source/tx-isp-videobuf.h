@@ -52,6 +52,7 @@ struct vb2_dc_buf {
 
 void *frame_buffer_manager_create(struct device *dev);
 int frame_buffer_manager_cleanup(void *alloc_ctx);
+int frame_buffer_mmap_check(void *alloc_ctx, unsigned int count, unsigned long size);
 int frame_channel_dmabuf_resolver_register(void);
 void frame_channel_dmabuf_resolver_unregister(void);
 
