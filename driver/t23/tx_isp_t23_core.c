@@ -14942,6 +14942,17 @@ static void regtrace_t23_tisp_stream_regs(int enable,
             system_reg_write(0x1008U, 286U);
         }
         system_reg_write(0x1060U, 1);
+        /*
+         * 0x1060 is also the first GIB black-level channel
+         * (tisp_gib_gain_interpolation): the enable write above wipes it.
+         * The substitute AE re-applies the gain after the stream start,
+         * the lifted stock AE0 does not (its resume only re-applies the
+         * gain when it moved), which left that channel without its black
+         * level - a colour cast that the AWB then chases (B/G +50 %).
+         * Write the black levels again, at the gain in use.
+         */
+        if (regtrace_t23_source_gib_tuning_init)
+            tisp_gib_gain_interpolation(regtrace_t23_tgain_log2);
     } else if (channel < 0 || !regtrace_t23_msca_ch_en) {
         system_reg_write(0x1060U, 0);
         regtrace_t23_source_core_set_stream(0, reason);
