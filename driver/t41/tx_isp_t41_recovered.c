@@ -38,6 +38,8 @@
 #include "tx_isp_t41_adr.h"
 #include "tx_isp_t41_subdev.h"
 #include "tx_isp_t41_v4l2.h"
+#include <linux/ratelimit.h>
+#include "../include/tx_isp/tx_isp_guard.h"
 #ifdef REGTRACE_KERNEL_TREE_BUILD
 #include <linux/module.h>
 #include <linux/moduleparam.h>
@@ -771,6 +773,18 @@ MODULE_PARM_DESC(tx_isp_core_ioctl_mask, "isp ioctl calls mask");
 static int tx_isp_bringup_level;
 module_param(tx_isp_bringup_level, int, 0);
 MODULE_PARM_DESC(tx_isp_bringup_level, "bring-up gate: -1 exports only, 0 shallow, 1 graph, 2 mem, 3 core tuning");
+/*
+ * Load-time copy in .data, used by the unload path.  The .bss parameter
+ * sits among recovered globals that decompiled code addresses as a base
+ * (a stray cdev_init() there once made rmmod skip the whole teardown).
+ */
+static int t41_bringup_at_load = INT_MIN;
+static int t41_bringup(void)
+{
+    int level = READ_ONCE(t41_bringup_at_load);
+
+    return level == INT_MIN ? tx_isp_bringup_level : level;
+}
 
 static unsigned int t41_checkpoint_ms;
 module_param(t41_checkpoint_ms, uint, 0);
@@ -1345,6 +1359,9 @@ static int t41_bcsh_error = -ENODEV;
 static uint32_t t41_bcsh_last[T41_BCSH_WORDS] = { UINT_MAX };
 module_param(t41_bcsh_error, int, 0444);
 static int t41_bcsh_update(uint32_t ct, uint32_t ev, int force);
+/* User B/C/S/H controls (stock bcsh_info+329..332), 128 = neutral. */
+static unsigned char t41_bcsh_api[4] = { 128, 128, 128, 128 };
+static int t41_bcsh_api_set(unsigned int index, uint32_t value);
 static int t41_gamma_error = -ENODEV;
 static int t41_ydns_error = -ENODEV;
 static unsigned int t41_ydns_gain = ~0U;
@@ -1852,9 +1869,6 @@ static struct file_operations ivdc_misc_fops;
 static struct file_operations ivdc_proc_fops;
 static uint32_t vb_time;
 static uint32_t ivdc_vb_type;
-static unsigned char data_10000[16384];
-static unsigned char data_3288[16384];
-static unsigned char data_48000[16384];
 static uint32_t ivdc_mem_paddr;
 static uint32_t isp_err3;
 static struct file_operations isp_framesource_fops;
@@ -2085,13 +2099,12 @@ static unsigned char top_info_storage[8] __attribute__((aligned(4)));
 /* CCM's recovered scalar was absent; channel-1 gamma storage is unavailable. */
 #define ccm_info (gamma_info[1])
 static struct file_operations tisp_fops;
-static unsigned char data_1388[16384];
-static uint32_t ev_last;
+static uint32_t ev_last[2];	/* Review2 M4: 64-bit in stock (8 bytes) */
 static unsigned char __attribute__((aligned(4))) tgain_last[16] = {
     0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
 };
-static uint32_t sev_last;
-static uint32_t stgain_last;
+static uint32_t sev_last[2];	/* Review2 M4 */
+static uint32_t stgain_last[2];	/* Review2 M4 */
 static unsigned char tpm_cb_storage[336] __attribute__((aligned(4)));
 #define tpm_cb (*(uint32_t *)(void *)tpm_cb_storage)
 static uint32_t m_bin;
@@ -2113,7 +2126,6 @@ static unsigned char mscaler_storage[2656] __attribute__((aligned(4)));
 #define mscaler (*(uint32_t *)(void *)mscaler_storage)
 static unsigned char data_1ee40[16384];
 static unsigned char data_74b0[16384];
-static unsigned char data_80000[16384];
 static unsigned char day_night_storage[8] __attribute__((aligned(4)));
 #define day_night (*(uint32_t *)(void *)day_night_storage)
 static unsigned char deir_en_storage[8] __attribute__((aligned(4)));
@@ -7091,7 +7103,7 @@ int32_t private_schedule_work(void)
     t9 = t9;
 
     /* fragment 2: IndirectTailCall */
-    return queue_work_on(2, (void *)(uintptr_t)a1, (void *)(uintptr_t)a2);
+    return queue_work((void *)(uintptr_t)a1, (void *)(uintptr_t)a2);  /* Review2 L11 */
 
     return 0;
 }
@@ -12492,6 +12504,8 @@ vic_mdma_irq_function0x4b0:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000004b94 origin=fragment_seed original=isp_vic_interrupt_service_routine */
+static unsigned int t41_vic_err_restarts;
+
 int64_t isp_vic_interrupt_service_routine(uintptr_t a0, uint32_t a1, uint32_t a2)
 {
     uint32_t *local_10 = 0;
@@ -12552,8 +12566,10 @@ int64_t isp_vic_interrupt_service_routine(uintptr_t a0, uint32_t a1, uint32_t a2
         writel(active0, regs + 0x1f0);
         writel(active1, regs + 0x1f4);
         if ((active0 & 0x10) && t41_vic_frame_sync_work > 0) {
-            int queued = queue_work_on(2, system_wq,
-                                       (struct work_struct *)(void *)main_fs_work);
+            /* Review2 L11: stock queue_work_on(2) is WORK_CPU_UNBOUND only
+             * with NR_CPUS=2; queue_work() is that on any kernel. */
+            int queued = queue_work(system_wq,
+                                    (struct work_struct *)(void *)main_fs_work);
 
             if (fs_trace_count < 8)
                 printk(KERN_WARNING
@@ -12576,6 +12592,20 @@ int64_t isp_vic_interrupt_service_routine(uintptr_t a0, uint32_t a1, uint32_t a2
             ++*(uint32_t *)(vic + 0x1d8);
         if (active0 & 0x08)
             ++*(uint32_t *)(vic + 0x1dc);
+        /*
+         * Review2 H2: stock isp_vic_interrupt_service_routine (T41 SDK
+         * 9a2a2b5d, 0x5308): any error bit in 0xfffffe00 (asfifo, hor/ver,
+         * mipi vcomp) prints "reset start" and writes 5 to the VIC control
+         * register (reset + start). Same here, with a rate-limited print.
+         */
+        if (active0 & 0xfffffe00U) {
+            ++t41_vic_err_restarts;
+            printk_ratelimited(KERN_WARNING
+                               "tx_isp_t41_recovered: VIC error %#x, reset start (n=%u)\n",
+                               active0, t41_vic_err_restarts);
+            writel(5, regs + 0x0);
+            wmb();
+        }
         if (trace_count < 8)
             printk(KERN_WARNING
                    "tx_isp_t41_recovered: VIC safe irq irq=%u active=%#x/%#x raw=%#x/%#x frames=%u/%u/%u/%u\n",
@@ -14863,6 +14893,7 @@ error:
 #define T41_VIN_DUAL_MODE_OFF         312
 #define T41_SENSOR_LIST_OFF           288
 #define T41_SENSOR_INFO_OFF           296
+#define T41_SENSOR_NAME_LEN           32	/* info: name[32], then cbus type */
 #define T41_SENSOR_VIDEO_INFO_OFF     780
 #define T41_SUBDEV_NOTIFY_OFF         124
 #define T41_SUBDEV_EVENT_OFF          128
@@ -14970,6 +15001,87 @@ static void t41_unregister_i2c_sensor(uintptr_t sensor_sd)
 	}
 }
 
+/*
+ * The core and the VIC keep a 96-byte copy of each synced sensor's
+ * tx_isp_video_in (ispcore_sync_sensor_attr / vic_sensor_ops_sync_sensor_attr
+ * at core+308 / vic+276, per sensor id); words +52/+56 of it point at the
+ * sensor's attributes and registration info (sensor+776/+780).  Before a
+ * stale sensor is freed, drop those copies: the stock "unsync" (sync with
+ * no attributes, as tx_isp_vin set-input does when it switches a sensor
+ * out) through the core event fan-out, which clears the core's and every
+ * child's (VIC's) slot 0, plus the core's own slot for other sensor ids.
+ */
+static void t41_unsync_stale_sensor(uintptr_t sensor)
+{
+	uintptr_t core = (uintptr_t)ispcore_sd;
+	uintptr_t info = t41_load_ptr(sensor, T41_SENSOR_VIDEO_INFO_OFF);
+	bool held = false;
+	unsigned int id;
+
+	if (!t41_kernel_data_ptr((void *)core))
+		return;
+	core = t41_load_ptr(core, 268);
+	if (!t41_kernel_data_ptr((void *)core) || !info)
+		return;
+	for (id = 0; id < T41_SENSOR_MAX_VIN; id++) {
+		uintptr_t blk = core + 308 + id * 96;
+
+		if (t41_load_ptr(blk, 56) != info)
+			continue;
+		printk(KERN_WARNING
+		       "tx_isp_t41_recovered: stale sensor still synced to core/VIC slot %u, unsyncing\n",
+		       id);
+		if (id)
+			memset((void *)blk, 0, 96);
+		else
+			held = true;
+	}
+	/* the stock unsync clears slot 0 only: only when that is this sensor */
+	if (held)
+		ispcore_core_ops_ioctl((uintptr_t)ispcore_sd,
+				       T41_EVENT_SYNC_SENSOR_ATTR, 0);
+}
+
+static void t41_reclaim_stale_sensor(uintptr_t vin, uintptr_t arg,
+				     unsigned int sensor_id)
+{
+	struct list_head *head;
+	struct list_head *node;
+	uintptr_t sensor = 0;
+	uintptr_t slot;
+
+	head = (struct list_head *)(vin + T41_VIN_SENSOR_LIST_OFF);
+	private_mutex_lock((void *)(vin + T41_VIN_SENSOR_LOCK_OFF));
+	if (head->next) {
+		for (node = head->next; node != head; node = node->next) {
+			uintptr_t candidate =
+				(uintptr_t)node - T41_SENSOR_LIST_OFF;
+
+			if (!strncmp((char *)(candidate + T41_SENSOR_INFO_OFF),
+				     (char *)arg, T41_SENSOR_NAME_LEN)) {
+				sensor = candidate;
+				break;
+			}
+		}
+	}
+	if (!sensor) {
+		private_mutex_unlock((void *)(vin + T41_VIN_SENSOR_LOCK_OFF));
+		return;
+	}
+	list_del((struct list_head *)(sensor + T41_SENSOR_LIST_OFF));
+	slot = vin + T41_VIN_ACTIVE_SENSOR_OFF + sensor_id * sizeof(uintptr_t);
+	if (t41_load_ptr(vin, T41_VIN_ACTIVE_SENSOR_OFF +
+			      sensor_id * sizeof(uintptr_t)) == sensor)
+		*(uintptr_t *)slot = 0;
+	private_mutex_unlock((void *)(vin + T41_VIN_SENSOR_LOCK_OFF));
+	printk(KERN_WARNING
+	       "tx_isp_t41_recovered: reclaiming stale sensor %.32s on vin %u\n",
+	       (char *)arg, sensor_id);
+	t41_unsync_stale_sensor(sensor);
+	if (*(uint32_t *)(sensor + T41_SENSOR_INFO_OFF + 32) == 1)
+		t41_unregister_i2c_sensor(sensor);
+}
+
 static int t41_register_sensor(uintptr_t vin, uintptr_t arg)
 {
 	struct i2c_board_info board_info;
@@ -15003,6 +15115,14 @@ static int t41_register_sensor(uintptr_t vin, uintptr_t arg)
 		isp_printf(1, "unsupported sensor control bus %u\n", cbus_type);
 		return -EINVAL;
 	}
+
+	/* Beyond vendor: a process that dies without IMP_ISP_DelSensor (OOM
+	 * kill, SIGKILL) leaves its sensor on the VIN list and its I2C client
+	 * bound, so every later AddSensor fails with EBUSY from
+	 * i2c_new_device until reboot.  The VIN state check above already
+	 * proved no stream owns this slot, so reclaim a same-named stale
+	 * entry before creating the new client. */
+	t41_reclaim_stale_sensor(vin, arg, sensor_id);
 
 	adapter = private_i2c_get_adapter(*(uint32_t *)(arg + 60));
 	if (!adapter) {
@@ -15096,8 +15216,8 @@ static int t41_release_sensor(uintptr_t vin, uintptr_t arg)
 	for (node = head->next; node != head; node = node->next) {
 		uintptr_t candidate = (uintptr_t)node - T41_SENSOR_LIST_OFF;
 
-		if (!strcmp((char *)(candidate + T41_SENSOR_INFO_OFF),
-			    (char *)arg)) {
+		if (!strncmp((char *)(candidate + T41_SENSOR_INFO_OFF),
+			     (char *)arg, T41_SENSOR_NAME_LEN)) {
 			sensor = candidate;
 			break;
 		}
@@ -20622,8 +20742,99 @@ static int t41_tuning_copy_awb_global_stats(unsigned int channel,
                                 sizeof(response)) ? -EFAULT : 0;
 }
 
-/* WHOLE_DRIVER_CANDIDATE fn_000000000000c784 origin=fragment_seed original=isp_core_tunning_unlocked_ioctl */
+/* Last requested sensor flip mode (.data; -1 = never set). */
+static int t41_sensor_flip_mode = -1;
+
+static int t41_tuning_hvflip(const struct tx_isp_tuning_t41_control *request)
+{
+    uint32_t attr[4];
+    uint8_t *attrs = (uint8_t *)(uintptr_t)tisp_tattr;
+    uint8_t *channel;
+    char *core_sd = (char *)(uintptr_t)ispcore_sd;
+    char *core;
+    unsigned int i;
+    uint8_t bits;
+
+    if (request->channel != 0 || !request->value_or_ptr ||
+        !t41_kernel_data_ptr(attrs))
+        return -EINVAL;
+    if (request->is_get) {
+        attr[0] = t41_sensor_flip_mode < 0 ? 0 : t41_sensor_flip_mode;
+        for (i = 0; i < 3; ++i) {
+            channel = mscaler_storage + i * 0x264;
+            attr[1 + i] = (channel[0x0a] ? 1U : 0U) |
+                          (channel[0x0c] ? 2U : 0U);
+        }
+        return private_copy_to_user(
+            (void __user *)(uintptr_t)request->value_or_ptr,
+            attr, sizeof(attr)) ? -EFAULT : 0;
+    }
+    if (private_copy_from_user(attr,
+            (void __user *)(uintptr_t)request->value_or_ptr, sizeof(attr)))
+        return -EFAULT;
+    if (attr[0] > 3 || attr[1] > 3 || attr[2] > 3 || attr[3] > 3)
+        return -EINVAL;
+    if ((attr[1] | attr[2] | attr[3]) & attr[0])
+        return -EINVAL;
+    for (i = 0; i < 3; ++i) {
+        channel = mscaler_storage + i * 0x264;
+        /* g_hv_flip: keep the bits 6/7 state, bits 0-1 = channel. */
+        bits = i | (channel[0x0e] ? 0x40 : 0) | (channel[0x0f] ? 0x80 : 0);
+        bits |= (attr[1 + i] & 1) ? 0x0c : 0;
+        bits |= (attr[1 + i] & 2) ? 0x30 : 0;
+        tisp_s_hv_flip(request->channel, (uintptr_t)&bits);
+    }
+    if (!t41_kernel_data_ptr(core_sd))
+        return -ENODEV;
+    core = *(char **)(core_sd + 268);
+    if (!t41_kernel_data_ptr(core))
+        return -ENODEV;
+    /*
+     * Apply the sensor flip synchronously (process context, I2C).  The
+     * frame-done slot-5 staging of stock was never consumed on this
+     * driver (no sensor event seen on cam-F), so do not depend on it.
+     * Always write: timps re-asserts the flip after a chn0 restart.
+     */
+    if (t41_sensor_flip_mode != (int)attr[0])
+        tisp_lsc_hvflip(*(uint32_t *)(void *)(core + 368),
+                        *(uint32_t *)(void *)(core + 372),
+                        (attr[0] >> 1) & 1, attr[0] & 1);
+    {
+        uint32_t event_arg[2] = { 0, attr[0] };
+        int ret = ispcore_sensor_ops_ioctl((uintptr_t)core_sd, 0x02000010,
+                                           (uintptr_t)event_arg);
+
+        t41_sensor_flip_mode = attr[0];
+        /* timps re-asserts the flip after every chn0 restart */
+        printk_ratelimited(KERN_INFO
+               "tx_isp_t41_recovered: hvflip sensor=%u isp=%u/%u/%u ret=%d "
+               "pid=%d tid-comm=%s\n", attr[0], attr[1], attr[2], attr[3],
+               ret, task_tgid_nr(current), current->comm);
+        return ret;
+    }
+    return 0;
+}
+
+/*
+ * Review2 M1: stock serialises the tuning node with core_dev->mlock; two
+ * tuning threads (day/night, BCSH, flip) must not interleave on the same
+ * IQ state. Serialise the whole isp-m0 ioctl.
+ */
+static DEFINE_MUTEX(t41_tuning_mutex);
+static int64_t isp_core_tunning_unlocked_ioctl_body(uintptr_t a0, uint32_t a1, uint32_t a2);
+
 int64_t isp_core_tunning_unlocked_ioctl(uintptr_t a0, uint32_t a1, uint32_t a2)
+{
+    int64_t ret;
+
+    mutex_lock(&t41_tuning_mutex);
+    ret = isp_core_tunning_unlocked_ioctl_body(a0, a1, a2);
+    mutex_unlock(&t41_tuning_mutex);
+    return ret;
+}
+
+/* WHOLE_DRIVER_CANDIDATE fn_000000000000c784 origin=fragment_seed original=isp_core_tunning_unlocked_ioctl */
+static int64_t isp_core_tunning_unlocked_ioctl_body(uintptr_t a0, uint32_t a1, uint32_t a2)
 {
     uint32_t *local_10 = 0;
     uint32_t *local_18 = 0;
@@ -20657,6 +20868,9 @@ int64_t isp_core_tunning_unlocked_ioctl(uintptr_t a0, uint32_t a1, uint32_t a2)
               TX_ISP_TUNING_PAYLOAD_USER_PTR },
             { TX_ISP_TUNING_CMD_T41_SENSOR_FPS, 4,
               TX_ISP_TUNING_DIR_GET, TX_ISP_TUNING_PAYLOAD_INLINE },
+            { TX_ISP_TUNING_CMD_T41_HVFLIP, 16,
+              TX_ISP_TUNING_DIR_GET | TX_ISP_TUNING_DIR_SET,
+              TX_ISP_TUNING_PAYLOAD_USER_PTR },
             { TX_ISP_TUNING_CMD_T41_AE_EXPR_INFO,
               TX_ISP_TUNING_T41_AE_EXPR_BYTES,
               TX_ISP_TUNING_DIR_GET, TX_ISP_TUNING_PAYLOAD_USER_PTR },
@@ -20838,6 +21052,17 @@ int64_t isp_core_tunning_unlocked_ioctl(uintptr_t a0, uint32_t a1, uint32_t a2)
             return 0;
         }
 
+        /*
+         * IMPISPHVFLIPAttr { sensor_mode; isp_mode[3]; } (stock
+         * tx_isp_core_ops_s_ctrl case 0x08000073).  The ISP modes go to the
+         * MSCA mirror/flip bits per channel; a sensor mode change is staged
+         * in frame-done slot five (core+516/520, sensor event 0x02000010)
+         * and the LSC table is flipped to match.  Stock rejects a request
+         * that sets the same bit for the sensor and an ISP channel.
+         * Before this route existed the ioctl was acknowledged unchanged.
+         */
+        if (route && route->id == TX_ISP_TUNING_CMD_T41_HVFLIP)
+            return t41_tuning_hvflip(&request);
         if (route && route->id == TX_ISP_TUNING_CMD_T41_AE_EXPR_INFO)
             return t41_tuning_copy_ae_expr(request.channel,
                                            request.value_or_ptr);
@@ -25941,13 +26166,13 @@ int ivdc_pad_event_handle(int32_t * arg1, int arg2, void * arg3) {
             *(int32_t *)((char *)*(void **)((uintptr_t)s0_1 + 0x110) + 0x20) = (s1_1 + 0xff) >> 8 << 0x10 | ((s1_1 + 0xff) & 0xffffff00);
             void * v1_10 = *(void **)((char *)s0_1 + 0x110);
             if ((*(int32_t *)((uintptr_t)v1_10 + 0x24) & 0x700) == 0) {
-                *(int32_t *)((char *)v1_10 + 0x24) = (int32_t)&data_3288;
+                *(int32_t *)((char *)v1_10 + 0x24) = (int32_t)0x3288;
                 v1_10 = *(void **)((char *)s0_1 + 0x110);
             }
             *(int32_t *)((char *)v1_10 + 0x60) = 0x100702;
             *(int32_t *)((char *)*(void **)((char *)s0_1 + 0x110) + 0x64) = 7;
             *(int32_t *)((char *)*(void **)((char *)s0_1 + 0x110) + 0x84) = 1;
-            *(int32_t *)((char *)*(void **)((char *)s0_1 + 0x110) + 0x68) = (int32_t)&data_10000;
+            *(int32_t *)((char *)*(void **)((char *)s0_1 + 0x110) + 0x68) = (int32_t)0x10000;
             *(int32_t *)((char *)*(void **)((char *)s0_1 + 0x110) + 0x6c) = TX_ISP_FRAME_EVENT_GET_FORMAT;
             if (ivdc_threshold_line == 0)
                 ivdc_threshold_line = a3_1;
@@ -26058,19 +26283,19 @@ int ivdc_pad_event_handle(int32_t * arg1, int arg2, void * arg3) {
         uint32_t v0_55;
         if (s5_3 >= 0xc01) {
             direct_mode = 2;
-            v0_55 = (uint32_t)&data_48000 / s1_5;
+            v0_55 = 0x48000U / s1_5;
             *(int32_t *)((char *)*(void **)((char *)s0_3 + 0x110) + 0x2c) = 0;
             ivdc_mem_line_2 = ivdc_mem_line;
         } else {
             uint32_t direct_mode_1 = direct_mode;
             if (direct_mode_1 == 2) {
-                v0_55 = (uint32_t)&data_48000 / s1_5;
+                v0_55 = 0x48000U / s1_5;
                 *(int32_t *)((char *)*(void **)((char *)s0_3 + 0x110) + 0x28) = v0_55;
                 *(int32_t *)((char *)*(void **)((char *)s0_3 + 0x110) + 0x2c) = 0;
                ivdc_mem_line_2 = ivdc_mem_line;
             } else if ((int32_t)direct_mode_1 >= 3) {
                 if (direct_mode_1 == 3) {
-                    v0_55 = ((uint32_t)&data_48000 / s1_5) << 0x10;
+                    v0_55 = (0x48000U / s1_5) << 0x10;
                     *(int32_t *)((char *)*(void **)((char *)s0_3 + 0x110) + 0x28) = v0_55;
                     *(int32_t *)((char *)*(void **)((char *)s0_3 + 0x110) + 0x2c) = 0;
                     ivdc_mem_line_2 = ivdc_mem_line;
@@ -26085,12 +26310,12 @@ int ivdc_pad_event_handle(int32_t * arg1, int arg2, void * arg3) {
                 }
             } else {
                 if (direct_mode_1 == 0) {
-                    v0_55 = (uint32_t)&data_48000 / s1_5;
+                    v0_55 = 0x48000U / s1_5;
                     *(int32_t *)((char *)*(void **)((char *)s0_3 + 0x110) + 0x28) = v0_55;
                     *(int32_t *)((char *)*(void **)((char *)s0_3 + 0x110) + 0x2c) = 0;
                     ivdc_mem_line_2 = ivdc_mem_line;
                 } else if (direct_mode_1 == 1) {
-                    v0_55 = ((uint32_t)&data_48000 / s1_5) << 0x10;
+                    v0_55 = (0x48000U / s1_5) << 0x10;
                     *(int32_t *)((char *)*(void **)((char *)s0_3 + 0x110) + 0x28) = v0_55;
                     *(int32_t *)((char *)*(void **)((char *)s0_3 + 0x110) + 0x2c) = 0;
                     ivdc_mem_line_2 = ivdc_mem_line;
@@ -26115,7 +26340,7 @@ int ivdc_pad_event_handle(int32_t * arg1, int arg2, void * arg3) {
         *(int32_t *)((char *)*(void **)((char *)s0_3 + 0x110) + 0x5c) = 0;
         *(int32_t *)((char *)*(void **)((char *)s0_3 + 0x110) + 0x60) = 0x100702;
         *(int32_t *)((char *)*(void **)((char *)s0_3 + 0x110) + 0x64) = 7;
-        *(int32_t *)((char *)*(void **)((char *)s0_3 + 0x110) + 0x68) = (int32_t)&data_10000;
+        *(int32_t *)((char *)*(void **)((char *)s0_3 + 0x110) + 0x68) = (int32_t)0x10000;
         *(int32_t *)((char *)*(void **)((char *)s0_3 + 0x110) + 0x6c) = TX_ISP_FRAME_EVENT_GET_FORMAT;
         *(int32_t *)((char *)*(void **)((char *)s0_3 + 0x110) + 0x70) = 0;
         *(int32_t *)((char *)*(void **)((char *)s0_3 + 0x110) + 0x74) = 0;
@@ -26198,20 +26423,20 @@ int ivdc_pad_event_handle(int32_t * arg1, int arg2, void * arg3) {
         uint32_t v0_56;
         if (s5_4 >= 0xc01) {
             direct_mode = 2;
-            v0_56 = (uint32_t)&data_48000 / s1_6;
+            v0_56 = 0x48000U / s1_6;
             *(int32_t *)((char *)*(void **)((char *)s0_4 + 0x110) + 0x28) = v0_56;
             *(int32_t *)((char *)*(void **)((char *)s0_4 + 0x110) + 0x2c) = 0;
             ivdc_mem_line_4 = ivdc_mem_line;
         } else {
             uint32_t direct_mode_2 = direct_mode;
             if (direct_mode_2 == 2) {
-                v0_56 = (uint32_t)&data_48000 / s1_6;
+                v0_56 = 0x48000U / s1_6;
                 *(int32_t *)((char *)*(void **)((char *)s0_4 + 0x110) + 0x28) = v0_56;
                 *(int32_t *)((char *)*(void **)((char *)s0_4 + 0x110) + 0x2c) = 0;
                 ivdc_mem_line_4 = ivdc_mem_line;
             } else if ((int32_t)direct_mode_2 >= 3) {
                 if (direct_mode_2 == 3) {
-                    v0_56 = ((uint32_t)&data_48000 / s1_6) << 0x10;
+                    v0_56 = (0x48000U / s1_6) << 0x10;
                     *(int32_t *)((char *)*(void **)((char *)s0_4 + 0x110) + 0x28) = v0_56;
                     *(int32_t *)((char *)*(void **)((char *)s0_4 + 0x110) + 0x2c) = 0;
                     ivdc_mem_line_4 = ivdc_mem_line;
@@ -26226,12 +26451,12 @@ int ivdc_pad_event_handle(int32_t * arg1, int arg2, void * arg3) {
                 }
             } else {
                 if (direct_mode_2 == 0) {
-                    v0_56 = (uint32_t)&data_48000 / s1_6;
+                    v0_56 = 0x48000U / s1_6;
                     *(int32_t *)((char *)*(void **)((char *)s0_4 + 0x110) + 0x28) = v0_56;
                     *(int32_t *)((char *)*(void **)((char *)s0_4 + 0x110) + 0x2c) = 0;
                     ivdc_mem_line_4 = ivdc_mem_line;
                 } else if (direct_mode_2 == 1) {
-                    v0_56 = ((uint32_t)&data_48000 / s1_6) << 0x10;
+                    v0_56 = (0x48000U / s1_6) << 0x10;
                     *(int32_t *)((char *)*(void **)((char *)s0_4 + 0x110) + 0x28) = v0_56;
                     *(int32_t *)((char *)*(void **)((char *)s0_4 + 0x110) + 0x2c) = 0;
                     ivdc_mem_line_4 = ivdc_mem_line;
@@ -26246,7 +26471,7 @@ int ivdc_pad_event_handle(int32_t * arg1, int arg2, void * arg3) {
         *(int32_t *)((char *)*(void **)((char *)s0_4 + 0x110) + 0x5c) = 0;
         *(int32_t *)((char *)*(void **)((char *)s0_4 + 0x110) + 0x60) = 0x100702;
         *(int32_t *)((char *)*(void **)((char *)s0_4 + 0x110) + 0x64) = 7;
-        *(int32_t *)((char *)*(void **)((char *)s0_4 + 0x110) + 0x68) = (int32_t)&data_10000;
+        *(int32_t *)((char *)*(void **)((char *)s0_4 + 0x110) + 0x68) = (int32_t)0x10000;
         *(int32_t *)((char *)*(void **)((char *)s0_4 + 0x110) + 0x6c) = TX_ISP_FRAME_EVENT_GET_FORMAT;
         *(int32_t *)((char *)*(void **)((char *)s0_4 + 0x110) + 0x70) = 0;
         *(int32_t *)((char *)*(void **)((char *)s0_4 + 0x110) + 0x74) = 0;
@@ -28216,6 +28441,10 @@ int t41_frame_channel_reqbufs_clean(void *channel, void __user *user_req)
     return 0;
 }
 
+static bool t41_qbuf_guard = true;
+module_param_named(qbuf_guard, t41_qbuf_guard, bool, 0644);
+MODULE_PARM_DESC(qbuf_guard, "Reject framechan QBUF buffers outside rmem (default 1)");
+
 int t41_frame_channel_qbuf_clean(void *channel, void __user *user_buf)
 {
     uint32_t vbuf[TX_ISP_FRAME_WORD_COUNT];
@@ -28325,6 +28554,19 @@ int t41_frame_channel_qbuf_clean(void *channel, void __user *user_buf)
     if (vbuf[TX_ISP_FRAME_WORD_MEMORY] != *(uint32_t *)((char *)channel + 0x48) ||
         vbuf[TX_ISP_FRAME_WORD_LENGTH] != *(uint32_t *)((char *)channel + 0x64) ||
         *(uint32_t *)(buffer + 0x48) != 0)
+        return -EINVAL;
+
+    /*
+     * Review2 M2: user space queues the frame buffer by physical address;
+     * the ISP writes the frame there and the sync below invalidates that
+     * range. Accept only rmem (tx_isp_guard.h), as on T20/T21/T23/T31.
+     */
+    if (tx_isp_qbuf_phys_check(vbuf[TX_ISP_FRAME_WORD_DMA],
+                               vbuf[TX_ISP_FRAME_WORD_LENGTH]) &&
+        tx_isp_qbuf_reject("tx_isp_t41_recovered",
+                           (int)*(uint32_t *)((char *)channel + 0x2dc),
+                           index, vbuf[TX_ISP_FRAME_WORD_DMA],
+                           vbuf[TX_ISP_FRAME_WORD_LENGTH], t41_qbuf_guard))
         return -EINVAL;
 
     *(uint32_t *)(buffer + 0x0c) = vbuf[TX_ISP_FRAME_WORD_FLAGS] & TX_ISP_FRAME_FLAG_RETAIN_MASK;
@@ -33741,7 +33983,7 @@ int32_t tx_isp_video_link_stream(uintptr_t a0, uint32_t a1)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000013a6c origin=fragment_seed original=tx_isp_exit */
 int32_t tx_isp_exit(void)
 {
-    if (tx_isp_bringup_level < 0)
+    if (t41_bringup() < 0)
         return 0;
 
     private_platform_driver_unregister(&tx_isp_driver);
@@ -34057,6 +34299,7 @@ int32_t tx_isp_init(void)
     /* fragment 0: Prologue */
     /* function prologue: stack frame and callee-saved register setup */
 
+    WRITE_ONCE(t41_bringup_at_load, tx_isp_bringup_level);
     if (tx_isp_bringup_level < 0)
         return 0;
 
@@ -42795,6 +43038,20 @@ tisp_code_tuning_ioctl0xc20:
 /* WHOLE_DRIVER_CANDIDATE fn_00000000000199f8 origin=fragment_seed original=tisp_code_create_tuning_node */
 int32_t tisp_code_create_tuning_node(void)
 {
+#ifdef REGTRACE_KERNEL_TREE_BUILD
+    /*
+     * Disabled: the recovered body used the 4-byte module parameter
+     * ivdc_threshold_line as a struct cdev.  cdev_init() then zeroed and
+     * cdev_add() kept live ~60 bytes of neighbouring .bss, among them
+     * tx_isp_bringup_level (set to the kobject ktype pointer, i.e. < 0).
+     * tx_isp_exit() then skipped the whole platform teardown on rmmod:
+     * drivers, devices, misc nodes, IRQs and kthreads stayed registered
+     * inside the freed module, and the cdev stayed in cdev_map.  The node
+     * was unreachable anyway (class_create is a stub, so no /dev entry),
+     * and no OpenIMP/libimp path opens it.
+     */
+    return 0;
+#endif
     uint32_t *local_10 = 0;
     uint32_t *local_18 = 0;
     uint32_t *local_20 = 0;
@@ -42875,6 +43132,20 @@ tisp_code_create_tuning_node0xd8:
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000019afc origin=fragment_seed original=tisp_code_destroy_tuning_node */
 int32_t tisp_code_destroy_tuning_node(void)
 {
+#ifdef REGTRACE_KERNEL_TREE_BUILD
+    /*
+     * Disabled: the recovered body used the 4-byte module parameter
+     * ivdc_threshold_line as a struct cdev.  cdev_init() then zeroed and
+     * cdev_add() kept live ~60 bytes of neighbouring .bss, among them
+     * tx_isp_bringup_level (set to the kobject ktype pointer, i.e. < 0).
+     * tx_isp_exit() then skipped the whole platform teardown on rmmod:
+     * drivers, devices, misc nodes, IRQs and kthreads stayed registered
+     * inside the freed module, and the cdev stayed in cdev_map.  The node
+     * was unreachable anyway (class_create is a stub, so no /dev entry),
+     * and no OpenIMP/libimp path opens it.
+     */
+    return 0;
+#endif
     uint32_t *local_10 = 0;
     uint32_t local_14 = 0;
     uint32_t *local_18 = 0;
@@ -43624,7 +43895,7 @@ int32_t Tiziano_Awb_Ct_Detect_GrayWorld_mode(void *arg1, int32_t arg2, void *arg
                 result = 1;
                 *arg5 = 1;
                 int32_t s0_1 = 1 << (s0 & 0x1f);
-                *v0_1 = &data_1388;
+                *v0_1 = (void *)5000;  /* stock li 5000 */
                 *arg4 = s0_1;
                 ((void **)arg4)[1] = s0_1;
             } else {
@@ -43748,7 +44019,7 @@ int32_t Tiziano_Awb_Ct_Detect_GrayWorld_mode(void *arg1, int32_t arg2, void *arg
                     label_1a534:
                     *v1_7 = 1;
                     int32_t s0_2 = 1 << (s0 & 0x1f);
-                    *v0_1 = &data_1388;
+                    *v0_1 = (void *)5000;  /* stock li 5000 */
                     *arg4 = s0_2;
                     ((void **)arg4)[1] = s0_2;
                 }
@@ -75874,6 +76145,11 @@ int tisp_awb_deinit(int arg1) {
     }
 
     info = (uint8_t *)(uintptr_t)awb_info[arg1];
+    /* Review2 M3: stop the AWB statistics DMA before its ring is freed. */
+    if (info && *(uint32_t *)(void *)(info + 20)) {
+        system_reg_write(0x1804c, 0);
+        wmb();
+    }
     if (info) {
         static const unsigned int owned_offsets[] = { 4, 8, 12, 20 };
         unsigned int i;
@@ -85206,7 +85482,7 @@ int tisp_lsc_init(uint32_t arg1, uint32_t *arg2)
     *(uint8_t *)((uintptr_t)v0_2 + 0x6c28) = tmp ^ 1;
     *(uint8_t *)((char *)v0_2 + 0x6c29) = 0xff;
     *(uint8_t *)((char *)v0_2 + 0x6c2a) = 0xff;
-    ((void **)v0_2)[3] = (uint32_t)&data_1388;
+    ((void **)v0_2)[3] = (void *)5000;  /* stock li 5000 */
     ((void **)v0_2)[4] = 5;
     ((void **)v0_2)[5] = 0x10;
     ((void **)v0_2)[7] = 0x100;
@@ -88044,10 +88320,13 @@ int64_t tisp_wdr_degweight_ev(uintptr_t a0, uintptr_t a1, uintptr_t a2, uint32_t
     uintptr_t *v1 = 0;
 
     /* fragment 0: StackAccess */
-    v1 = local_10;
+    /* Review2 M4: stock lw v1,16(sp) / lw v0,12(v1): the fifth argument,
+     * not a global (was local_10 = NULL and &direct_mode + 4). */
+    (void)local_10;
+    v1 = (uintptr_t *)arg4;
     t1 = *(uint16_t *)((char *)a0 + 8);
     t0 = *(uint16_t *)((char *)a0 + 4);
-    v0 = *(uint32_t *)((char *)((char *)&direct_mode + 0x4));
+    v0 = (uintptr_t *)(uintptr_t)*(uint32_t *)((char *)arg4 + 12);
     t2 = *(uint16_t *)((char *)a0 + 6);
     v0 = t1 < v0;
 
@@ -103306,18 +103585,22 @@ int64_t lce_wdr_light_lock(uint32_t a0, uint32_t a1, uint32_t a2, uintptr_t a3, 
     /* function prologue: stack frame and callee-saved register setup */
 
     /* fragment 1: MemoryAccess */
+    /* Review2 M4: stock lw v0,256(sp) is the fifth argument; the u16
+     * fields at +4/+6/+8/+10/+12 were mis-resolved to the module
+     * parameters ivdc_mem_line/direct_mode (.bss+4/+8). */
+    (void)local_100;
     v1 = *(uint32_t *)((char *)a3 + 0);
-    v0 = local_100;
+    v0 = (uintptr_t *)arg4;
     s1 = *(uint32_t *)((char *)a3 + 12);
     local_b8 = v1;
     v1 = *(uint32_t *)((char *)a3 + 4);
-    t7 = *(uint16_t *)((char *)&direct_mode);
-    t8 = *(uint16_t *)((char *)((char *)&ivdc_mem_line + 0x2));
+    t7 = *(uint16_t *)((char *)arg4 + 8);
+    t8 = *(uint16_t *)((char *)arg4 + 6);
     local_bc = v1;
-    t9 = *(uint16_t *)((char *)((char *)&direct_mode + 0x2));
+    t9 = *(uint16_t *)((char *)arg4 + 10);
     v1 = *(uint32_t *)((char *)a3 + 8);
-    s0 = *(uint16_t *)((char *)((char *)&direct_mode + 0x4));
-    s2 = *(uint16_t *)((char *)&ivdc_mem_line);
+    s0 = *(uint16_t *)((char *)arg4 + 12);
+    s2 = *(uint16_t *)((char *)arg4 + 4);
     t3 = 0;
     local_c0 = v1;
     s3 = (uintptr_t)t7 - (uintptr_t)t8;
@@ -119244,7 +119527,7 @@ int32_t subsection(int32_t *arg1, int32_t arg2, int16_t *arg3, int16_t *arg4, in
     int32_t v0 = 2 << (arg7 & 0x1f);
     ((void **)arg1)[8] = 0xfff;
     *arg1 = 0;
-    int32_t v0_3 = subsection_map(&data_1388, (fix_point_div_32(arg7, 0xfff << (arg7 & 0x1f), v0) + 0x200) >> (arg7 & 0x1f), arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9);
+    int32_t v0_3 = subsection_map(5000, (fix_point_div_32(arg7, 0xfff << (arg7 & 0x1f), v0) + 0x200) >> (arg7 & 0x1f), arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9);
         int16_t * var_38 = arg4;
     int16_t *a0_1 = arg4;
     int32_t *v0_4 = 0;
@@ -136110,8 +136393,8 @@ static int t41_bcsh_update(uint32_t ct, uint32_t ev, int force)
         goto done;
     ret = tisp_csc_api_get(0, (uint32_t)(uintptr_t)(info + 212));
     if (!ret)
-        ret = t41_bcsh_compute(params, T41_BCSH_PARAM_BYTES, ct, ev,
-                               info + 212, 92, words);
+        ret = t41_bcsh_compute_api(params, T41_BCSH_PARAM_BYTES, ct, ev,
+                                   info + 212, 92, t41_bcsh_api, words);
     if (ret)
         goto done;
     if (force || memcmp(words, t41_bcsh_last, sizeof(words))) {
@@ -136125,6 +136408,27 @@ done:
     t41_bcsh_error = ret;
     mutex_unlock(&t41_bcsh_lock);
     return ret;
+}
+
+/*
+ * Stock tisp_bcsh_api_set_* store the control at bcsh_info+329..332 and
+ * rebuild the whole register image (tisp_bcsh_aitp_to_hard, which runs
+ * BCS_adjust and H_adjust).  Rebuild with the last CT/EV the same way.
+ */
+static int t41_bcsh_api_set(unsigned int index, uint32_t value)
+{
+    uint8_t *info = (uint8_t *)(uintptr_t)bcsh_info;
+    uint32_t ct = 0, ev = 0;
+
+    if (index >= ARRAY_SIZE(t41_bcsh_api))
+        return -EINVAL;
+    WRITE_ONCE(t41_bcsh_api[index], value & 0xffU);
+    if (!t41_kernel_data_ptr(info))
+        return 0; /* applied by the first update after init */
+    ct = *(uint32_t *)(void *)(info + 312);
+    ev = *(uint32_t *)(void *)(info + 320);
+    info[329 + index] = value & 0xffU;
+    return t41_bcsh_update(ct, ev, 1);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000005e0fc origin=fragment_seed original=tisp_bcsh_init */
@@ -137700,7 +138004,7 @@ int32_t tisp_hldc_calc_para(uint32_t arg1, uint32_t arg2, uint32_t arg3, uint32_
         }
 
         /* Call fix_point_div_64(0, fix_point_div_64, 0, &data_80000, local_10, local_14) */
-        v0 = fix_point_div_64(0, (uintptr_t)&fix_point_div_64, 0, (uint32_t*)&data_80000, local_10, local_14) - 5;
+        v0 = fix_point_div_64(0, (uintptr_t)&fix_point_div_64, 0, 0x80000U, local_10, local_14) - 5;
 
         if ((int32_t)v0 <= 0) {
             v0 = 1;
@@ -154141,9 +154445,7 @@ int32_t tisp_set_brightness(uint32_t a0, uint32_t a1)
     if (a0 != 0 || !t41_kernel_data_ptr(attrs))
         return -EINVAL;
     attrs[a0 + 9U] = a1 & 0xffU;
-
-    /* The recovered OEM setter dereferences a collapsed pointer table. */
-    return -EOPNOTSUPP;
+    return t41_bcsh_api_set(0, a1);
 #else
     uint32_t local_14 = 0;
     uint32_t local_1c = 0;
@@ -154188,24 +154490,12 @@ int32_t tisp_set_saturation(uint32_t a0, uint32_t a1)
 {
 #ifdef REGTRACE_KERNEL_TREE_BUILD
     uint8_t *attrs = (uint8_t *)(uintptr_t)tisp_tattr;
-    uint32_t saturation = a1 & 0xffU;
 
     if (a0 != 0 || !t41_kernel_data_ptr(attrs))
         return -EINVAL;
-
-    /*
-     * The three recovered words are part of the complete RGB-to-YUV
-     * transform, not independent chroma gains.  Scaling every coefficient
-     * toward zero destroys the luminance-preserving row and produces a
-     * nearly solid-green frame.  T31 rebuilds the full signed matrix for a
-     * saturation change; T41 does not have an equivalent recovered writer
-     * yet, so fail closed for anything except exact unity.
-     */
-    if (saturation != 128U)
-        return -EOPNOTSUPP;
-
-    attrs[a0] = saturation;
-    return 0;
+    /* Stock saturation scales the BCSH chroma gain knees, not the CSC. */
+    attrs[a0] = a1 & 0xffU;
+    return t41_bcsh_api_set(2, a1);
 #else
     uint32_t local_14 = 0;
     uint32_t local_1c = 0;
@@ -154233,7 +154523,7 @@ int32_t tisp_set_contrast(uint32_t a0, uint32_t a1)
     if (a0 != 0 || !t41_kernel_data_ptr(attrs))
         return -EINVAL;
     attrs[a0 + 3U] = a1 & 0xffU;
-    return -EOPNOTSUPP;
+    return t41_bcsh_api_set(1, a1);
 #else
     uint32_t local_14 = 0;
     uint32_t local_1c = 0;
@@ -154261,7 +154551,7 @@ int32_t tisp_set_hue(uint32_t a0, uint32_t a1)
     if (a0 != 0 || !t41_kernel_data_ptr(attrs))
         return -EINVAL;
     attrs[a0 + 12U] = a1 & 0xffU;
-    return -EOPNOTSUPP;
+    return t41_bcsh_api_set(3, a1);
 #else
     uint32_t local_14 = 0;
     uint32_t local_1c = 0;
@@ -158805,6 +159095,15 @@ ispcore_sensor_ops_release_all_sensor0x84:
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000006f0b8 origin=fragment_seed original=ispcore_sensor_ops_ioctl */
+/*
+ * Review2 M7: serialise sensor operations. The HV-flip ioctl writes the
+ * sensor from process context while the AE thread and the frame-done/
+ * frame-sync works send exposure events; a sensor driver using a group-hold
+ * sequence must not see them interleave. Every caller is process context
+ * (the sensor ioctls do I2C and sleep anyway).
+ */
+static DEFINE_MUTEX(t41_sensor_ops_mutex);
+
 int32_t ispcore_sensor_ops_ioctl(uintptr_t core_sd, uint32_t cmd,
 				 uintptr_t arg)
 {
@@ -158813,6 +159112,7 @@ int32_t ispcore_sensor_ops_ioctl(uintptr_t core_sd, uint32_t cmd,
 
 	if (!core_sd)
 		return -EINVAL;
+	mutex_lock(&t41_sensor_ops_mutex);
 
 	/* The ISP core embeds sixteen remote subdevice pointers at +0x3c. */
 	for (offset = 60; offset < 124; offset += sizeof(uintptr_t)) {
@@ -158836,6 +159136,7 @@ int32_t ispcore_sensor_ops_ioctl(uintptr_t core_sd, uint32_t cmd,
 		if (ret && ret != -ENOIOCTLCMD)
 			break;
 	}
+	mutex_unlock(&t41_sensor_ops_mutex);
 	return ret == -ENOIOCTLCMD ? 0 : ret;
 }
 /* WHOLE_DRIVER_CANDIDATE fn_000000000006f168 origin=fragment_seed original=ispcore_frame_channel_get_fmt */
@@ -159173,9 +159474,10 @@ static int t41_msca_commit_frame_shadow(void)
 /* WHOLE_DRIVER_CANDIDATE fn_000000000006f380 origin=fragment_seed original=ispcore_irq_main_fd_work */
 static void ispcore_irq_main_fd_work(struct work_struct *work)
 {
+	/* Stock jump table (.rodata 0x3a80): slot 5 is the sensor flip. */
 	static const int32_t sensor_event[10] = {
 		0x02000007, 0x02000008, 0x02000009, 0x02000005,
-		0x02000006, 0x02000016, 0x02000017, -1,
+		0x02000006, 0x02000010, 0x02000016, 0x02000017,
 		-1, 0x0200000a,
 	};
 	uintptr_t core_sd = (uintptr_t)ispcore_sd;
@@ -159212,16 +159514,20 @@ static void ispcore_irq_main_fd_work(struct work_struct *work)
 			continue;
 
 		/*
-		 * OEM defers slot five until slot seven's frame-done phase.  Slot
-		 * five carries the special event-16 payload at core + 520.
+		 * Slot five (core+516) is the sensor flip: stock sends event
+		 * 0x02000010 with core+520 before the stream check and clears
+		 * the flag (ispcore_irq_main_fd_work+0x190).
 		 */
-		if (index == 5)
-			continue;
-		if (index == 7) {
+		if (index == 5) {
+			int flip_ret;
+
 			event_arg[0] = 0;
 			event_arg[1] = *(uint32_t *)(core + 520);
-			ispcore_sensor_ops_ioctl(core_sd, 0x02000010,
+			flip_ret = ispcore_sensor_ops_ioctl(core_sd, 0x02000010,
 						 (uintptr_t)&event_arg[0]);
+			printk(KERN_WARNING
+			       "tx_isp_t41_recovered: hvflip sensor event mode=%u ret=%d\n",
+			       event_arg[1], flip_ret);
 			*(volatile uint32_t *)(core + 516) = 0;
 			*pending = 0;
 			continue;
@@ -159620,11 +159926,83 @@ int32_t ispcore_frame_channel_qbuf(uintptr_t a0, uintptr_t a1)
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_000000000006fa88 origin=fragment_seed original=dump_isp_info_open */
+/*
+ * /proc/jz/isp/isp-m0 in the stock layout (isp_info_show.isra.6 format
+ * strings).  Only fields the open driver owns are printed; the last line
+ * keeps the previous open-tx-isp AE summary for existing scripts.
+ */
 static int t41_isp_status_show(struct seq_file *m, void *unused)
 {
+    static const char *const flicker_mode[] = { "disable", "auto", "manual" };
+    struct tx_isp_tuning_t41_antiflicker flicker = { 0 };
+    const struct t41_safe_ae_state *ae = &t41_safe_ae[0];
+    uint8_t *attrs = (uint8_t *)(uintptr_t)tisp_tattr;
+    char *core_sd = (char *)(uintptr_t)ispcore_sd;
+    char *core = NULL, *tuning = NULL;
+    uint32_t fps = 0, mode = 0, i;
+    u64 exposure;
+
     (void)unused;
-    seq_printf(m, "open-tx-isp t41\n"
-               "ae_integration=%u ae_gain_q16=%u ae_mean_q8=%u\n",
+    if (t41_kernel_data_ptr(core_sd)) {
+        core = *(char **)(core_sd + 268);
+        tuning = *(char **)(core_sd + 560);
+    }
+    if (!t41_kernel_data_ptr(core))
+        core = NULL;
+    if (!t41_kernel_data_ptr(tuning))
+        tuning = NULL;
+    else
+        mode = *(uint32_t *)(void *)(tuning + 24);
+    seq_printf(m, "****************** ISP INFO ********************\n");
+    seq_printf(m, "Software Version : %s\n", "open-tx-isp t41");
+    if (core) {
+        seq_printf(m, "SENSOR OUTPUT WIDTH : %d\n",
+                   *(uint32_t *)(void *)(core + 368));
+        seq_printf(m, "SENSOR OUTPUT HEIGHT : %d\n",
+                   *(uint32_t *)(void *)(core + 372));
+    }
+    tisp_ae_get_fps(0, (uintptr_t)&fps);
+    seq_printf(m, "ISP OUTPUT FPS : %d / %d\n", fps >> 16, fps & 0xffff);
+    seq_printf(m, "ISP Runing Mode : %s\n", mode ? "night" : "day");
+    if (t41_kernel_data_ptr(attrs)) {
+        seq_printf(m, "Saturation : %d\n", attrs[0]);
+        seq_printf(m, "Sharpness : %d\n", attrs[6]);
+        seq_printf(m, "Contrast : %d\n", attrs[3]);
+        seq_printf(m, "Brightness : %d\n", attrs[9]);
+        seq_printf(m, "Hue : %d\n", attrs[12]);
+        seq_printf(m, "FlipMode: %d\n",
+                   t41_sensor_flip_mode < 0 ? 0 : t41_sensor_flip_mode);
+    }
+    seq_printf(m, "IspFlipMode: %d %d %d\n",
+               (mscaler_storage[0x0a] ? 1 : 0) | (mscaler_storage[0x0c] ? 2 : 0),
+               (mscaler_storage[0x264 + 0x0a] ? 1 : 0) |
+               (mscaler_storage[0x264 + 0x0c] ? 2 : 0),
+               (mscaler_storage[0x4c8 + 0x0a] ? 1 : 0) |
+               (mscaler_storage[0x4c8 + 0x0c] ? 2 : 0));
+    if (!tisp_g_antiflick(0, (uintptr_t)&flicker))
+        seq_printf(m, "Antiflicker : %s freq: %d\n",
+                   flicker.mode < ARRAY_SIZE(flicker_mode) ?
+                   flicker_mode[flicker.mode] : "?", flicker.frequency);
+    seq_printf(m, "********* Ae Expr Info *********\n");
+    seq_printf(m, "AeIntegrationTime : %d\n", ae->integration);
+    seq_printf(m, "AeAGain : %d\n", ae->again);
+    seq_printf(m, "AeMinIntegrationTime : %d\n", ae->min_integration);
+    seq_printf(m, "AeMaxIntegrationTime : %d\n", ae->max_integration);
+    seq_printf(m, "AeMaxAGain : %d\n", tx_isp_exp2_u32(
+        t41_safe_ae_sensor[0].max_log2_q16, 16, 10));
+    exposure = (u64)ae->integration * ae->again / 1024U;
+    seq_printf(m, "TotalGainDb : %d\n", t41_safe_ae_sensor[0].log2_q16);
+    seq_printf(m, "ExposureValue : %llu\n", exposure);
+    seq_printf(m, "EVLog2 : %d\n", exposure ?
+        tisp_log2_int_to_fixed((u32)exposure, 16, 0) : 0);
+    seq_printf(m, "AWBWeightedRgain: %d\n", READ_ONCE(t41_awb_last_rgain));
+    seq_printf(m, "AWBWeightedBgain: %d\n", READ_ONCE(t41_awb_last_bgain));
+    seq_printf(m, "AWBColorTemperature: %d\n", READ_ONCE(t41_ccm_ct));
+    seq_printf(m, "BCSH color model: %u error: %d controls:",
+               READ_ONCE(t41_bcsh_color_model), READ_ONCE(t41_bcsh_error));
+    for (i = 0; i < ARRAY_SIZE(t41_bcsh_api); ++i)
+        seq_printf(m, " %u", READ_ONCE(t41_bcsh_api[i]));
+    seq_printf(m, "\nopen-tx-isp t41 ae_integration=%u ae_gain_q16=%u ae_mean_q8=%u\n",
                READ_ONCE(t41_safe_ae_integration),
                READ_ONCE(t41_safe_ae_gain_q16),
                READ_ONCE(t41_safe_ae_last_mean_q8));
@@ -167291,9 +167669,7 @@ int64_t ispcore_interrupt_service_routine(uintptr_t a0)
              * the per-frame ISP/sensor state before the next input frame;
              * omitting it lets the first buffer complete and then raises ISP
              * overflow (error bit 0x20). */
-            work_queued = queue_work_on(
-                2, system_wq,
-                &main_fd_work);
+            work_queued = queue_work(system_wq, &main_fd_work);  /* Review2 L11 */
             if (completion_trace_count < 12)
                 printk(KERN_WARNING
                        "tx_isp_t41_recovered: ISP frame-done work queued=%d\n",
@@ -168218,6 +168594,16 @@ void cleanup_module(void)
 	tx_isp_t41_v4l2_exit();
 	tx_isp_sinfo_exit();
     ((void (*)(void))(uintptr_t)t9)();
+
+	/*
+	 * The ISP/VIC IRQs are freed by now, so nothing queues these static
+	 * work items any more.  Wait for one still pending on system_wq: it
+	 * would otherwise run from the freed module text after the unload.
+	 */
+	cancel_work_sync((struct work_struct *)(void *)main_fs_work);
+	cancel_work_sync(&main_fd_work);
+	cancel_work_sync(&t41_safe_awb_work);
+	cancel_work_sync(&t41_tmo_work);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000074ce0 origin=fragment_seed original=tx_isp_vic_remove */
@@ -168313,8 +168699,23 @@ int tx_isp_fs_remove(struct platform_device *pdev)
 		return 0;
 
 	channels = *(void **)((char *)fs + 0x114);
-	for (i = 0; i < *(uint32_t *)((char *)fs + 0x118); i++)
-		tx_isp_frame_chan_deinit((uintptr_t)channels + i * 820);
+	for (i = 0; i < *(uint32_t *)((char *)fs + 0x118); i++) {
+		char *channel = (char *)channels + i * 820;
+
+		/*
+		 * The framechanN misc devices live inside the channel array
+		 * (registered on the first sensor activation, flag at +0x28).
+		 * Only fs_slake_module() deregistered them; an rmmod without a
+		 * prior slake freed the array below with the devices still on
+		 * misc_list, and the next insmod oopsed in misc_register() of
+		 * /dev/tx-isp while walking that list.
+		 */
+		if (*(uint32_t *)(channel + 0x28)) {
+			private_misc_deregister(channel);
+			*(uint32_t *)(channel + 0x28) = 0;
+		}
+		tx_isp_frame_chan_deinit((uintptr_t)channel);
+	}
 
 	private_kfree(channels);
 	tx_isp_subdev_deinit(module);
@@ -168351,7 +168752,7 @@ int tx_isp_core_remove(struct platform_device *pdev)
 	if (!core)
 		return 0;
 
-	if (tx_isp_bringup_level >= 3) {
+	if (t41_bringup() >= 3) {
 		void *tuning = *(void **)((char *)core + 0x230);
 
 		if (tuning) {
