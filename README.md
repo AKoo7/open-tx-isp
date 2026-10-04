@@ -92,14 +92,14 @@ SDK sensor, audio and AVPU modules stay. The kernel VPU/rmem stability patches
 [#1752](https://github.com/themactep/thingino-firmware/pull/1752)) are merged there. The optional
 boot guard `BR2_PACKAGE_THINGINO_ISP_GUARD` ([#1749](https://github.com/themactep/thingino-firmware/pull/1749),
 default off; `isp_open=auto|manual|off`) skips the ISP/sensor modules after an unstable load so a bad
-driver cannot boot-loop the camera. Once release tags exist, thingino will pin a tag instead of a SHA.
+driver cannot boot-loop the camera. Once the first date tag exists on `aperto`, thingino's `aperto` branch will pin that tag instead of a SHA.
 
 ## Branches and releases
 
 - `main`: fork default branch, not the tested stack.
 - `next`: tested integration branch; everything on it was flashed and checked on cameras.
-- `release`: fast-forward only from `next` after a clean soak (planned, not created yet; the first tag follows after the 24 h soak that started 2026-10-04).
-- Tags `vYYYY.MM.DD` on `release` (planned).
+- `aperto`: release branch; fast-forward only from `next` after a clean soak (planned, not created yet; the first tag follows after the 24 h soak that started 2026-10-04). It carries the date tags, and thingino's `aperto` branch pins the tag.
+- Tags `vYYYY.MM.DD` on `aperto` (planned).
 - Work happens on `claude/<topic>` branches, merged into `next` after device tests.
 
 ## Documentation

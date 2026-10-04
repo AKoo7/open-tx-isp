@@ -2,7 +2,7 @@
 
 Condensed from the open-stack campaign changelog; only open-tx-isp (kernel driver) changes.
 Newest first, grouped by date. Everything listed was device-tested on the SoC named unless
-marked otherwise. Release tags `vYYYY.MM.DD` are planned (the first one after the 24 h soak that started 2026-10-04); until then dates are the reference. Branch names are historic: the topic branches were merged into `next` and deleted.
+marked otherwise. Release tags `vYYYY.MM.DD` on the `aperto` branch are planned (the first one after the 24 h soak that started 2026-10-04); until then dates are the reference. Branch names are historic: the topic branches were merged into `next` and deleted.
 
 ## 2026-10-04
 
