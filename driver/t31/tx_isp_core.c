@@ -5313,6 +5313,12 @@ static ssize_t video_input_cmd_set(struct file *file, const char __user *buffer,
 		return count;
 	}
 
+	/* Every command fits a page; do not let the write size the allocation. */
+	if (count > PAGE_SIZE) {
+		pr_warn_ratelimited("video_input_cmd_set: write of %zu bytes rejected\n", count);
+		return -E2BIG;
+	}
+
 	/* OEM: uses stack buffer if count <= 0x80, else kmalloc */
 	buflen = count;
 	if (buflen > 0x80) {
