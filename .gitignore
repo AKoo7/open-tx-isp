@@ -33,3 +33,29 @@ isp-alternate/
 
 # OEM binaries checked in by accident
 OEM-*.ko
+
+# Compiled helper binaries and preloads (build from sources in tools/ and tests/)
+*.so
+/tools/t31_lsc_replay
+/tools/t31_tuning_control
+/tools/t41_alloc_probe*
+!/tools/t41_alloc_probe.c
+/tools/t41_frame_probe
+!/tools/t41_frame_probe.c
+/tools/t41_imp_fs_probe
+!/tools/t41_imp_fs_probe.c
+/tools/t41_staty_replay
+!/tools/t41_staty_replay.c
+/tests/*_test
+!/tests/*_test.c
+
+# Local tool configs and scratch (never commit)
+.claude/
+.claude.json
+.mcp.json
+.clinerules
+.roorules
+/prudynt-t/
+script.sh
+sdk-patch.diff
+*.png.bak

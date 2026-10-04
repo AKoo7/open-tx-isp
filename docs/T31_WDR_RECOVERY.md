@@ -59,7 +59,7 @@ the header only after every case passes. MMIO and memory routines are intercepte
 no device is accessed and no vendor executable is copied into the repository.
 Reference ELF SHA-256:
 `f762133b0f6f7b729ebbc75ea057fb11bd556e979ca5b74dd2c3e20d8b3abb12`.
-The repository's `driver/t31/tx-isp-t31.ko_hlil.txt` provides the corresponding
+The repository's `docs/re/tx-isp-t31.ko_hlil.txt` provides the corresponding
 decompiled reference; ELF symbols resolve layout differences.
 
 Both WDR host tests also pass AddressSanitizer/UndefinedBehaviorSanitizer. The
