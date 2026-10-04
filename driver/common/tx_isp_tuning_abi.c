@@ -181,6 +181,11 @@ int tx_isp_tuning_t41_ae_expr_pack(
 	tx_isp_tuning_store_u32(bytes, 84, 1024);
 	tx_isp_tuning_store_u32(bytes, 88, values->max_integration_time);
 	tx_isp_tuning_store_u32(bytes, 92, values->max_analog_gain_x1024);
+	/* AeMaxIntegrationTimeMode / AeMaxAGainMode: MANUAL while capped. */
+	if (values->max_integration_manual)
+		tx_isp_tuning_store_u32(bytes, 56, 1);
+	if (values->max_analog_gain_manual)
+		tx_isp_tuning_store_u32(bytes, 60, 1);
 	tx_isp_tuning_store_u32(bytes, 96, 1024);
 	tx_isp_tuning_store_u32(bytes, 100, 32767);
 	/* Retain the stock linear-mode short-frame defaults. */
@@ -253,5 +258,181 @@ int tx_isp_tuning_t41_ae_stats_pack(void *out, unsigned int out_bytes,
 			(mean + 128U) >> 8);
 	if (mean_q8)
 		*mean_q8 = mean;
+	return 0;
+}
+
+/* IMPISPAEExprInfo word offsets (MIPS o32, T41 1.2.0 header). */
+#define T41_EXPR_UNIT			0U
+#define T41_EXPR_MODE			4U	/* five manual-mode words */
+#define T41_EXPR_MIN_MODES		40U	/* four min-cap mode words */
+#define T41_EXPR_MAX_IT_MODE		56U
+#define T41_EXPR_MAX_AGAIN_MODE		60U
+#define T41_EXPR_MAX_DGAIN_MODE		64U
+#define T41_EXPR_MAX_ISPDGAIN_MODE	68U
+#define T41_EXPR_MAX_IT			88U
+#define T41_EXPR_MAX_AGAIN		92U
+#define T41_EXPR_MAX_ISPDGAIN		100U
+#define T41_OPS_AUTO			0U
+#define T41_OPS_MANUAL			1U
+
+int tx_isp_tuning_t41_ae_expr_parse(const void *in, unsigned int in_bytes,
+				    struct tx_isp_tuning_t41_ae_limits *out)
+{
+	const u8 *bytes = in;
+	unsigned int i;
+	u32 mode;
+
+	if (!in || !out || in_bytes < TX_ISP_TUNING_T41_AE_EXPR_BYTES)
+		return -EINVAL;
+	/* Every IMPISPTuningOpsType word up to the max caps must be valid. */
+	for (i = T41_EXPR_MODE; i <= T41_EXPR_MAX_ISPDGAIN_MODE; i += 4) {
+		if (i >= T41_EXPR_MODE + 20 && i < T41_EXPR_MIN_MODES)
+			continue;	/* manual exposure values, not modes */
+		if (tx_isp_tuning_load_u32(bytes, i) > T41_OPS_MANUAL)
+			return -EINVAL;
+	}
+	if (tx_isp_tuning_load_u32(bytes, T41_EXPR_UNIT) > 1)
+		return -EINVAL;
+	for (i = 0; i < 5; i++)
+		if (tx_isp_tuning_load_u32(bytes, T41_EXPR_MODE + i * 4))
+			return -EOPNOTSUPP;	/* manual exposure */
+	for (i = 0; i < 4; i++)
+		if (tx_isp_tuning_load_u32(bytes, T41_EXPR_MIN_MODES + i * 4))
+			return -EOPNOTSUPP;	/* minimum caps */
+	if (tx_isp_tuning_load_u32(bytes, T41_EXPR_MAX_DGAIN_MODE))
+		return -EOPNOTSUPP;		/* no separate sensor dgain */
+	if (tx_isp_tuning_load_u32(bytes, T41_EXPR_MAX_ISPDGAIN_MODE) &&
+	    tx_isp_tuning_load_u32(bytes, T41_EXPR_MAX_ISPDGAIN) < 1024)
+		return -EOPNOTSUPP;		/* ISP dgain stays unity */
+
+	out->max_integration = 0;
+	out->max_again_x1024 = 0;
+	mode = tx_isp_tuning_load_u32(bytes, T41_EXPR_MAX_IT_MODE);
+	if (mode == T41_OPS_MANUAL) {
+		if (tx_isp_tuning_load_u32(bytes, T41_EXPR_UNIT))
+			return -EOPNOTSUPP;	/* microsecond caps */
+		out->max_integration =
+			tx_isp_tuning_load_u32(bytes, T41_EXPR_MAX_IT);
+		if (!out->max_integration)
+			return -EINVAL;
+	}
+	mode = tx_isp_tuning_load_u32(bytes, T41_EXPR_MAX_AGAIN_MODE);
+	if (mode == T41_OPS_MANUAL) {
+		out->max_again_x1024 =
+			tx_isp_tuning_load_u32(bytes, T41_EXPR_MAX_AGAIN);
+		if (out->max_again_x1024 < 1024)
+			return -EINVAL;
+	}
+	return 0;
+}
+
+static int t41_scence_mode_check(u32 mode, int must_be_off)
+{
+	if (mode > TX_ISP_TUNING_T41_AE_SCENCE_GLOBAL)
+		return -EINVAL;
+	if (must_be_off && mode > TX_ISP_TUNING_T41_AE_SCENCE_DISABLE)
+		return -EOPNOTSUPP;
+	return 0;
+}
+
+int tx_isp_tuning_t41_ae_scence_parse(const void *in, unsigned int in_bytes,
+				      u32 *comp_en, u32 *comp)
+{
+	const u8 *bytes = in;
+	u32 en;
+	int ret;
+
+	if (!in || !comp_en || !comp ||
+	    in_bytes < TX_ISP_TUNING_T41_AE_SCENCE_BYTES)
+		return -EINVAL;
+	/* HLC, BLC and the AE start point have no open implementation. */
+	ret = t41_scence_mode_check(tx_isp_tuning_load_u32(bytes, 0), 1);
+	if (!ret)
+		ret = t41_scence_mode_check(tx_isp_tuning_load_u32(bytes, 8), 1);
+	if (!ret)
+		ret = t41_scence_mode_check(tx_isp_tuning_load_u32(bytes, 24), 1);
+	if (ret)
+		return ret;
+	en = tx_isp_tuning_load_u32(bytes, 16);
+	ret = t41_scence_mode_check(en, 0);
+	if (ret)
+		return ret;
+	*comp_en = en;
+	*comp = TX_ISP_TUNING_T41_AE_COMP_NEUTRAL;
+	/* Stock stores AeTargetComp for ROI and GLOBAL enable alike. */
+	if (en >= TX_ISP_TUNING_T41_AE_SCENCE_ROI) {
+		*comp = tx_isp_tuning_load_u32(bytes, 20);
+		if (*comp > 255)
+			return -EINVAL;
+	}
+	return 0;
+}
+
+int tx_isp_tuning_t41_ae_scence_pack(void *out, unsigned int out_bytes,
+	const struct tx_isp_tuning_t41_ae_scence *values)
+{
+	u8 *bytes = out;
+
+	if (!out || !values || out_bytes < TX_ISP_TUNING_T41_AE_SCENCE_BYTES)
+		return -EINVAL;
+	memset(bytes, 0, TX_ISP_TUNING_T41_AE_SCENCE_BYTES);
+	tx_isp_tuning_store_u32(bytes, 16, values->comp_en);
+	tx_isp_tuning_store_u32(bytes, 20, values->comp);
+	tx_isp_tuning_store_u32(bytes, 32, values->luma);
+	tx_isp_tuning_store_u32(bytes, 36, values->luma);
+	bytes[40] = values->stable ? 1 : 0;
+	tx_isp_tuning_store_u32(bytes, 44, values->target);
+	tx_isp_tuning_store_u32(bytes, 48, values->ae_mean);
+	return 0;
+}
+
+/* AeTargetComp scales the AE target linearly, 128 = calibrated target,
+ * clamped to the 8-bit luma range. */
+u32 tx_isp_tuning_t41_ae_comp_target(u32 target_q8, u32 comp)
+{
+	u64 scaled;
+
+	if (comp == TX_ISP_TUNING_T41_AE_COMP_NEUTRAL)
+		return target_q8;
+	scaled = ((u64)target_q8 * comp) >> 7;	/* / 128 */
+	if (scaled < (1U << 8))
+		scaled = 1U << 8;
+	if (scaled > (255U << 8))
+		scaled = 255U << 8;
+	return (u32)scaled;
+}
+
+int tx_isp_tuning_t41_module_ratio_parse(const void *in, unsigned int in_bytes,
+	struct tx_isp_tuning_t41_ratio_unit *units, unsigned int count)
+{
+	const u8 *bytes = in;
+	unsigned int i;
+
+	if (!in || !units || in_bytes < TX_ISP_TUNING_T41_MODULE_RATIO_BYTES ||
+	    count > TX_ISP_TUNING_T41_MODULE_RATIO_UNITS)
+		return -EINVAL;
+	for (i = 0; i < count; i++) {
+		units[i].en = tx_isp_tuning_load_u32(bytes, i * 8);
+		if (units[i].en > 1)
+			return -EINVAL;
+		units[i].ratio = bytes[i * 8 + 4];
+	}
+	return 0;
+}
+
+int tx_isp_tuning_t41_module_ratio_pack(void *out, unsigned int out_bytes,
+	const struct tx_isp_tuning_t41_ratio_unit *units, unsigned int count)
+{
+	u8 *bytes = out;
+	unsigned int i;
+
+	if (!out || !units || out_bytes < TX_ISP_TUNING_T41_MODULE_RATIO_BYTES ||
+	    count > TX_ISP_TUNING_T41_MODULE_RATIO_UNITS)
+		return -EINVAL;
+	memset(bytes, 0, TX_ISP_TUNING_T41_MODULE_RATIO_BYTES);
+	for (i = 0; i < count; i++) {
+		tx_isp_tuning_store_u32(bytes, i * 8, units[i].en);
+		bytes[i * 8 + 4] = (u8)units[i].ratio;
+	}
 	return 0;
 }

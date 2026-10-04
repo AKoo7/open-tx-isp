@@ -224,10 +224,108 @@ static void test_response_packers(void)
 	       -EINVAL);
 }
 
+static void test_t41_controls(void)
+{
+	uint8_t expr[TX_ISP_TUNING_T41_AE_EXPR_BYTES];
+	uint8_t scence[TX_ISP_TUNING_T41_AE_SCENCE_BYTES];
+	uint8_t ratio[TX_ISP_TUNING_T41_MODULE_RATIO_BYTES];
+	struct tx_isp_tuning_t41_ae_expr_values values = {
+		.integration_time = 100, .analog_gain_x1024 = 2048,
+		.min_integration_time = 1, .max_integration_time = 2092,
+		.max_analog_gain_x1024 = 63443,
+	};
+	struct tx_isp_tuning_t41_ae_limits limits;
+	struct tx_isp_tuning_t41_ae_scence sc = {
+		.comp_en = 3, .comp = 200, .luma = 60, .stable = 1,
+		.target = 90, .ae_mean = 61,
+	};
+	struct tx_isp_tuning_t41_ratio_unit units[5], back[5];
+	uint32_t en, comp, value;
+	unsigned int i;
+
+	/* GET -> unchanged SET round trip: no caps, accepted. */
+	assert(tx_isp_tuning_t41_ae_expr_pack(expr, sizeof(expr), &values) == 0);
+	assert(tx_isp_tuning_t41_ae_expr_parse(expr, sizeof(expr), &limits) == 0);
+	assert(limits.max_integration == 0 && limits.max_again_x1024 == 0);
+	/* Max analog gain 4x and max integration 1000 lines. */
+	store_u32(expr, 60, 1);
+	store_u32(expr, 92, 4096);
+	store_u32(expr, 56, 1);
+	store_u32(expr, 88, 1000);
+	assert(tx_isp_tuning_t41_ae_expr_parse(expr, sizeof(expr), &limits) == 0);
+	assert(limits.max_again_x1024 == 4096 && limits.max_integration == 1000);
+	/* Caps reported back as MANUAL. */
+	values.max_integration_manual = 1;
+	values.max_analog_gain_manual = 1;
+	values.max_integration_time = 1000;
+	values.max_analog_gain_x1024 = 4096;
+	assert(tx_isp_tuning_t41_ae_expr_pack(expr, sizeof(expr), &values) == 0);
+	memcpy(&value, expr + 60, 4); assert(value == 1);
+	memcpy(&value, expr + 92, 4); assert(value == 4096);
+	assert(tx_isp_tuning_t41_ae_expr_parse(expr, sizeof(expr), &limits) == 0);
+	assert(limits.max_again_x1024 == 4096 && limits.max_integration == 1000);
+	store_u32(expr, 92, 1000);
+	assert(tx_isp_tuning_t41_ae_expr_parse(expr, sizeof(expr), &limits) == -EINVAL);
+	store_u32(expr, 92, 4096);
+	store_u32(expr, 0, 1);	/* microseconds */
+	assert(tx_isp_tuning_t41_ae_expr_parse(expr, sizeof(expr), &limits) == -EOPNOTSUPP);
+	store_u32(expr, 0, 0);
+	store_u32(expr, 4, 1);	/* manual AE */
+	assert(tx_isp_tuning_t41_ae_expr_parse(expr, sizeof(expr), &limits) == -EOPNOTSUPP);
+	store_u32(expr, 4, 2);
+	assert(tx_isp_tuning_t41_ae_expr_parse(expr, sizeof(expr), &limits) == -EINVAL);
+	store_u32(expr, 4, 0);
+	store_u32(expr, 64, 1);	/* sensor dgain cap */
+	assert(tx_isp_tuning_t41_ae_expr_parse(expr, sizeof(expr), &limits) == -EOPNOTSUPP);
+	store_u32(expr, 64, 0);
+	store_u32(expr, 100, 512);	/* ISP dgain below unity */
+	assert(tx_isp_tuning_t41_ae_expr_parse(expr, sizeof(expr), &limits) == -EOPNOTSUPP);
+	assert(tx_isp_tuning_t41_ae_expr_parse(expr, 100, &limits) == -EINVAL);
+
+	/* AE scene: comp honoured for ROI/GLOBAL, neutral for AUTO/DISABLE. */
+	assert(tx_isp_tuning_t41_ae_scence_pack(scence, sizeof(scence), &sc) == 0);
+	assert(scence[40] == 1);
+	memcpy(&value, scence + 44, 4); assert(value == 90);
+	assert(tx_isp_tuning_t41_ae_scence_parse(scence, sizeof(scence), &en, &comp) == 0);
+	assert(en == 3 && comp == 200);
+	store_u32(scence, 16, 1);
+	assert(tx_isp_tuning_t41_ae_scence_parse(scence, sizeof(scence), &en, &comp) == 0);
+	assert(en == 1 && comp == 128);
+	store_u32(scence, 16, 2);
+	store_u32(scence, 20, 256);
+	assert(tx_isp_tuning_t41_ae_scence_parse(scence, sizeof(scence), &en, &comp) == -EINVAL);
+	store_u32(scence, 20, 0);
+	assert(tx_isp_tuning_t41_ae_scence_parse(scence, sizeof(scence), &en, &comp) == 0);
+	assert(comp == 0);
+	store_u32(scence, 0, 3);	/* HLC */
+	assert(tx_isp_tuning_t41_ae_scence_parse(scence, sizeof(scence), &en, &comp) == -EOPNOTSUPP);
+	store_u32(scence, 0, 0);
+	store_u32(scence, 8, 4);	/* BLC out of range */
+	assert(tx_isp_tuning_t41_ae_scence_parse(scence, sizeof(scence), &en, &comp) == -EINVAL);
+	assert(tx_isp_tuning_t41_ae_comp_target(128U << 8, 128) == 128U << 8);
+	assert(tx_isp_tuning_t41_ae_comp_target(100U << 8, 64) == 50U << 8);
+	assert(tx_isp_tuning_t41_ae_comp_target(200U << 8, 255) == 255U << 8);
+	assert(tx_isp_tuning_t41_ae_comp_target(100U << 8, 0) == 1U << 8);
+
+	/* Module ratio round trip and enum validation. */
+	for (i = 0; i < 5; i++) {
+		units[i].en = i & 1;
+		units[i].ratio = 100 + i;
+	}
+	assert(tx_isp_tuning_t41_module_ratio_pack(ratio, sizeof(ratio), units, 5) == 0);
+	assert(ratio[4] == 100 && ratio[12] == 101);
+	assert(tx_isp_tuning_t41_module_ratio_parse(ratio, sizeof(ratio), back, 5) == 0);
+	assert(memcmp(units, back, sizeof(units)) == 0);
+	store_u32(ratio, 8, 2);
+	assert(tx_isp_tuning_t41_module_ratio_parse(ratio, sizeof(ratio), back, 5) == -EINVAL);
+	assert(tx_isp_tuning_t41_module_ratio_parse(ratio, 64, back, 5) == -EINVAL);
+}
+
 int main(void)
 {
 	test_descriptors();
 	test_response_packers();
+	test_t41_controls();
 	puts("tx_isp_tuning_abi tests passed");
 	return 0;
 }

@@ -816,6 +816,29 @@ static unsigned int t41_ae_target_q8 = 128U << 8;
 module_param(t41_ae_target_q8, uint, 0644);
 MODULE_PARM_DESC(t41_ae_target_q8,
 		 "safe AE target histogram mean in Q8 units");
+/* Public IMPISPAEScenceAttr.AeTargetComp (128 neutral) and the
+ * IMPISPAEExprInfo maximum caps (0 = sensor limit).  Owned data, outside
+ * the recovered BSS; read once per AE update. */
+static unsigned int t41_ae_comp __attribute__((section(".data"))) =
+	TX_ISP_TUNING_T41_AE_COMP_NEUTRAL;
+module_param(t41_ae_comp, uint, 0444);
+MODULE_PARM_DESC(t41_ae_comp, "AE target compensation, 128 neutral (read-only)");
+static unsigned int t41_ae_comp_en __attribute__((section(".data")));
+static unsigned int t41_ae_cap_integration __attribute__((section(".data")));
+module_param(t41_ae_cap_integration, uint, 0444);
+MODULE_PARM_DESC(t41_ae_cap_integration,
+		 "caller max integration lines, 0 = sensor limit (read-only)");
+static unsigned int t41_ae_cap_again __attribute__((section(".data")));
+module_param(t41_ae_cap_again, uint, 0444);
+MODULE_PARM_DESC(t41_ae_cap_again,
+		 "caller max sensor gain x1024, 0 = sensor limit (read-only)");
+/* Staged IMPISPModuleRatioAttr units (bit = unit), see t41_module_ratio_apply. */
+static unsigned int t41_ratio_pending __attribute__((section(".data")));
+static unsigned int t41_ratio_sinter __attribute__((section(".data"))) = 128;
+static int t41_module_ratio_apply(uint32_t channel, unsigned int pending);
+static uint32_t *t41_sdns_info_checked(uint32_t channel);
+static uint32_t *t41_mdns_info_checked(uint32_t channel);
+static int t41_sdns_refresh_checked(uint32_t channel, uint32_t gain, unsigned int all);
 static unsigned int t41_ae_update_frames = 3;
 module_param(t41_ae_update_frames, uint, 0644);
 MODULE_PARM_DESC(t41_ae_update_frames,
@@ -20648,6 +20671,16 @@ static int t41_tuning_copy_ae_expr(unsigned int channel, uintptr_t user_ptr)
     values.max_integration_time = control->max_integration;
     values.max_analog_gain_x1024 = tx_isp_exp2_u32(
         t41_safe_ae_sensor[channel].max_log2_q16, 16, 10);
+    if (channel == 0 && READ_ONCE(t41_ae_cap_integration)) {
+        values.max_integration_time = min(values.max_integration_time,
+            READ_ONCE(t41_ae_cap_integration));
+        values.max_integration_manual = 1;
+    }
+    if (channel == 0 && READ_ONCE(t41_ae_cap_again)) {
+        values.max_analog_gain_x1024 = min(values.max_analog_gain_x1024,
+            READ_ONCE(t41_ae_cap_again));
+        values.max_analog_gain_manual = 1;
+    }
     values.total_gain_db = t41_safe_ae_sensor[channel].log2_q16;
     values.exposure_value = exposure;
     values.ev_log2 = exposure ?
@@ -20659,6 +20692,163 @@ static int t41_tuning_copy_ae_expr(unsigned int channel, uintptr_t user_ptr)
         return ret;
     return private_copy_to_user((void __user *)user_ptr, response,
                                 sizeof(response)) ? -EFAULT : 0;
+}
+
+static int t41_tuning_ae_expr_set(unsigned int channel, uintptr_t user_ptr)
+{
+    struct tx_isp_tuning_t41_ae_limits limits;
+    u8 request[TX_ISP_TUNING_T41_AE_EXPR_BYTES];
+    int ret;
+
+    if (channel != 0 || !user_ptr)
+        return -EINVAL;
+    if (private_copy_from_user(request, (void __user *)user_ptr,
+                               sizeof(request)))
+        return -EFAULT;
+    ret = tx_isp_tuning_t41_ae_expr_parse(request, sizeof(request), &limits);
+    if (ret)
+        return ret;
+    WRITE_ONCE(t41_ae_cap_integration, limits.max_integration);
+    WRITE_ONCE(t41_ae_cap_again, limits.max_again_x1024);
+    printk(KERN_WARNING
+           "tx_isp_t41_recovered: AE caps integration=%u again=%u (0=sensor)\n",
+           limits.max_integration, limits.max_again_x1024);
+    return 0;
+}
+
+static int t41_tuning_ae_scence(unsigned int channel, unsigned int is_get,
+                                uintptr_t user_ptr)
+{
+    struct tx_isp_tuning_t41_ae_scence values;
+    u8 buffer[TX_ISP_TUNING_T41_AE_SCENCE_BYTES];
+    u32 comp_en, comp, mean, target;
+    int ret;
+
+    if (channel != 0 || !user_ptr)
+        return -EINVAL;
+    if (!is_get) {
+        if (private_copy_from_user(buffer, (void __user *)user_ptr,
+                                   sizeof(buffer)))
+            return -EFAULT;
+        ret = tx_isp_tuning_t41_ae_scence_parse(buffer, sizeof(buffer),
+                                                &comp_en, &comp);
+        if (ret)
+            return ret;
+        WRITE_ONCE(t41_ae_comp_en, comp_en);
+        WRITE_ONCE(t41_ae_comp, comp);
+        printk(KERN_WARNING
+               "tx_isp_t41_recovered: AE target comp=%u en=%u\n",
+               comp, comp_en);
+        return 0;
+    }
+    mean = READ_ONCE(t41_safe_ae_last_mean_q8);
+    target = READ_ONCE(t41_safe_ae_effective_target_q8);
+    memset(&values, 0, sizeof(values));
+    values.comp_en = READ_ONCE(t41_ae_comp_en);
+    values.comp = READ_ONCE(t41_ae_comp);
+    if (mean != ~0U)
+        values.luma = values.ae_mean = mean >> 8;
+    if (target != ~0U) {
+        values.target = target >> 8;
+        values.stable = mean != ~0U &&
+            mean >= target - target / 24 && mean <= target + target / 24;
+    }
+    ret = tx_isp_tuning_t41_ae_scence_pack(buffer, sizeof(buffer), &values);
+    if (ret)
+        return ret;
+    return private_copy_to_user((void __user *)user_ptr, buffer,
+                                sizeof(buffer)) ? -EFAULT : 0;
+}
+
+static int t41_tuning_module_ratio(unsigned int channel, unsigned int is_get,
+                                   uintptr_t user_ptr)
+{
+    struct tx_isp_tuning_t41_ratio_unit units[TX_ISP_TUNING_T41_RATIO_MODULES];
+    u8 buffer[TX_ISP_TUNING_T41_MODULE_RATIO_BYTES];
+    u8 *tuning = (u8 *)(uintptr_t)tisp_tattr;
+    unsigned int i, pending = 0;
+    int ret;
+
+    if (channel != 0 || !user_ptr)
+        return -EINVAL;
+    if (!t41_kernel_data_ptr(tuning))
+        return -ENODEV;
+    if (is_get) {
+        for (i = 0; i < ARRAY_SIZE(units); i++) {
+            units[i].en = *(u32 *)(void *)(tuning + 184 + i * 8);
+            units[i].ratio = tuning[188 + i * 8];
+        }
+        ret = tx_isp_tuning_t41_module_ratio_pack(buffer, sizeof(buffer),
+                                                  units, ARRAY_SIZE(units));
+        if (ret)
+            return ret;
+        return private_copy_to_user((void __user *)user_ptr, buffer,
+                                    sizeof(buffer)) ? -EFAULT : 0;
+    }
+    if (private_copy_from_user(buffer, (void __user *)user_ptr,
+                               sizeof(buffer)))
+        return -EFAULT;
+    ret = tx_isp_tuning_t41_module_ratio_parse(buffer, sizeof(buffer),
+                                               units, ARRAY_SIZE(units));
+    if (ret)
+        return ret;
+    /* DRC, DPC and defog have no checked strength path yet: refuse a
+     * non-neutral request instead of acknowledging it unchanged. */
+    for (i = TX_ISP_TUNING_T41_RATIO_DRC; i < ARRAY_SIZE(units); i++)
+        if (units[i].en && units[i].ratio != 128)
+            return -EOPNOTSUPP;
+    for (i = 0; i <= TX_ISP_TUNING_T41_RATIO_TEMPER; i++) {
+        u32 *en = (u32 *)(void *)(tuning + 184 + i * 8);
+        u8 ratio = units[i].en ? (u8)units[i].ratio : 128;
+
+        if (*en == units[i].en && tuning[188 + i * 8] == ratio)
+            continue;
+        /* A block that is not running cannot take a strength. */
+        if (i == TX_ISP_TUNING_T41_RATIO_SINTER ?
+            !t41_sdns_info_checked(0) :
+            !t41_mdns_info_checked(0) || !t41_mdns_buf_info[0].paddr)
+            return -EOPNOTSUPP;
+    }
+    for (i = 0; i <= TX_ISP_TUNING_T41_RATIO_TEMPER; i++) {
+        u32 *en = (u32 *)(void *)(tuning + 184 + i * 8);
+        u8 ratio = units[i].en ? (u8)units[i].ratio : 128;
+
+        if (*en == units[i].en && tuning[188 + i * 8] == ratio)
+            continue;
+        *en = units[i].en;
+        tuning[188 + i * 8] = ratio;
+        pending |= BIT(i);
+    }
+    if (!pending)
+        return 0;
+    printk(KERN_WARNING
+           "tx_isp_t41_recovered: module ratio sinter=%u/%u temper=%u/%u\n",
+           units[0].en, units[0].ratio, units[1].en, units[1].ratio);
+    /* MDNS is outside the gain fanout: apply TEMPER here (stock
+     * tisp_s_mdns_ratio reads the strength from tuning+192/196). */
+    if (pending & BIT(TX_ISP_TUNING_T41_RATIO_TEMPER)) {
+        ret = tisp_s_mdns_ratio(0);
+        if (ret < 0)
+            return ret;
+    }
+    WRITE_ONCE(t41_ratio_sinter,
+               *(u32 *)(void *)(tuning + 184) ? tuning[188] : 128);
+    pending &= BIT(TX_ISP_TUNING_T41_RATIO_SINTER);
+    if (!pending)
+        return 0;
+    if (t41_safe_ae_controller <= 0)
+        return t41_module_ratio_apply(0, pending);
+    /* Applied by the AE event thread, serialised with the gain fanout. */
+    smp_wmb();
+    {
+        unsigned int old, cur = READ_ONCE(t41_ratio_pending);
+
+        do {
+            old = cur;
+            cur = cmpxchg(&t41_ratio_pending, old, old | pending);
+        } while (cur != old);
+    }
+    return 0;
 }
 
 static int t41_tuning_copy_ae_stats(unsigned int channel, uintptr_t user_ptr)
@@ -20873,7 +21063,16 @@ static int64_t isp_core_tunning_unlocked_ioctl_body(uintptr_t a0, uint32_t a1, u
               TX_ISP_TUNING_PAYLOAD_USER_PTR },
             { TX_ISP_TUNING_CMD_T41_AE_EXPR_INFO,
               TX_ISP_TUNING_T41_AE_EXPR_BYTES,
-              TX_ISP_TUNING_DIR_GET, TX_ISP_TUNING_PAYLOAD_USER_PTR },
+              TX_ISP_TUNING_DIR_GET | TX_ISP_TUNING_DIR_SET,
+              TX_ISP_TUNING_PAYLOAD_USER_PTR },
+            { TX_ISP_TUNING_CMD_T41_AE_SCENCE,
+              TX_ISP_TUNING_T41_AE_SCENCE_BYTES,
+              TX_ISP_TUNING_DIR_GET | TX_ISP_TUNING_DIR_SET,
+              TX_ISP_TUNING_PAYLOAD_USER_PTR },
+            { TX_ISP_TUNING_CMD_T41_MODULE_RATIO,
+              TX_ISP_TUNING_T41_MODULE_RATIO_BYTES,
+              TX_ISP_TUNING_DIR_GET | TX_ISP_TUNING_DIR_SET,
+              TX_ISP_TUNING_PAYLOAD_USER_PTR },
             { TX_ISP_TUNING_CMD_T41_AE_STATS,
               TX_ISP_TUNING_T41_AE_STATS_BYTES,
               TX_ISP_TUNING_DIR_GET, TX_ISP_TUNING_PAYLOAD_USER_PTR },
@@ -21064,8 +21263,32 @@ static int64_t isp_core_tunning_unlocked_ioctl_body(uintptr_t a0, uint32_t a1, u
         if (route && route->id == TX_ISP_TUNING_CMD_T41_HVFLIP)
             return t41_tuning_hvflip(&request);
         if (route && route->id == TX_ISP_TUNING_CMD_T41_AE_EXPR_INFO)
-            return t41_tuning_copy_ae_expr(request.channel,
+            return request.is_get ?
+                t41_tuning_copy_ae_expr(request.channel,
+                                        request.value_or_ptr) :
+                t41_tuning_ae_expr_set(request.channel,
+                                       request.value_or_ptr);
+        if (route && route->id == TX_ISP_TUNING_CMD_T41_AE_SCENCE)
+            return t41_tuning_ae_scence(request.channel, request.is_get,
+                                        request.value_or_ptr);
+        if (route && route->id == TX_ISP_TUNING_CMD_T41_MODULE_RATIO)
+            return t41_tuning_module_ratio(request.channel, request.is_get,
                                            request.value_or_ptr);
+        /*
+         * Public tuning IDs with no open implementation yet: report it
+         * instead of acknowledging the request unchanged.
+         */
+        switch (request.id) {
+        case TX_ISP_TUNING_CMD_T41_GAMMA:
+        case TX_ISP_TUNING_CMD_T41_WDR_OUTPUT:
+        case TX_ISP_TUNING_CMD_T41_MODULE_CONTROL:
+        case TX_ISP_TUNING_CMD_T41_AUTOZOOM:
+        case TX_ISP_TUNING_CMD_T41_CCM:
+        case TX_ISP_TUNING_CMD_T41_CSC:
+            return -EOPNOTSUPP;
+        default:
+            break;
+        }
         if (route && route->id == TX_ISP_TUNING_CMD_T41_AE_STATS)
             return t41_tuning_copy_ae_stats(request.channel,
                                             request.value_or_ptr);
@@ -56689,6 +56912,36 @@ static int t41_apply_safe_ev_fanout(uint32_t channel, uint32_t ev,
 }
 
 
+/* IMPISPModuleRatioAttr: stock keeps the five units at tuning+184 + 8*i
+ * (en, ratio).  Only SINTER (SDNS) and TEMPER (MDNS) have checked
+ * strength paths; their refresh shares registers with the AE gain fanout,
+ * so a SET is staged here and applied by the AE event thread. */
+static int t41_module_ratio_apply(uint32_t channel, unsigned int pending)
+{
+	uint32_t *info;
+	int ret = 0;
+
+	if (!(pending & BIT(TX_ISP_TUNING_T41_RATIO_SINTER)))
+		return 0;
+	/* Stock tisp_s_sdns_ratio: strength into sdns_info[4], then a full
+	 * refresh at the current gain.  The open gain-gated refresh would
+	 * skip an unchanged gain, so refresh directly.  The strength is the
+	 * staged value: the tuning attributes may already be gone again
+	 * (tuning-node release frees them). */
+	info = t41_sdns_info_checked(channel);
+	if (!info) {
+		ret = -ENODEV;
+	} else {
+		info[4] = READ_ONCE(t41_ratio_sinter);
+		if (info[2] <= (16U << 16))
+			ret = t41_sdns_refresh_checked(channel, info[2], 1);
+	}
+	if (ret && printk_ratelimit())
+		printk(KERN_WARNING
+		       "tx_isp_t41_recovered: sinter strength apply ret=%d\n", ret);
+	return ret;
+}
+
 int32_t t41_safe_ae_calc_process(uint32_t channel)
 {
 	struct t41_safe_ae_state *control;
@@ -56713,6 +56966,8 @@ int32_t t41_safe_ae_calc_process(uint32_t channel)
 	uint32_t flicker_request;
 	uint32_t flicker_line_count;
 	uint32_t max_integration;
+	uint32_t max_gain_q10;
+	uint32_t cap;
 	uint32_t target_q8;
 	uint32_t gain_q16;
 	uint32_t sensor_value[2];
@@ -56731,6 +56986,8 @@ int32_t t41_safe_ae_calc_process(uint32_t channel)
 
 	if (channel >= ARRAY_SIZE(ae_info) || t41_safe_ae_controller <= 0)
 		return 0;
+	if (channel == 0 && READ_ONCE(t41_ratio_pending))
+		t41_module_ratio_apply(0, xchg(&t41_ratio_pending, 0));
 	info = (uint32_t *)(uintptr_t)ae_info[channel];
 	if (!t41_kernel_data_ptr(info))
 		return -ENODEV;
@@ -56840,6 +57097,13 @@ int32_t t41_safe_ae_calc_process(uint32_t channel)
 		WRITE_ONCE(t41_ae_flicker_floor_lines, flicker_floor);
 	}
 	max_integration = control->max_integration;
+	cap = READ_ONCE(t41_ae_cap_integration);
+	if (cap && cap < max_integration)
+		max_integration = max(cap, control->min_integration);
+	max_gain_q10 = tx_isp_exp2_u32(sensor.max_gain_q16, 16, 10);
+	cap = READ_ONCE(t41_ae_cap_again);
+	if (cap && cap < max_gain_q10)
+		max_gain_q10 = max(cap, 1024U);
 	if (flicker_frequency && t41_ae_flicker_profile < 0 &&
 	    flicker_ceiling)
 		max_integration = min(max_integration, flicker_ceiling);
@@ -56856,6 +57120,8 @@ int32_t t41_safe_ae_calc_process(uint32_t channel)
 		if (ret)
 			return ret;
 	}
+	target_q8 = tx_isp_tuning_t41_ae_comp_target(target_q8,
+						     READ_ONCE(t41_ae_comp));
 	t41_safe_ae_effective_target_q8 = target_q8;
 	flicker_line_count = 0;
 	if (flicker_frequency) {
@@ -56884,6 +57150,7 @@ int32_t t41_safe_ae_calc_process(uint32_t channel)
 	if ((!flicker_floor ||
 	     control->integration >= flicker_floor) &&
 	    control->integration <= max_integration &&
+	    control->again <= max_gain_q10 &&
 	    mean_q8 >= target_q8 - target_q8 / 24 &&
 	    mean_q8 <= target_q8 + target_q8 / 24)
 		return 0;
@@ -56904,7 +57171,7 @@ int32_t t41_safe_ae_calc_process(uint32_t channel)
 		desired_total = current_total - div64_u64(current_total, 5);
 	ret = tx_isp_exposure_plan_build(
 		desired_total, control->min_integration,
-		max_integration, 1024U, tx_isp_exp2_u32(sensor.max_gain_q16, 16, 10),
+		max_integration, 1024U, max_gain_q10,
 		flicker_lines, flicker_line_count,
 		flicker_floor, &exposure);
 	if (ret)

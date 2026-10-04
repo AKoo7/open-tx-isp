@@ -63,6 +63,15 @@ typedef uint64_t u64;
 #define TX_ISP_TUNING_CMD_T41_SATURATION	0x08000094U
 #define TX_ISP_TUNING_CMD_T41_CONTRAST		0x08000095U
 #define TX_ISP_TUNING_CMD_T41_AWB_RGB_COEFFT	0x08000098U
+/* T41 libimp 1.1.0/1.2.5 numbering (the one the 0x71/0x73 IDs above use). */
+#define TX_ISP_TUNING_CMD_T41_AE_SCENCE		0x08000024U
+#define TX_ISP_TUNING_CMD_T41_GAMMA		0x08000025U
+#define TX_ISP_TUNING_CMD_T41_WDR_OUTPUT	0x08000054U
+#define TX_ISP_TUNING_CMD_T41_MODULE_CONTROL	0x08000072U
+#define TX_ISP_TUNING_CMD_T41_AUTOZOOM		0x08000077U
+#define TX_ISP_TUNING_CMD_T41_CCM		0x08000080U
+#define TX_ISP_TUNING_CMD_T41_CSC		0x08000096U
+#define TX_ISP_TUNING_CMD_T41_MODULE_RATIO	0x080000a4U
 
 /* Open implementation extension.  Keep policy names in userspace: the
  * driver only owns the atomic auto/manual AWB transition and gain replay. */
@@ -207,6 +216,56 @@ struct tx_isp_tuning_t41_ae_expr_values {
 	u32 total_gain_db;
 	u64 exposure_value;
 	u32 ev_log2;
+	/* Nonzero: the max limit is a caller cap (reported as MANUAL). */
+	u32 max_integration_manual;
+	u32 max_analog_gain_manual;
+};
+
+/*
+ * IMPISPAEExprInfo SET, linear mode.  Only the AE maximum caps are
+ * honoured: max integration time (lines) and max sensor analog gain
+ * (x1024).  Zero means "no cap" (the sensor limit).  Manual exposure,
+ * minimum caps and sensor digital gain caps are rejected with
+ * -EOPNOTSUPP; an ISP digital gain cap >= unity is a no-op because the
+ * open AE never applies ISP digital gain.  Short-frame (WDR) fields are
+ * ignored in linear mode.
+ */
+struct tx_isp_tuning_t41_ae_limits {
+	u32 max_integration;
+	u32 max_again_x1024;
+};
+
+/* IMPISPAEScenceAttr: enum, u8, enum, u8, enum, u32, enum, u32, then the
+ * read-only luma, luma_scence, bool stable, target and ae_mean. */
+#define TX_ISP_TUNING_T41_AE_SCENCE_BYTES	52U
+#define TX_ISP_TUNING_T41_AE_SCENCE_AUTO	0U
+#define TX_ISP_TUNING_T41_AE_SCENCE_DISABLE	1U
+#define TX_ISP_TUNING_T41_AE_SCENCE_ROI		2U
+#define TX_ISP_TUNING_T41_AE_SCENCE_GLOBAL	3U
+#define TX_ISP_TUNING_T41_AE_COMP_NEUTRAL	128U
+
+struct tx_isp_tuning_t41_ae_scence {
+	u32 comp_en;	/* IMPISPAEScenceMode of AeTargetCompEn */
+	u32 comp;	/* 0..255, 128 neutral */
+	u32 luma;
+	u32 stable;
+	u32 target;
+	u32 ae_mean;
+};
+
+/* IMPISPModuleRatioAttr: 16 x { IMPISPTuningOpsMode en; u8 ratio; }. */
+#define TX_ISP_TUNING_T41_MODULE_RATIO_BYTES	128U
+#define TX_ISP_TUNING_T41_MODULE_RATIO_UNITS	16U
+#define TX_ISP_TUNING_T41_RATIO_SINTER		0U
+#define TX_ISP_TUNING_T41_RATIO_TEMPER		1U
+#define TX_ISP_TUNING_T41_RATIO_DRC		2U
+#define TX_ISP_TUNING_T41_RATIO_DPC		3U
+#define TX_ISP_TUNING_T41_RATIO_DEFOG		4U
+#define TX_ISP_TUNING_T41_RATIO_MODULES		5U
+
+struct tx_isp_tuning_t41_ratio_unit {
+	u32 en;
+	u32 ratio;
 };
 
 #define TX_ISP_TUNING_EV_SPARSE_BYTES		0x80U
@@ -247,5 +306,22 @@ int tx_isp_tuning_t41_ae_stats_pack(void *out, unsigned int out_bytes,
 				    const u32 *histogram,
 				    unsigned int histogram_bins,
 				    u32 *mean_q8);
+
+int tx_isp_tuning_t41_ae_expr_parse(const void *in, unsigned int in_bytes,
+				    struct tx_isp_tuning_t41_ae_limits *out);
+
+int tx_isp_tuning_t41_ae_scence_parse(const void *in, unsigned int in_bytes,
+				      u32 *comp_en, u32 *comp);
+
+int tx_isp_tuning_t41_ae_scence_pack(void *out, unsigned int out_bytes,
+	const struct tx_isp_tuning_t41_ae_scence *values);
+
+u32 tx_isp_tuning_t41_ae_comp_target(u32 target_q8, u32 comp);
+
+int tx_isp_tuning_t41_module_ratio_parse(const void *in, unsigned int in_bytes,
+	struct tx_isp_tuning_t41_ratio_unit *units, unsigned int count);
+
+int tx_isp_tuning_t41_module_ratio_pack(void *out, unsigned int out_bytes,
+	const struct tx_isp_tuning_t41_ratio_unit *units, unsigned int count);
 
 #endif /* TX_ISP_TUNING_ABI_H */
