@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
-    <img src="docs/assets/logo.svg" alt="open-tx-isp logo" width="160" height="160">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.svg">
+    <img src="docs/assets/banner.svg" alt="Open Ingenic - open source ISP driver &amp; libimp for Ingenic SoCs" width="560">
   </picture>
 </p>
 
@@ -130,3 +130,7 @@ Prior art from the Ingenic / Thingino reverse-engineering community, especially
 ## License
 
 This project is licensed under the GNU General Public License (GPLv3).
+
+---
+
+<sub>Not affiliated with or endorsed by Ingenic Semiconductor. "Ingenic" is used only to name the SoCs this project supports.</sub>
