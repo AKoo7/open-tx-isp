@@ -117,7 +117,7 @@
     ]
   },
   "oem": {
-    "path": "/home/matteius/re-framework/tx-isp-t23.ko",
+    "path": "/home/user/re-framework/tx-isp-t23.ko",
     "file_bytes": 1163028,
     "elf_class": "elf32",
     "endianness": "little",
@@ -428,7 +428,7 @@
     ]
   },
   "recovered": {
-    "path": "/home/matteius/re-framework/open-tx-isp/driver/t23/tx_isp_t23_recovered.ko",
+    "path": "/home/user/re-framework/open-tx-isp/driver/t23/tx_isp_t23_recovered.ko",
     "file_bytes": 1179164,
     "elf_class": "elf32",
     "endianness": "little",

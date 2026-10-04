@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-IP="${THINGINO_IP:-192.168.50.242}"
+IP="${THINGINO_IP:-192.0.2.242}"
 USER="${THINGINO_USER:-root}"
 PASS="${THINGINO_PASS:-}"
-ROOT="${ROOT:-/home/matteius/output/wyze_cam3pro_nor_t40xp_gc4653_rtl8192fs}"
+ROOT="${ROOT:-/home/user/output/wyze_cam3pro_nor_t40xp_gc4653_rtl8192fs}"
 SOC="${SOC:-t40}"
 QBUF_PHYS_FALLBACK="${QBUF_PHYS_FALLBACK:-0x6ea8300}"
 QBUF_EXTRA_PHYS="${QBUF_EXTRA_PHYS:-0x6bab300 0x6ea8300}"
@@ -183,7 +183,7 @@ ENABLE_OEM_ISR_LIT="${ENABLE_OEM_ISR_LIT:-0}"
 OEM_ISR_LIT_CUT="${OEM_ISR_LIT_CUT:-0}"
 LOG="${1:-logs/$(date +%Y%m%d-%H%M%S)-t40-safe-qbuf-dump-242}"
 
-if [[ "$IP" != "192.168.50.242" ]]; then
+if [[ "$IP" != "192.0.2.242" ]]; then
 	echo "refusing non-target IP: $IP" >&2
 	exit 2
 fi

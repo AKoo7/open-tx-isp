@@ -18,10 +18,10 @@ root@ing-wyze-cam3-a000 opt# [INFO:Config.cpp]: Loaded configuration from /etc/p
 set jpeg streamMngCtx suceess
 [INFO:RTSPStatus.cpp]: RTSPStatus: RTSP status interface initialized successfully
 [INFO:RTSP.cpp]: Set shared RTP timestamp base: 3921775265 (0xe9c18aa1)
-[INFO:RTSP.cpp]: stream 0 available at: rtsp://192.168.50.211/ch0
+[INFO:RTSP.cpp]: stream 0 available at: rtsp://192.0.2.211/ch0
 [INFO:RTSPStatus.cpp]: RTSPStatus: Updated status for stream stream0 (H264 1920x1080@25fps)
 
-root@ing-wyze-cam3-a000 opt# [INFO:RTSP.cpp]: stream 1 available at: rtsp://192.168.50.211/ch1
+root@ing-wyze-cam3-a000 opt# [INFO:RTSP.cpp]: stream 1 available at: rtsp://192.0.2.211/ch1
 [INFO:RTSPStatus.cpp]: RTSPStatus: Updated status for stream stream1 (H264 640x360@25fps)
 ^C
 

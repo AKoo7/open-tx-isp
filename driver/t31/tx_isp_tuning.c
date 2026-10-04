@@ -2708,7 +2708,7 @@ static void tisp_refresh_daynight_pipeline(void)
 
 /* Module exit: the parameter blocks are allocated once and reused across
  * stream starts; free them so an rmmod/insmod cycle does not leave
- * 3-4 x TISP_PARAM_BLOCK_SIZE of vmalloc behind (seen on garage). */
+ * 3-4 x TISP_PARAM_BLOCK_SIZE of vmalloc behind (seen on cam-A). */
 void tisp_free_param_blocks(void)
 {
 	vfree(tparams_day);

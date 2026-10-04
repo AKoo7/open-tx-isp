@@ -16480,7 +16480,7 @@ out_close:
  * buffers.  With per-session buffers that wrote into freed kmalloc-8192
  * (and page-backed) objects for about half a second on every timps
  * restart, corrupting the slab freelist (__kmalloc oops in the next
- * single_open_size) -- caught by free_watch=1 on the PC420.
+ * single_open_size) -- caught by free_watch=1 on cam-D.
  */
 static void *t21_tisp_stats[5];
 static const size_t t21_tisp_stats_size[5] = {
@@ -24532,7 +24532,7 @@ int32_t tisp_sdns_top_func_cfg(void)
 }
 
 /*
- * SDNS register writers, rewritten from OEM tx-isp-t21.ko (PC420 build):
+ * SDNS register writers, rewritten from OEM tx-isp-t21.ko (cam-D build):
  * tisp_sdns_y_param_cfg @0x1b730 and tisp_sdns_c_param_cfg @0x1c058.
  * The decompiled versions wrote uninitialised locals and a one-argument
  * system_reg_write(0x2084).  Each npv array is scaled by its *_stren_intp

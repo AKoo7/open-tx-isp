@@ -4,7 +4,7 @@ set -euo pipefail
 # Safe, staged T41 module smoke cycle. Every experiment is followed by a
 # reboot; the recovered module is only uploaded to /tmp.
 
-IP="${THINGINO_IP:-192.168.50.127}"
+IP="${THINGINO_IP:-192.0.2.127}"
 USER="${THINGINO_USER:-root}"
 PASS="${THINGINO_PASS:-}"
 LEVEL="${T41_BRINGUP_LEVEL:--1}"
@@ -34,7 +34,7 @@ REMOTE_KERNEL_TRACE=/tmp/t41_kernel_trace.ko
 LOG="${1:-logs/$(date +%Y%m%d-%H%M%S)-t41-level${LEVEL}-${IP##*.}}"
 
 case "$IP" in
-	192.168.50.117 | 192.168.50.127 | 192.168.50.244) ;;
+	192.0.2.117 | 192.0.2.127 | 192.0.2.244) ;;
 	*)
 		echo "refusing non-target IP: $IP" >&2
 		exit 2

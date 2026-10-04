@@ -104,7 +104,7 @@ index bde3d73..68484a0 100755
  	t10 | t20 | t21 | t23 | t30 | t31 | t40 | t41)
  		export ISP_ENV_KERNEL_DIR="${KERNEL_DIR}"
 -		export CROSS_COMPILE="mipsel-linux-"
-+		export CROSS_COMPILE="/home/matteius/output/cinnado_d1_t31l/host/bin/mipsel-linux-"
++		export CROSS_COMPILE="/home/user/output/cinnado_d1_t31l/host/bin/mipsel-linux-"
  
  		FAM="SOC_FAMILY=$SOC_MODEL CONFIG_SOC_${SOC_MODEL^^}=y KERNEL_VERSION=${KERNEL_VERSION}"
  		make \

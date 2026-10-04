@@ -10,7 +10,7 @@
   },
   "replacements": {},
   "oem": {
-    "path": "/home/matteius/re-framework/tx-isp-t41.ko",
+    "path": "/home/user/re-framework/tx-isp-t41.ko",
     "file_bytes": 828264,
     "elf_class": "elf32",
     "endianness": "little",

@@ -1,4 +1,4 @@
-From: Lu-Fi <lutz@fiebach.de>
+From: Lu-Fi <noreply@users.noreply.github.com>
 Date: Fri, 2 Oct 2026 07:30:00 +0200
 Subject: [PATCH] sensor: t21 jxf23: track and release only the GPIOs it owns
 

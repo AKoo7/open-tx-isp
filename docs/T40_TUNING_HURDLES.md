@@ -4,7 +4,7 @@ Date: started 2026-06-08. This file is a chronological lab notebook -- newest
 findings at the BOTTOM. The section below is the rolling summary; trust it
 over older sections (stale ones are marked "historical").
 
-Target device: `192.168.50.242` only.
+Target device: `192.0.2.242` only.
 
 ## CURRENT STATUS (updated 2026-06-10, late night)
 
@@ -152,7 +152,7 @@ normal RTSP profile until the individual register windows are isolated.
 
 ## 2026-06-08 Live Color Experiments
 
-All runs below kept the no-direct RTSP/IRQ path fixed on `192.168.50.242` and
+All runs below kept the no-direct RTSP/IRQ path fixed on `192.0.2.242` and
 kept `enable_t40_color_reg_snapshot=0`.
 
 Top-bypass probes:
@@ -317,11 +317,11 @@ Neutral-UV buffer test:
   `framechan_neutral_uv_value`. It fills the completed UV plane only from the
   deferred frame-done work item, and direct IRQ calls record a skip instead of
   mapping/writing frame memory. Runtime validation is still pending because
-  `192.168.50.242` dropped off the network while stopping Raptor before the
+  `192.0.2.242` dropped off the network while stopping Raptor before the
   diagnostic module was inserted:
   `logs/20260608-163949-driver-neutral-uv-smoke-242`.
 - Runtime validation after a clean Tasmota power cycle
-  (`192.168.50.103` controls the camera power for `192.168.50.242`) reached the
+  (`192.0.2.103` controls the camera power for `192.0.2.242`) reached the
   diagnostic path:
   `logs/20260608-182925-t40-neutral-uv-qbuf-242`. Buffer `0x6ea8300` rendered
   grayscale when interpreted as either NV12 or NV21, proving that the direct
@@ -676,7 +676,7 @@ Wiring plan (next):
 
 Reminder: manual I2C exposure/gain already produces a good image, so this is a
 wiring task, not a sensor-capability question. Keep the Tasmota power-cycle
-(`192.168.50.103`) handy; reload requires stock `tx_isp_t40` fully unloaded.
+(`192.0.2.103`) handy; reload requires stock `tx_isp_t40` fully unloaded.
 
 ## T31 Lessons To Reuse Carefully
 
@@ -1413,8 +1413,8 @@ fresh-boot runs over the stock driver proceed without
 
 ## 2026-06-09 AWB live bring-up results (fresh-boot power-cycle workflow)
 
-Workflow note: camera power-cycles via the Tasmota switch at 192.168.50.103
-(`curl http://192.168.50.103/cm?cmnd=Power%20Off` / `On`), camera back on LAN
+Workflow note: camera power-cycles via the Tasmota switch at 192.0.2.103
+(`curl http://192.0.2.103/cm?cmnd=Power%20Off` / `On`), camera back on LAN
 ~20s later; run probes only from this fresh-boot state.
 
 - Stage-4 AWB block-init (alloc + transmit + refresh, no reg writes, no
@@ -2612,7 +2612,7 @@ cranks exposure -> blowout). That's why hand-matching stock registers never stuc
 Method that works: detached `cat /proc/kmsg >/tmp/k.log` started BEFORE insmod (dmesg
 rotates too fast under event spam) + AECHK checkpoint printk's to bisect the hanging/
 faulting call + OEM `objdump -d -r` / `objdump -s -j .rodata` for the correct translation.
-Recover via Tasmota relay at 192.168.50.103 (`/cm?cmnd=Power%20OFF` then `%20ON`).
+Recover via Tasmota relay at 192.0.2.103 (`/cm?cmnd=Power%20OFF` then `%20ON`).
 
 ## 2026-06-11 (later session): block-init crash root-caused & fixed — OEM AE/AWB now EXECUTE
 

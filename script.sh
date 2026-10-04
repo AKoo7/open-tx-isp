@@ -5,8 +5,8 @@
 
 set -e  # Exit on any error
 
-DEFAULT_OUTPUT_ROOT=/home/matteius/output-stable/wyze_cam3_t31x_gc2053_rtl8189ftv
-FALLBACK_OUTPUT_ROOT=/home/matteius/output/wyze_cam3_t31x_gc2053_rtl8189ftv
+DEFAULT_OUTPUT_ROOT=/home/user/output-stable/wyze_cam3_t31x_gc2053_rtl8189ftv
+FALLBACK_OUTPUT_ROOT=/home/user/output/wyze_cam3_t31x_gc2053_rtl8189ftv
 OUTPUT_ROOT="${OUTPUT_ROOT:-$DEFAULT_OUTPUT_ROOT}"
 
 if [[ ! -d "$OUTPUT_ROOT/host/bin" ]]; then
@@ -25,7 +25,7 @@ export PATH="$OUTPUT_ROOT/host/bin:$PATH"
 # Configuration
 SENSOR_MODEL="${SENSOR_MODEL:-gc2053}"  # Default sensor model, can be overridden
 TARGET="${TARGET:-t31}"                 # Default target, can be overridden
-REMOTE_HOST="${REMOTE_HOST:-192.168.50.211}"  # Default remote host
+REMOTE_HOST="${REMOTE_HOST:-192.0.2.211}"  # Default remote host
 REMOTE_PATH="${REMOTE_PATH:-/tmp/}"     # Default remote path
 
 # Determine if we're in SDK directory or ISP root
@@ -169,7 +169,7 @@ show_help() {
     echo "Options:"
     echo "  -s, --sensor MODEL    Set sensor model (default: gc2053)"
     echo "  -t, --target TARGET   Set build target (default: t31)"
-    echo "  -r, --remote HOST     Set remote host IP (default: 192.168.50.211)"
+    echo "  -r, --remote HOST     Set remote host IP (default: 192.0.2.211)"
     echo "  -p, --path PATH       Set remote path (default: /tmp/)"
     echo "  -h, --help           Show this help message"
     echo ""
@@ -182,7 +182,7 @@ show_help() {
     echo "Examples:"
     echo "  $0                           # Use all defaults"
     echo "  $0 -s gc4653 -t t21         # Custom sensor and target"
-    echo "  $0 -r 192.168.1.100         # Custom remote host"
+    echo "  $0 -r 192.0.2.100         # Custom remote host"
     echo "  SENSOR_MODEL=ov2735 $0       # Using environment variable"
 }
 

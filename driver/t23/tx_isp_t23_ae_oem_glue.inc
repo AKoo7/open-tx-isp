@@ -19,7 +19,7 @@
  *
  * Verified in the MIPS emulator (register writes, events and sensor calls
  * identical to stock for the scene set in audit/aelift_emu.py) and on
- * vorne (sc2336): startup, AE comp / backlight / highlight, day/night and
+ * cam-B (sc2336): startup, AE comp / backlight / highlight, day/night and
  * stream restarts.
  */
 
@@ -339,7 +339,7 @@ static int t23_aelift_init(uint32_t width, uint32_t height, uint32_t fps)
  * the AE hardware registers again and is put back afterwards, then the
  * last exposure and total gain go to the sensor and the ISP at once.
  * Without it the first pictures after a restart are taken at the
- * tiziano_ae_init start exposure (measured on vorne at night: mean luma 1
+ * tiziano_ae_init start exposure (measured on cam-B at night: mean luma 1
  * instead of 19 in the first snapshot).
  */
 static const struct {

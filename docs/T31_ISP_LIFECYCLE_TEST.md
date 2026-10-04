@@ -54,7 +54,7 @@ ls -l driver/t31/tx-isp-t31.ko
 gleiche Modulversion), sonst lädt das Modul nicht. Übertragen ohne sftp:
 
 ```sh
-CAM=192.168.1.x
+CAM=192.0.2.x
 ssh root@$CAM 'cat > /tmp/tx-isp-t31.ko' < driver/t31/tx-isp-t31.ko
 ssh root@$CAM 'md5sum /tmp/tx-isp-t31.ko'; md5sum driver/t31/tx-isp-t31.ko
 ```
