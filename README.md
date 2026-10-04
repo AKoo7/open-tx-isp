@@ -42,7 +42,7 @@ State on `next` (2026-10-04). "Fully open" = open driver, OpenIMP and streamer r
 | T10 | Fully open; day/night, reload (5 cycles) and boot guard verified. Image controls partly documented. Module 731 KB. |
 | T20 | Fully open; 1 h 44 min soak without errors, 10x stop/start and reload without an oops, `rmmod` during streaming refused. Module 736 KB. |
 | T21 | First open bring-up, now fully open; AE/ADR/defog/AWB lifted from the vendor module. Module 452 KB (vendor 616). |
-| T23 | Fully open (native encoder in OpenIMP); module 622 KB (vendor 857); vendor AE default. Open: sporadic Helix encode error, no real WDR. |
+| T23 | Fully open (native encoder in OpenIMP); module 622 KB (vendor 857); vendor AE default. Frequent Helix frame drops fixed (residual interrupt, kernel patch merged upstream); still open: a rare single Helix encode error (errno 5), no real WDR. |
 | T30 | Builds against a real T30 kernel; earlier bring-up on hardware. Not exercised in the latest campaign. |
 | T31 | Reference SoC; SC2336, GC2053, SC301IOT; 2 h 53 min soak without errors; module 711 KB (vendor 829). |
 | T40 | Device-tested earlier (T40XP/GC4653); statistics restart stability is a known limitation. Not in the latest campaign. |
