@@ -63,8 +63,11 @@ static irqreturn_t isp_irq_handle(int this_irq, void *dev)
 	int index = 0;
 	int ret = IRQ_HANDLED;
 	irqreturn_t retval = IRQ_HANDLED;
-//	if(irqdev == NULL)
-//		return IRQ_HANDLED;
+
+	/* The line is requested before irq_dev is published (and a spurious
+	 * or shared interrupt can arrive then); one compare per IRQ. */
+	if (unlikely(!irqdev || !irqdev->base))
+		return IRQ_NONE;
 
 	mask = tx_isp_readl(irqdev->base, TX_ISP_TOP_IRQ_MASK);
 	state = tx_isp_readl(irqdev->base, TX_ISP_TOP_IRQ_STA);
@@ -137,13 +140,6 @@ int tx_isp_request_irq(struct platform_device *pdev, tx_isp_device_t *ispdev)
 //	tx_isp_mask_irq(irqdev, TX_ISP_TOP_IRQ_ALL);
 //	ispdev->irq_dev = irqdev;
 
-	ret = request_threaded_irq(irq, isp_irq_handle, isp_irq_thread_handle, IRQF_ONESHOT, "isp", ispdev);
-	if(ret){
-		v4l2_err(v4l2_dev, "%s[%d] Failed to request irq(%d).\n", __func__,__LINE__, irq);
-		ret = -EINTR;
-		goto err_req_irq;
-	}
-
 	irqdev->irq = irq;
 	irqdev->res = res;
 	irqdev->enable_irq = tx_isp_enable_irq;
@@ -151,9 +147,19 @@ int tx_isp_request_irq(struct platform_device *pdev, tx_isp_device_t *ispdev)
 	irqdev->mask_irq = tx_isp_mask_irq;
 	irqdev->unmask_irq = tx_isp_unmask_irq;
 	irqdev->state = 1;
+	/* Publish irq_dev and quiesce the block before the line is requested:
+	 * the handler dereferences ispdev->irq_dev. */
 	ispdev->irq_dev = irqdev;
 	tx_isp_disable_irq(irqdev, TX_ISP_TOP_IRQ_ALL);
 	tx_isp_unmask_irq(irqdev, TX_ISP_TOP_IRQ_ISP);
+
+	ret = request_threaded_irq(irq, isp_irq_handle, isp_irq_thread_handle, IRQF_ONESHOT, "isp", ispdev);
+	if(ret){
+		v4l2_err(v4l2_dev, "%s[%d] Failed to request irq(%d).\n", __func__,__LINE__, irq);
+		ispdev->irq_dev = NULL;
+		ret = -EINTR;
+		goto err_req_irq;
+	}
 //	printk("^^ %s[%d] irq = %d ^^\n", __func__,__LINE__,irq);
 
 	return ISP_SUCCESS;

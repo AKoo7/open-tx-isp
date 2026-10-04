@@ -36247,9 +36247,19 @@ int tx_isp_get_ae_algo_handle(void __user *arg)
     if (!ae_info_mine || !ae_statis_mine)
         return -ENOMEM;
 
-    /* OEM: wait for AE frame processing to signal completion */
-    if (wait_for_completion_interruptible(&ae_algo_comp))
-        return -ERESTARTSYS;
+    /* OEM: wait for AE frame processing to signal completion.  Stock waits
+     * forever; without frames (stream stopped, sensor dead) the caller would
+     * sleep until killed.  Bound it to 2 s and report instead. */
+    {
+        long wret = wait_for_completion_interruptible_timeout(&ae_algo_comp, 2 * HZ);
+
+        if (wret < 0)
+            return -ERESTARTSYS;
+        if (wret == 0) {
+            pr_warn_ratelimited("tx_isp_get_ae_algo_handle: no AE frame within 2 s\n");
+            return -ETIMEDOUT;
+        }
+    }
 
     /* SET_AE_ALGO_CLOSE may have freed the buffers while we slept. */
     mutex_lock(&ae_algo_mutex);

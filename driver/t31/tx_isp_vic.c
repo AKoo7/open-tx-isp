@@ -982,9 +982,19 @@ int tx_isp_vic_stop(struct tx_isp_subdev *sd)
     ctrl |= VIC_CTRL_STOP;
     vic_write32(VIC_CTRL, ctrl);
 
-    /* Wait for stop to complete */
-    while (vic_read32(VIC_STATUS) & STATUS_BUSY) {
-        udelay(10);
+    /* Wait for stop to complete; bounded (~10 ms) so a VIC that never
+     * drops BUSY cannot hang the CPU under the mutex. */
+    {
+        int budget = 1000;
+
+        while (vic_read32(VIC_STATUS) & STATUS_BUSY) {
+            if (budget-- <= 0) {
+                pr_warn_ratelimited("tx_isp_vic_stop: VIC still busy after 10 ms (status=0x%08x)\n",
+                                    vic_read32(VIC_STATUS));
+                break;
+            }
+            udelay(10);
+        }
     }
 
     mutex_unlock(&vic_dev->vic_frame_end_lock);
@@ -2409,6 +2419,13 @@ ssize_t isp_vic_cmd_set(struct file *file, const char __user *buf,
 		if (seq)
 			seq_printf(seq, "Can't ops the node!\n");
 		return count;
+	}
+
+	/* Every command fits a page; do not let the write size the allocation
+	 * (a huge count would only produce a page-allocation splat). */
+	if (count > PAGE_SIZE) {
+		pr_warn_ratelimited("isp_vic_cmd_set: write of %zu bytes rejected\n", count);
+		return -E2BIG;
 	}
 
 	/* Allocate or use static buffer */
