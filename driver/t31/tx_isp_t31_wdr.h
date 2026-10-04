@@ -4,7 +4,7 @@
 
 /* T31 WDR arithmetic and statistics layouts. The register/algorithm
  * references below are offsets in the recovered T31 OEM text, as recorded
- * in tx-isp-t31.ko_hlil.txt. Keep these helpers usable by the host oracle. */
+ * in docs/re/tx-isp-t31.ko_hlil.txt. Keep these helpers usable by the host oracle. */
 #ifdef __KERNEL__
 #include <linux/types.h>
 #include <linux/errno.h>

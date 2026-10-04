@@ -1,7 +1,7 @@
 # Binary Assembly Audit
 
 - schema: `regtrace-binary-audit-v1`
-- OEM: `/home/matteius/re-framework/tx-isp-t30.ko`
+- OEM: `/home/user/re-framework/tx-isp-t30.ko`
 - recovered: `driver/t30/tx-isp-t30.ko`
 - objdump counts exclude relocation records
 - thresholds: min_oem_insns=24 stub_insns=8 collapse=0.50 similar=0.80..1.25 expansion=2.00

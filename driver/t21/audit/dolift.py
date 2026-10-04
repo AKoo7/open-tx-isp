@@ -2,7 +2,7 @@ import sys; sys.path.insert(0,'.')
 import io as _io, re as _re2
 _buf=_io.StringIO(); _real=sys.stdout; sys.stdout=_buf  # SANITIZE
 from lift import Elf, Lifter, render_private
-oem=Elf('/mnt/NVMe/git/scratch-clones/expo/tmp/oem-t21.ko')
+oem=Elf('<path>/expo/tmp/oem-t21.ko')
 ours=Elf(sys.argv[1])
 ournames={s['name'] for s in ours.syms if s['name'] and s['shndx'] not in (0,) and s['type'] in (1,)}
 ext={

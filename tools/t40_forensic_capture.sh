@@ -4,7 +4,7 @@ set -euo pipefail
 # Capture a settled T40 candidate with the same evidence set used for the
 # same-session stock oracle, score it, and leave the camera at a clean boot.
 
-IP="${THINGINO_IP:-192.168.50.242}"
+IP="${THINGINO_IP:-192.0.2.242}"
 USER="${THINGINO_USER:-root}"
 PASS="${THINGINO_PASS:-}"
 LOG="${1:?usage: t40_forensic_capture.sh LOG_DIR}"
@@ -14,7 +14,7 @@ CAPTURE_FRAMES="${CAPTURE_FRAMES:-1}"
 REBOOT_AFTER="${REBOOT_AFTER:-1}"
 STOCK_GLOB="${STOCK_GLOB:-logs/20260718-t40-forensic-stock-baseline/frames/stock-*.jpg}"
 
-if [[ "$IP" != "192.168.50.242" ]]; then
+if [[ "$IP" != "192.0.2.242" ]]; then
 	echo "refusing non-target IP: $IP" >&2
 	exit 2
 fi

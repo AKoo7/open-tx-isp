@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-IP="${THINGINO_IP:-192.168.50.242}"
+IP="${THINGINO_IP:-192.0.2.242}"
 USER="${THINGINO_USER:-root}"
 PASS="${THINGINO_PASS:-}"
 BUS="${GC4653_I2C_BUS:-1}"
@@ -20,7 +20,7 @@ RANGES="${GC4653_REG_RANGES:-\
 0x3800-0x39ff}"
 RANGES_CSV="${RANGES// /,}"
 
-if [[ "$IP" != "192.168.50.242" ]]; then
+if [[ "$IP" != "192.0.2.242" ]]; then
 	echo "refusing non-target IP: $IP" >&2
 	exit 2
 fi

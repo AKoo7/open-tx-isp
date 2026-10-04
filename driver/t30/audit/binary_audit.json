@@ -26,7 +26,7 @@
     ]
   },
   "oem": {
-    "path": "/home/matteius/re-framework/tx-isp-t30.ko",
+    "path": "/home/user/re-framework/tx-isp-t30.ko",
     "file_bytes": 496516,
     "elf_class": "elf32",
     "endianness": "little",
