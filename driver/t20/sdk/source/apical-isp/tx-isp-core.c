@@ -22,6 +22,7 @@
 #include <apical-isp/apical_isp_core_nomem_settings.h>
 #include "apical_scaler_lut.h"
 #include "sensor_drv.h"
+void tx_isp_t20_sensor_exposure_invalidate(struct tx_isp_core_device *core);
 #include <apical-isp/apical_firmware_config.h>
 #include "tx-isp-core-tuning.h"
 
@@ -1783,6 +1784,8 @@ static long isp_core_ops_private_ioctl(struct tx_isp_core_device *core, struct i
 			if (ctl->value) {
 				memcpy(&core->vin, (void *)(ctl->value), sizeof(struct tx_isp_video_in));
 				stab.global_max_integration_time = core->vin.attr->max_integration_time;
+				/* The sensor was just reset and reloaded its init table. */
+				tx_isp_t20_sensor_exposure_invalidate(core);
 			} else
 				memset(&core->vin, 0, sizeof(struct tx_isp_video_in));
 			break;

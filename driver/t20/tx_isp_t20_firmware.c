@@ -1795,6 +1795,7 @@ int32_t apical_init_calibrations(int32_t arg1);
 int32_t init_stab(void);
 int32_t apical_process(void);
 int32_t apical_init(void);
+static void t20_compact_ae_reset(void);
 static int32_t apical_frame_buffer_configure_temper(uint32_t arg1);
 static int32_t apical_change_resolution(uint32_t arg1);
 int32_t apical_interrupt_frame_start(int32_t *arg1);
@@ -2409,6 +2410,7 @@ int32_t apical_init(void)
 	init_isp_set(ret);
 	load_isp_sequence(2);
 	disable_all_frame_buffers();
+	t20_compact_ae_reset();
 	apical_fw_init((int32_t *)&__fw);
 	apical_process();
 	apical_api_init_idx_array();
@@ -18280,17 +18282,44 @@ static u32 t20_ae_corrected_target(u32 target, s32 exposure_log2,
 	return max_t(u32, 1, math_exp2(target_log2, 16, 0));
 }
 
+/*
+ * Compact AE/NR/Iridix controller state.  It must follow the firmware context:
+ * apical_init() rebuilds that context (and the ISP register defaults) on every
+ * core init, i.e. on every streamer start, while these values used to survive
+ * until the module was unloaded.  A restart then resumed the previous stream's
+ * exposure, cooldown and "already initialised" flags against a reset context.
+ */
+static unsigned int ae_irq_trace_count;
+static int32_t simple_exposure_log2 = -1;
+static uint8_t simple_cooldown;
+static unsigned int simple_updates;
+static bool simple_nr_initialized;
+static bool simple_iridix_initialized;
+static unsigned int simple_trace_count;
+static unsigned int iq_trace_count;
+
+static void t20_compact_ae_reset(void)
+{
+	ae_irq_trace_count = 0;
+	simple_exposure_log2 = -1;
+	simple_cooldown = 0;
+	simple_updates = 0;
+	simple_nr_initialized = false;
+	simple_iridix_initialized = false;
+	simple_trace_count = 0;
+	iq_trace_count = 0;
+	t20_ae_last_mean = 0;
+	t20_ae_last_target = 0;
+	t20_ae_last_raw_target = 0;
+	t20_ae_last_curve = 0;
+	t20_ae_last_population = 0;
+	t20_ae_last_exposure_log2 = 0;
+	t20_ccm_awb_updates = 0;
+}
+
 /* WHOLE_DRIVER_CANDIDATE fn_000000000002b5bc origin=model_output original=AE_fsm_process_interrupt */
 int32_t AE_fsm_process_interrupt(int32_t *arg1, char arg2)
 {
-	static unsigned int ae_irq_trace_count;
-	static int32_t simple_exposure_log2 = -1;
-	static uint8_t simple_cooldown;
-	static unsigned int simple_updates;
-	static bool simple_nr_initialized;
-	static bool simple_iridix_initialized;
-	static unsigned int simple_trace_count;
-	static unsigned int iq_trace_count;
 	int trace_ae = t20_trace_events && ae_irq_trace_count++ < 12;
 	uint32_t result;
 
