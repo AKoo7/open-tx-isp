@@ -54,7 +54,7 @@ History: [CHANGELOG.md](CHANGELOG.md).
 
 ## Better than the vendor driver
 
-- Reload and stop: 10 stop/start and rmmod/insmod cycles without an oops on T10/T20/T21/T23/T31/T41.
+- Reload and stop: 10 stop/start and rmmod/insmod cycles without an oops on T20/T21/T23/T31/T41 (T10: 5 cycles).
 - T20/T10 give back about 8 MB RAM (unused 8 MiB V4L2 frame pool off by default); on a T20 the open stack measured 10.5 % streamer CPU against 25.2 % with the vendor stack, snapshots 0.20 s against 0.45 s.
 - Smaller modules than the vendor on T21, T23 and T31.
 - Checked inputs (all user copies, QBUF window, bounded waits), sensor module pinned while streaming.
@@ -82,23 +82,29 @@ primitives: `make -C tests check`.
 
 ## Integration in Thingino
 
-In [thingino-firmware](https://github.com/themactep/thingino-firmware) the package `open-tx-isp`
-(this driver) and `openimp` (userspace) are selected with `BR2_PACKAGE_THINGINO_ISP_OPEN`
-(menu "ISP stack"). The module is installed as `tx-isp-<soc>.ko` and replaces the proprietary
-one; SDK sensor, audio and AVPU modules stay. A boot guard (`isp_open=auto|manual|off`) skips the
-ISP/sensor modules after an unstable load so a bad driver cannot boot-loop the camera. Devices pin
-the package to a commit; once release tags exist a tag can be pinned.
+The packages `open-tx-isp` (this driver) and `openimp` (userspace) are in the upstream
+[thingino-firmware](https://github.com/themactep/thingino-firmware) branch `aperto`
+([#1756](https://github.com/themactep/thingino-firmware/pull/1756)), selected with
+`BR2_PACKAGE_THINGINO_ISP_OPEN` (menu "ISP stack") and pinned by commit SHA to the `next` branches
+of the Lu-Fi forks. The module is installed as `tx-isp-<soc>.ko` and replaces the proprietary one;
+SDK sensor, audio and AVPU modules stay. The kernel VPU/rmem stability patches
+([#1748](https://github.com/themactep/thingino-firmware/pull/1748),
+[#1752](https://github.com/themactep/thingino-firmware/pull/1752)) are merged there. The optional
+boot guard `BR2_PACKAGE_THINGINO_ISP_GUARD` ([#1749](https://github.com/themactep/thingino-firmware/pull/1749),
+default off; `isp_open=auto|manual|off`) skips the ISP/sensor modules after an unstable load so a bad
+driver cannot boot-loop the camera. Once release tags exist, thingino will pin a tag instead of a SHA.
 
 ## Branches and releases
 
 - `main`: fork default branch, not the tested stack.
 - `next`: tested integration branch; everything on it was flashed and checked on cameras.
-- `release`: fast-forward only from `next` after a clean soak (planned, not created yet).
+- `release`: fast-forward only from `next` after a clean soak (planned, not created yet; the first tag follows after the 24 h soak that started 2026-10-04).
 - Tags `vYYYY.MM.DD` on `release` (planned).
 - Work happens on `claude/<topic>` branches, merged into `next` after device tests.
 
 ## Documentation
 
+- [Wiki](https://github.com/Lu-Fi/openimp/wiki) (one wiki for both repositories): module parameters, memory (rmem, ispmem, MMAP pool), troubleshooting, install and boot guard, release scheme.
 - [`docs/T31_ISP_ARCHITECTURE.md`](docs/T31_ISP_ARCHITECTURE.md): hardware and driver architecture
 - [`docs/ISP_SOC_ALGORITHM_VARIANCE.md`](docs/ISP_SOC_ALGORITHM_VARIANCE.md): algorithm differences between SoCs
 - [`docs/DRIVER_REUSE_PLAN.md`](docs/DRIVER_REUSE_PLAN.md), [`docs/SHARED_DRIVER_LIBRARY.md`](docs/SHARED_DRIVER_LIBRARY.md): shared code
@@ -112,6 +118,10 @@ the package to a commit; once release tags exist a tag can be pinned.
 Layout: `driver/<soc>/` per-SoC driver, `driver/common/` and `driver/include/tx_isp/` shared code and
 interfaces, `docs/` notes, `tests/` host tests and oracle checks, `tools/` on-device probes and generators,
 `sensor-src/` sensor sources used by the T10/T20 builds.
+
+## Reporting problems
+
+Open an issue at [Lu-Fi/open-tx-isp](https://github.com/Lu-Fi/open-tx-isp/issues) (kernel driver, ISP, memory) or [Lu-Fi/openimp](https://github.com/Lu-Fi/openimp/issues) when unsure. Please include the SoC and sensor, the revisions of open-tx-isp, OpenIMP and the streamer, `dmesg` (including any shortfall line such as `set ispmem >= N KB`), the streamer log, the stream set and the `rmem`/`ispmem` values. Do not post addresses, credentials or location names. Details: [Troubleshooting](https://github.com/Lu-Fi/openimp/wiki/Troubleshooting#reporting-a-problem).
 
 ## Contributing
 

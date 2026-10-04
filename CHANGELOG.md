@@ -2,10 +2,13 @@
 
 Condensed from the open-stack campaign changelog; only open-tx-isp (kernel driver) changes.
 Newest first, grouped by date. Everything listed was device-tested on the SoC named unless
-marked otherwise. Release tags `vYYYY.MM.DD` are planned; until then dates are the reference.
+marked otherwise. Release tags `vYYYY.MM.DD` are planned (the first one after the 24 h soak that started 2026-10-04); until then dates are the reference. Branch names are historic: the topic branches were merged into `next` and deleted.
 
 ## 2026-10-04
 
+- thingino: `open-tx-isp` is part of upstream `aperto` ([#1756](https://github.com/themactep/thingino-firmware/pull/1756)), pinned to this fork's `next`; the kernel VPU/rmem patches (#1748, #1752) and the optional boot guard (#1749) are merged there. All test cameras run `aperto` images (30/30 snapshots, 0 oops, 0 VPU errors).
+- Pending (on branches, not yet in `next`, soak first): T23 root cause of the snapshot 503 on a second channel (stale MSCA address FIFOs after a stream stop, the vendor clears them on STREAMOFF; fix clears and re-arms them at STREAMON, 260 cold-start cycles without a failure) and the T23 log switch (`t23_runtime_trace`, informational output off by default, boot log 522 to 78 lines, errors stay visible).
+- T41: AE compensation, gain/exposure caps and 2D/3D noise reduction reach the ISP; unimplemented tuning IDs are refused.
 - T20/T10: the unused 8 MiB V4L2-MMAP frame pool is off by default (`isp_mmap_pool_kb=0`, parameter kept): about +8 MB free RAM (T20 MemFree 46.7 to 55 MB, T10 1.9 to ~9.7 MB); only the recovered firmware unit stays `-O0` (-140 KB).
 - Shortfall logging: when reserved memory is too small the driver logs once with have/need/missing and a concrete value (`isp_mmap_pool_kb`, `ispmem`).
 - Hardening: T31 proc writes bounded, VIC stop busy-wait bounded (~10 ms), AE handle wait with 2 s timeout; T20/T10 IRQ registered before its data was published (oops on early interrupt) fixed.

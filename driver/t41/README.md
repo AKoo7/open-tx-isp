@@ -21,7 +21,7 @@ than a production-equivalent replacement.
 Build against the matching Thingino Wyze Cam v4 output:
 
 ```sh
-ROOT=/home/user/thingino-firmware-opensensor/output/master/wyze_cam4_t41nq_os04d10_atbm6062s-4.4.94-uclibc \
+ROOT=/path/to/thingino-firmware/output/<target> \
 KDIR="$ROOT/build/linux-2aca1252ac4a304172b870777365f42bfb100674" \
 SOC=t41 ./build_local.sh
 ```
