@@ -400,9 +400,50 @@ void frame_channel_dmabuf_resolver_unregister(void)
  * allocation fails on small or fragmented heaps (T10: mem=42M), so the pool
  * is best effort: isp_mmap_pool_kb=0 disables it, and a failed allocation
  * leaves MMAP requests failing with -ENOMEM instead of failing the probe. */
-static unsigned int isp_mmap_pool_kb = TX_ISP_FRAME_CHANNEL_BUFFER_MAX >> 10;
+/* Default 0: nothing in the open stack uses MMAP buffers, and the pool would
+ * pin 8 MiB of lowmem for nothing.  Set isp_mmap_pool_kb to re-enable it; a
+ * MMAP request without a pool fails with -ENOMEM and logs the needed size. */
+static unsigned int isp_mmap_pool_kb;
 module_param(isp_mmap_pool_kb, uint, 0444);
-MODULE_PARM_DESC(isp_mmap_pool_kb, "V4L2 MMAP frame pool in KiB (0: none; USERPTR always works)");
+MODULE_PARM_DESC(isp_mmap_pool_kb, "V4L2 MMAP frame pool in KiB (default 0: none, USERPTR only; 8192 fits 2x1080p NV12 + sub-streams)");
+
+/* Called from VIDIOC_REQBUFS before vb2 allocates MMAP buffers.  Logs once
+ * per module load when the pool cannot serve the request, with the size to
+ * set; fails the request cleanly when there is no pool at all. */
+int frame_buffer_mmap_check(void *alloc_ctx, unsigned int count, unsigned long size)
+{
+	static bool warned;
+	struct vb2_dc_conf *conf = alloc_ctx;
+	unsigned long need_kb, have_kb = 0;
+
+	if (!conf || !count)
+		return 0;
+	need_kb = ((unsigned long)count * PAGE_ALIGN(size)) >> 10;
+	if (conf->mmap_enable) {
+		have_kb = (conf->mmap.size - conf->mmap.used) >> 10;
+		if (need_kb <= have_kb)
+			return 0;
+	}
+	if (!warned) {
+		warned = true;
+		if (!conf->mmap_enable && !isp_mmap_pool_kb)
+			printk(KERN_WARNING "tx-isp: MMAP buffers requested but isp_mmap_pool_kb=0; "
+			       "set isp_mmap_pool_kb=%lu (needed for this request: %lu KB)\n",
+			       need_kb, need_kb);
+		else if (!conf->mmap_enable)
+			printk(KERN_WARNING "tx-isp: MMAP buffers requested but the %u KB MMAP pool "
+			       "could not be allocated; free lowmem or lower isp_mmap_pool_kb "
+			       "(needed for this request: %lu KB)\n",
+			       isp_mmap_pool_kb, need_kb);
+		else
+			printk(KERN_WARNING "tx-isp: MMAP pool has %lu KB free, request of %u x %lu KB "
+			       "needs %lu KB - fewer buffers granted; set isp_mmap_pool_kb >= %lu "
+			       "(missing %lu KB)\n", have_kb, count, PAGE_ALIGN(size) >> 10,
+			       need_kb, (conf->mmap.size >> 10) + need_kb - have_kb,
+			       need_kb - have_kb);
+	}
+	return conf->mmap_enable ? 0 : -ENOMEM;
+}
 
 static int frame_buffer_mmap_init(struct vb2_mmap_conf *mmap, struct device *dev)
 {
@@ -426,6 +467,11 @@ static int frame_buffer_mmap_init(struct vb2_mmap_conf *mmap, struct device *dev
 	printk("~~~~~~~~ %s[%d] vaddr = 0x%08x paddr = 0x%08x ~~~~~~~~~~\n",__func__,__LINE__,
 				(unsigned int)mmap->vaddr, (unsigned int)mmap->paddr);
 	return ISP_SUCCESS;
+}
+#else
+int frame_buffer_mmap_check(void *alloc_ctx, unsigned int count, unsigned long size)
+{
+	return count ? -ENOMEM : 0;
 }
 #endif
 

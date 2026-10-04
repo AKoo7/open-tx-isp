@@ -40,7 +40,9 @@ ccflags-y += -I$(src)/../../external/ingenic-sdk/3.10.14/isp/t20
 ccflags-y += -I$(src)/../../external/ingenic-sdk/3.10.14/isp/t20/apical-isp
 ccflags-y += -I$(src)/../../external/ingenic-sdk/3.10.14/isp/t20/include
 ccflags-y += -I$(src)/../../external/ingenic-sdk/3.10.14/sensor-src/include
-ccflags-y += -O0 -fno-tree-dce -fno-ipa-pure-const -fno-ipa-reference
+# memory: SDK units build at the kernel default (-Os); only the recovered
+# firmware unit keeps -O0 (its decompiled code relies on it)
+CFLAGS_tx_isp_t20_firmware.o += -O0 -fno-tree-dce -fno-ipa-pure-const -fno-ipa-reference
 ccflags-y += -std=gnu99 -fpermissive -w
 ccflags-y += -Wno-error=strict-prototypes
 ccflags-y += -Wno-error=implicit-function-declaration
