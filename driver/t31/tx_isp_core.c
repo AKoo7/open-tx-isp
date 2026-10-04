@@ -27,6 +27,7 @@
 #include "../include/tx_isp/tx_isp_daynight.h"
 #include "../include/tx_isp/tx_isp_frame_layout.h"
 #include "../include/tx_isp/tx_isp_sinfo.h"
+#include "../include/tx_isp/tx_isp_guard.h"
 #include <linux/platform_device.h>
 #include <linux/device.h>
 
@@ -4749,7 +4750,8 @@ int private_i2c_add_driver_addr(struct i2c_driver *driver,
     int ret;
     int sinfo_ret;
 
-    ret = i2c_add_driver(driver);
+    /* Owner = the sensor module, so the sensor pins hold it (guard.h). */
+    ret = tx_isp_i2c_add_sensor_driver(driver);
     if (ret)
         return ret;
 

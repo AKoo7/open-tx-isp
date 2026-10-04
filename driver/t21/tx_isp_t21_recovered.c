@@ -10116,7 +10116,8 @@ void private_i2c_set_clientdata(struct i2c_client *dev, void *data)
 
 int private_i2c_add_driver(struct i2c_driver *driver)
 {
-    return i2c_add_driver(driver);
+    /* Owner = the sensor module, so t21_sensor_pins hold it (guard.h). */
+    return tx_isp_i2c_add_sensor_driver(driver);
 }
 
 

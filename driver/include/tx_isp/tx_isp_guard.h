@@ -5,6 +5,8 @@
  *    space queues on /dev/framechanN by physical address.
  *  - struct tx_isp_sensor_pins: module references on the sensor drivers the
  *    ISP has registered, held until the last close of /dev/tx-isp.
+ *  - tx_isp_i2c_add_sensor_driver(): private_i2c_add_driver() body that
+ *    keeps the sensor module as the i2c_driver owner the pins rely on.
  *
  * Header only: every SoC driver is a single module that includes it once
  * per user, so the helpers stay static inline.
@@ -12,6 +14,7 @@
 #ifndef TX_ISP_GUARD_H
 #define TX_ISP_GUARD_H
 
+#include <linux/i2c.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
 #include <linux/module.h>
@@ -212,6 +215,29 @@ static inline void tx_isp_sensor_unpin_all(struct tx_isp_sensor_pins *pins)
 	for (i = 0; i < TX_ISP_SENSOR_PIN_MAX; i++)
 		if (mod[i])
 			module_put(mod[i]);
+}
+
+/*
+ * Register a sensor's i2c_driver for the sensor module. Sensors call the
+ * ISP's private_i2c_add_driver(); i2c_add_driver() there is a macro for
+ * i2c_register_driver(THIS_MODULE, ...), which overwrote driver.owner with
+ * the ISP module. The pins above then took a reference on the ISP itself
+ * instead of the sensor, so "rmmod sensor_x" went through while streaming.
+ * The i2c_driver is static data of the sensor module, which identifies it.
+ * Also hide the sysfs bind/unbind files: unbinding the sensor from user
+ * space would free the subdevice under a running ISP just like rmmod.
+ */
+static inline int tx_isp_i2c_add_sensor_driver(struct i2c_driver *driver)
+{
+	struct module *owner;
+
+	preempt_disable();
+	owner = __module_address((unsigned long)driver);
+	preempt_enable();
+	if (!owner)
+		owner = driver->driver.owner;	/* built in: NULL */
+	driver->driver.suppress_bind_attrs = true;
+	return i2c_register_driver(owner, driver);
 }
 
 #endif /* TX_ISP_GUARD_H */

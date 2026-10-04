@@ -3769,6 +3769,10 @@ long private_clk_set_rate(struct clk *clk, unsigned long rate);
 int private_i2c_transfer();
 int private_i2c_add_driver(struct i2c_driver *driver);
 void private_i2c_del_driver(struct i2c_driver *driver);
+/* tx_isp_t41_sensor_pin.c */
+int tx_isp_t41_i2c_add_sensor_driver(struct i2c_driver *driver);
+bool tx_isp_t41_sensor_pin(struct module *owner);
+void tx_isp_t41_sensor_unpin_all(void);
 int private_gpio_request();
 int32_t private_gpio_free(unsigned int gpio);
 int32_t private_jzgpio_set_func();
@@ -5941,7 +5945,8 @@ int private_i2c_transfer(adap, msgs, num)
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000000258 origin=reference_derived original=private_i2c_add_driver */
 int private_i2c_add_driver(struct i2c_driver *driver)
 {
-    return i2c_add_driver(driver);
+    /* Owner = the sensor module, so the sensor pins hold it (guard.h). */
+    return tx_isp_t41_i2c_add_sensor_driver(driver);
 }
 
 /* WHOLE_DRIVER_CANDIDATE fn_0000000000000270 origin=reference_derived original=private_i2c_del_driver */
@@ -14833,6 +14838,10 @@ struct tx_isp_subdev *isp_i2c_new_subdev_board(
 		goto error;
 
 	sd = private_i2c_get_clientdata(client);
+	/* Keep the sensor module loaded until the last close of
+	 * /dev/tx-isp (tx_isp_release). */
+	if (sd && !tx_isp_t41_sensor_pin(owner))
+		sd = NULL;
 	private_module_put(owner);
 
 error:
@@ -33967,6 +33976,8 @@ int32_t tx_isp_release(uint32_t a0, uintptr_t a1)
 		if (*(uint32_t *)(miscdev + 0x118 + i * sizeof(uint32_t)))
 			tx_isp_video_link_destroy_isra_3((uintptr_t)(miscdev - 0x0c), i);
 
+	/* After the teardown: the sensor is no longer in use. */
+	tx_isp_t41_sensor_unpin_all();
 	return 0;
 }
 
