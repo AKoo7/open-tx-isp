@@ -5,8 +5,20 @@ CFLAGS += -std=c99 -Wall -Wextra -Werror
 
 .PHONY: all check clean t30_storage_audit
 
-all check: tx_isp_t41_ysp_test
-all check: tx_isp_t31_wdr_test tx_isp_t31_wdr_runtime_test
+# Every host test binary.  A new test is registered with "TESTS += name"
+# (plus its build rule); `check` builds and runs all of them, keeps going
+# past failures and fails at the end if anything failed.  `check` also
+# fails for a tests/*_test.c that is neither in TESTS nor in TARGET_TESTS,
+# so a test cannot be added and then silently never run.
+TESTS :=
+# Further check steps, run as "$(MAKE) <target>" after the binaries.
+CHECK_TARGETS := t30_storage_audit
+# Sources that only run on the camera (not built on the host).
+TARGET_TESTS := $(basename $(wildcard t41_v4l2_*_test.c)) t41_antiflicker_ioctl_test
+TEST_TIMEOUT ?= 600
+
+TESTS += tx_isp_t41_ysp_test
+TESTS += tx_isp_t31_wdr_test tx_isp_t31_wdr_runtime_test
 
 tx_isp_t31_wdr_test: tx_isp_t31_wdr_test.c ../driver/t31/tx_isp_t31_wdr.h
 	$(CC) $(CFLAGS) -o $@ $<
@@ -15,18 +27,18 @@ tx_isp_t31_wdr_runtime_test: tx_isp_t31_wdr_runtime_test.c t31_wdr_fixture.h t31
 	../driver/t31/tx_isp_t31_wdr_runtime.inc ../driver/t31/tx_isp_t31_wdr_params.inc \
 	../driver/t31/tx_isp_t31_wdr_control.h ../driver/t31/tx_isp_t31_wdr_math.h ../driver/t31/tx_isp_t31_wdr.h
 	$(CC) $(CFLAGS) -o $@ $<
-all check: tx_isp_t41_cdns_test
-all check: tx_isp_t41_mdns_test
-all check: tx_isp_t41_lce_test
-all check: tx_isp_t41_adr_test
-all check: tx_isp_t41_lsc_test
-all check: tx_isp_t41_lsc_runtime_test
-all check: tx_isp_t41_awb_stats_test
-all check: tx_isp_t41_awb_long_test
-all check: tx_isp_t41_awb_detect_test
-all check: tx_isp_t41_awb_frame_test
-all check: tx_isp_t41_awb_control_test
-all check: tx_isp_t41_awb_runtime_test
+TESTS += tx_isp_t41_cdns_test
+TESTS += tx_isp_t41_mdns_test
+TESTS += tx_isp_t41_lce_test
+TESTS += tx_isp_t41_adr_test
+TESTS += tx_isp_t41_lsc_test
+TESTS += tx_isp_t41_lsc_runtime_test
+TESTS += tx_isp_t41_awb_stats_test
+TESTS += tx_isp_t41_awb_long_test
+TESTS += tx_isp_t41_awb_detect_test
+TESTS += tx_isp_t41_awb_frame_test
+TESTS += tx_isp_t41_awb_control_test
+TESTS += tx_isp_t41_awb_runtime_test
 tx_isp_t41_awb_runtime_test: tx_isp_t41_awb_runtime_test.c ../driver/t41/tx_isp_t41_awb_runtime.inc ../driver/t41/tx_isp_t41_awb_frame.h ../driver/t41/tx_isp_t41_awb_control.h ../driver/t41/tx_isp_t41_awb.h ../driver/t41/tx_isp_t41_awb_detect.h ../driver/t41/tx_isp_t41_awb_cluster.h ../driver/t41/tx_isp_t41_awb_gray.h ../driver/t41/tx_isp_t41_awb_long.h ../driver/t41/tx_isp_t41_awb_prior.h ../driver/t41/tx_isp_t41_awb_special.h ../driver/t41/tx_isp_t41_awb_stats.h ../driver/t41/tx_isp_t41_awb_gain.h ../driver/t41/tx_isp_t41_awb_ct.h ../driver/t41/tx_isp_t41_ae.h ../driver/t41/tx_isp_t41_tmo.h
 	$(CC) $(CFLAGS) -no-pie -o $@ $<
 
@@ -69,7 +81,7 @@ tx_isp_t41_cdns_test: tx_isp_t41_cdns_test.c ../driver/t41/tx_isp_t41_cdns.h ../
 tx_isp_t41_ysp_test: tx_isp_t41_ysp_test.c ../driver/t41/tx_isp_t41_ysp.h ../driver/t41/tx_isp_t41_dpc.h ../driver/t41/tx_isp_t41_tmo.h ../driver/include/tx_isp/tx_isp_math.h
 	$(CC) $(CFLAGS) -o $@ $<
 
-all check: tx_isp_t41_gib_test tx_isp_t41_awb_gain_test tx_isp_t41_sensor_gain_test tx_isp_t41_gamma_test tx_isp_t41_dpc_test tx_isp_t41_dmsc_test tx_isp_t41_sdns_test tx_isp_t41_ydns_test
+TESTS += tx_isp_t41_gib_test tx_isp_t41_awb_gain_test tx_isp_t41_sensor_gain_test tx_isp_t41_gamma_test tx_isp_t41_dpc_test tx_isp_t41_dmsc_test tx_isp_t41_sdns_test tx_isp_t41_ydns_test
 
 tx_isp_t41_ydns_test: tx_isp_t41_ydns_test.c ../driver/t41/tx_isp_t41_ydns.h ../driver/t41/tx_isp_t41_dpc.h ../driver/t41/tx_isp_t41_tmo.h ../driver/include/tx_isp/tx_isp_math.h
 	$(CC) $(CFLAGS) -o $@ $<
@@ -98,7 +110,7 @@ tx_isp_t41_gib_test: tx_isp_t41_gib_test.c ../driver/t41/tx_isp_t41_gib.h
 tx_isp_t41_color_route_test: tx_isp_t41_color_route_test.c ../driver/t41/tx_isp_t41_exposure.c ../driver/t41/tx_isp_t41_exposure.h ../driver/include/tx_isp/tx_isp_top.h
 	$(CC) $(CFLAGS) -o $@ $< ../driver/t41/tx_isp_t41_exposure.c
 
-all: tx_isp_math_test tx_isp_modulation_test tx_isp_daynight_test tx_isp_awb_mesh_test tx_isp_t41_tmo_test tx_isp_t41_awb_test tx_isp_t41_tmo_map_test tx_isp_t41_ccm_test tx_isp_t41_bcsh_test tx_isp_t41_ae_test tx_isp_t41_color_route_test \
+TESTS += tx_isp_math_test tx_isp_modulation_test tx_isp_daynight_test tx_isp_awb_mesh_test tx_isp_t41_tmo_test tx_isp_t41_awb_test tx_isp_t41_tmo_map_test tx_isp_t41_ccm_test tx_isp_t41_bcsh_test tx_isp_t41_ae_test tx_isp_t41_color_route_test \
 	tx_isp_subdev_abi_test tx_isp_subdev_test \
 	tx_isp_remote_event_test \
 	tx_isp_state_test \
@@ -285,82 +297,53 @@ tx_isp_scaler_test: tx_isp_scaler_test.c \
 		../driver/t23/tx_isp_t23_scaler.c \
 		../driver/t41/tx_isp_t41_scaler.c
 
-check: tx_isp_math_test tx_isp_modulation_test tx_isp_daynight_test tx_isp_awb_mesh_test tx_isp_t41_tmo_test tx_isp_t41_awb_test tx_isp_t41_tmo_map_test tx_isp_t41_ccm_test tx_isp_t41_bcsh_test tx_isp_t41_ae_test tx_isp_t41_color_route_test \
-		tx_isp_subdev_abi_test tx_isp_subdev_test \
-		tx_isp_remote_event_test \
-		tx_isp_state_test \
-		tx_isp_sinfo_abi_test \
-		tx_isp_sensor_format_test \
-		tx_isp_reg_profile_test \
-		tx_isp_callback_plan_test tx_isp_tuning_abi_test \
-		tx_isp_frame_abi_test tx_isp_frame_channel_test \
-		tx_isp_frame_format_test \
-		tx_isp_frame_layout_test \
-		tx_isp_video_queue_test \
-		tx_isp_region_allocator_test \
-		tx_isp_exposure_test tx_isp_t31_adr_test tx_isp_scaler_test \
-		tx_isp_t31_mdns_test tx_isp_t31_sensor_policy_test tx_isp_t41_capture_gate_test
-	./tx_isp_math_test
-	./tx_isp_awb_mesh_test
-	./tx_isp_t41_tmo_test
-	./tx_isp_t41_tmo_map_test
-	./tx_isp_t41_ccm_test
-	./tx_isp_t41_bcsh_test
-	./tx_isp_t41_ae_test
-	./tx_isp_t41_gib_test
-	./tx_isp_t41_awb_gain_test
-	./tx_isp_t41_sensor_gain_test
-	./tx_isp_t41_gamma_test
-	./tx_isp_t41_dpc_test
-	./tx_isp_t41_dmsc_test
-	./tx_isp_t41_sdns_test
-	./tx_isp_t41_ydns_test
-	./tx_isp_t41_ysp_test
-	./tx_isp_t41_cdns_test
-	./tx_isp_t41_mdns_test
-	./tx_isp_t41_lce_test
-	./tx_isp_t41_adr_test
-	./tx_isp_t41_lsc_test
-	./tx_isp_t41_lsc_runtime_test
-	./tx_isp_t41_awb_stats_test
-	./tx_isp_t41_awb_long_test
-	./tx_isp_t41_awb_detect_test
-	./tx_isp_t41_awb_frame_test
-	./tx_isp_t41_awb_control_test
-	./tx_isp_t41_awb_runtime_test
-	./tx_isp_t41_color_route_test
-	./tx_isp_t41_awb_test
-	./tx_isp_modulation_test
-	./tx_isp_daynight_test
-	./tx_isp_subdev_abi_test
-	./tx_isp_subdev_test
-	./tx_isp_remote_event_test
-	./tx_isp_state_test
-	./tx_isp_sinfo_abi_test
-	./tx_isp_sensor_format_test
-	./tx_isp_reg_profile_test
-	./tx_isp_callback_plan_test
-	./tx_isp_tuning_abi_test
-	./tx_isp_frame_abi_test
-	./tx_isp_frame_channel_test
-	./tx_isp_frame_format_test
-	./tx_isp_frame_layout_test
-	./tx_isp_video_queue_test
-	./tx_isp_region_allocator_test
-	./tx_isp_exposure_test
-	./tx_isp_t31_adr_test
-	./tx_isp_t31_mdns_test
-	./tx_isp_t31_wdr_test
-	./tx_isp_t31_wdr_runtime_test
-	./tx_isp_t31_sensor_policy_test
-	./tx_isp_scaler_test
-	./tx_isp_t41_capture_gate_test
-	$(MAKE) t30_storage_audit
+TESTS += scene_colorfx_host_test
+
+scene_colorfx_host_test: scene_colorfx_host_test.c ../driver/common/tx_isp_scene_colorfx.h
+	$(CC) $(CFLAGS) -I../driver/common -o $@ $<
+
+all: $(TESTS)
+
+# "all check: foo_test" (old style, e.g. on older branches) still works:
+# such prerequisites of check are run as well.
+CHECK_TESTS = $(sort $(TESTS) $(filter %_test,$^))
+
+check:
+	@$(MAKE) --no-print-directory -k $(CHECK_TESTS) >/dev/null 2>&1; \
+	to=; command -v timeout >/dev/null && to="timeout $(TEST_TIMEOUT)"; \
+	pass=; fail=; \
+	for t in $(CHECK_TESTS); do \
+		if ! $(MAKE) --no-print-directory -q $$t 2>/dev/null; then \
+			echo "=== $$t: BUILD FAILED"; \
+			$(MAKE) --no-print-directory $$t 2>&1 | tail -n 20; \
+			fail="$$fail $$t(build)"; continue; \
+		fi; \
+		echo "=== $$t"; \
+		$$to ./$$t; rc=$$?; \
+		if [ $$rc -eq 0 ]; then pass="$$pass $$t"; \
+		else echo "=== $$t: FAILED rc=$$rc"; fail="$$fail $$t(rc=$$rc)"; fi; \
+	done; \
+	for c in $(CHECK_TARGETS); do \
+		echo "=== $$c"; \
+		if $(MAKE) --no-print-directory $$c; then pass="$$pass $$c"; \
+		else echo "=== $$c: FAILED"; fail="$$fail $$c"; fi; \
+	done; \
+	for f in *_test.c; do \
+		b=$${f%.c}; \
+		case " $(CHECK_TESTS) $(TARGET_TESTS) " in *" $$b "*) ;; \
+		*) echo "=== $$b: NOT REGISTERED (add TESTS += $$b)"; \
+		   fail="$$fail $$b(unregistered)";; esac; \
+	done; \
+	np=$$(echo $$pass | wc -w); nf=$$(echo $$fail | wc -w); \
+	echo; echo "==== check summary: $$np passed, $$nf failed"; \
+	echo "passed:$$pass" | fold -s -w 100; \
+	if [ $$nf -ne 0 ]; then echo "FAILED:$$fail" | fold -s -w 100; exit 1; fi
 
 t30_storage_audit:
 	../driver/t30/check_storage.sh
 
 clean:
+	$(RM) $(TESTS)
 	$(RM) tx_isp_t31_wdr_test tx_isp_t31_wdr_runtime_test
 	$(RM) tx_isp_t41_awb_frame_test
 	$(RM) tx_isp_t41_awb_control_test
