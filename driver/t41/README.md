@@ -4,6 +4,10 @@ Latest tuning status: [the September IQ audit](../../docs/T41_STOCK_OPEN_IQ.md)
 and [scalar TMO recovery](../../docs/T41_TMO_ALGORITHM.md). The older bring-up
 profiles below are historical, not claims of generic tuning support.
 
+Current T41 status (fully open from a flashed image, reload verified): see the
+status table in the repository `README.md`. The recovery-grade wording below
+describes the code quality, not the feature status.
+
 This directory contains the recovered T41 TX-ISP driver baseline for the Wyze
 Cam v4 T41NQ/OS04D10 Linux 4.4.94 target. It was generated from the OEM
 `tx-isp-t41.ko` whose SHA-256 is

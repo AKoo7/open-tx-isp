@@ -7,6 +7,10 @@ The imported whole-driver source and its audit history now live here; further
 T21 work should be made in this directory rather than in the reconstruction
 workspace.
 
+> Status note: the checkpoint wording below is historical. For the current
+> state of T21 (fully open, module 452 KB) see the status table in the
+> repository `README.md`.
+
 ## Build
 
 Build against a compatible Thingino T21 Linux 3.10.14 output:
