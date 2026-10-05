@@ -32,11 +32,29 @@ static u32 data_9a454;
 static void *tparams_day,*tparams_active;
 static void *wdr_dma_buffer=(void*)1;
 static struct t31_wdr_ev wdr_ev;
-static struct t31_wdr_stats wdr_stats;
-static struct t31_wdr_scratch wdr_scratch;
+/* Mirrors struct t31_wdr_buffers in driver/t31/tx_isp_tuning.c (f3f626a1):
+ * the driver vzallocs it in WDR mode only.  Static storage here, so the
+ * fixture tables below can take its addresses at compile time. */
+struct t31_wdr_buffers {
+	struct t31_wdr_stats stats;
+	struct t31_wdr_scratch scratch;
+	u32 pending[T31_WDR_STATS_BYTES / 4];
+	u32 packed[T31_WDR_STATS_BYTES / 4];
+};
+static struct t31_wdr_buffers wdr_buf_storage, *wdr_buf;
+static unsigned wdr_buf_allocs;
+static void *vzalloc(size_t size)
+{
+	assert(size == sizeof(wdr_buf_storage));
+	memset(&wdr_buf_storage, 0, sizeof(wdr_buf_storage));
+	++wdr_buf_allocs;
+	return &wdr_buf_storage;
+}
+static void vfree(const void *p) { assert(!p || p == &wdr_buf_storage); }
+#define wdr_stats (wdr_buf_storage.stats)
+#define wdr_scratch (wdr_buf_storage.scratch)
 static bool wdr_ready,wdr_stats_pending,wdr_ev_pending;
 static u32 wdr_ev_low,wdr_ev_high,width_wdr_def,height_wdr_def,wdr_frame;
-static u32 wdr_pending[T31_WDR_STATS_BYTES/4],wdr_packed[T31_WDR_STATS_BYTES/4];
 static u32 wdr_block_mean1[225],wdr_blocks_snapshot[225];
 static u32 wdr_block_mean1_end,wdr_block_mean1_end_old;
 static u32 wdr_mapR_software_out[81],wdr_mapG_software_out[81],wdr_mapB_software_out[81];
@@ -340,6 +358,12 @@ static void test_parameter_bank(void)
 int main(void)
 {
 	u32 i;
+	/* tisp_wdr_init() refuses to run before the WDR buffers exist (ee9fd226). */
+	assert(tisp_wdr_init() == -ENODEV);
+	assert(t31_wdr_buffers_get() == 0 && wdr_buf == &wdr_buf_storage);
+	assert(t31_wdr_buffers_get() == 0 && wdr_buf_allocs == 1);
+	for (i = 0; i < 6; ++i)
+		assert(wdr_fpga.hist[i / 3][i % 3] == wdr_stats.rgb[i / 3][i % 3]);
 	test_parameter_bank();
 	for (i = 0; i < ARRAY_SIZE(wdr_fpga_expected); ++i) {
 		test_fpga_prepare(i);
@@ -374,6 +398,8 @@ int main(void)
 	tisp_ae_ctrls[19] = 0;
 	assert(tisp_wdr_expTime_updata() == -EAGAIN);
 	assert(tiziano_wdr_dn_params_refresh() == 0);
+	t31_wdr_buffers_free();
+	assert(!wdr_buf && !wdr_fpga.hist[0][0] && tisp_wdr_init() == -ENODEV);
 	puts("T31 WDR: parameter bank, 432 FPGA, 144 register, 240 EV, 5 spatial oracle cases passed");
 	return 0;
 }
