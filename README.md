@@ -1,343 +1,148 @@
-# Open-Source TX-ISP Drivers for Ingenic T10, T20, T21, T23, T30, T31, T40, and T41
+> **The maintained line of this project is the [`aperto`](../../tree/aperto) branch.**
+> `main` is kept as the original author's line; all current code, documentation and releases (tags `vYYYY.MM.DD`) live on `aperto`. Please base work and pull requests on `aperto`.
 
-![Ingenic ISP Logo](./ingenic_isp.webp)
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.svg">
+    <img src="docs/assets/banner.svg" alt="Open Ingenic - open source ISP driver &amp; libimp for Ingenic SoCs" width="560">
+  </picture>
+</p>
 
-## Overview
+<h1 align="center">open-tx-isp</h1>
 
-This repository contains open-source reimplementations of the Ingenic TX-ISP
-kernel drivers for T10, T20, T21, T23, T30, T31, T40, and T41 cameras. The active
-cross-SoC work includes device-tested T23, T30, T31, T40, and T41 drivers plus
-the T10, T20, and T21 recovery baselines. T31 is organized as a modular driver.
-T10 and T20 compile one reviewed shared firmware generation under their own
-kernel configurations; T21, T23, T30, T40, and T41 retain large recovered core
-sources. Their modules use separate adapters for shared facilities where
-applicable.
+<p align="center">
 
-The project goal is **behavioral equivalence with the OEM driver** while
-supporting both Ingenic's unmodified proprietary `libimp.so` and the fully
-open [OpenIMP](https://github.com/opensensor/openimp) userspace stack.
+[![license](https://img.shields.io/badge/license-GPLv3-blue)](#license)
+[![SoCs](https://img.shields.io/badge/SoC-T10%20%C2%B7%20T20%20%C2%B7%20T21%20%C2%B7%20T23%20%C2%B7%20T30%20%C2%B7%20T31%20%C2%B7%20T40%20%C2%B7%20T41-3e63dd)](#status)
+[![status](https://img.shields.io/badge/open%20stack-device%20tested-30a46c)](#status)
+[![branch aperto](https://img.shields.io/badge/branch-aperto-e5484d)](https://github.com/opensensor/open-tx-isp/tree/aperto)
+[![thingino](https://img.shields.io/badge/thingino-integrated-orange)](https://github.com/themactep/thingino-firmware)
+[![platform](https://img.shields.io/badge/platform-MIPS%20%C2%B7%20Linux%203.10%20%26%204.4-lightgrey)](#build)
+[![last commit](https://img.shields.io/github/last-commit/opensensor/open-tx-isp/aperto)](https://github.com/opensensor/open-tx-isp/commits/aperto)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](https://github.com/opensensor/open-tx-isp/pulls)
 
-This is not a greenfield camera pipeline. It is a reverse-engineering and compatibility effort that combines:
+</p>
 
-- open-source kernel-driver development
-- OEM binary analysis
-- `libimp.so` ABI compatibility work
-- image-quality tuning and calibration recovery
+Open reimplementation of Ingenic's closed TX-ISP kernel driver (`tx-isp-<soc>.ko`) for
+T10, T20, T21, T23, T30, T31, T40 and T41. The goal is behavioural equivalence with the
+OEM driver: same ioctl and `libimp` ABI, same register sequencing, same image behaviour,
+with cleaner unload/reload, checked inputs and less memory.
 
-## T31 / SC301IOT Image-Quality Checkpoint
+It works with Ingenic's unmodified `libimp.so` and with the open replacement
+[OpenIMP](https://github.com/opensensor/openimp). Open stack = open-tx-isp + OpenIMP + a streamer
+([timps](https://github.com/Lu-Fi/timps)). The `aperto` branch carries the released open stack on top of the original `main` line; see
+[Branches and releases](#branches-and-releases).
 
-![Wyze Video Doorbell v2 OEM stock stack versus the fully open Open TX-ISP and OpenIMP stack](docs/images/wyze-vdb2-sc301iot-oem-vs-full-open.png)
+This is a reverse-engineering and compatibility effort, not a greenfield pipeline: OEM binary
+analysis, `libimp` ABI work and recovery of tuning data.
 
-[Download the 4:5 portrait version for social sharing.](docs/images/wyze-vdb2-sc301iot-oem-vs-full-open-linkedin.png)
+## Status
 
-This is a current, same-scene A/B from a Wyze Video Doorbell v2 using the T31X
-SoC and SC301IOT sensor. The frames were captured 98 seconds apart on August
-15, 2026:
+State on `aperto` (2026-10-04). "Fully open" = open driver, OpenIMP and streamer run from a flashed image.
 
-- **Left:** OEM TX-ISP driver with OEM `libimp.so`
-- **Right:** Open TX-ISP at `a103ec61` with OpenIMP at `7c6ca71`
-
-Both stacks produced a stable 1920x1080 stream through the same Raptor
-userspace. The full-open result is now close to the OEM daylight rendering;
-the remaining visible difference in this scene is primarily exposure/color
-response around the sunlit foreground and deep plant shadows. This checkpoint
-is deliberately scoped to this camera, sensor, mode, and lighting condition.
-
-## Current Status
-
-The project has moved beyond basic probe and stream bring-up. T20 and T31 now
-have working proprietary- and open-userspace capture paths; T31/SC301IOT has
-the broadest sensor coverage and the strongest OEM image-quality comparison.
-
-| SoC | Current validation |
+| SoC | Status |
 |---|---|
-| T10 | First recovered baseline clean-builds against the regular Thingino T10 Linux 3.10.14 kernel. Its structural audit accounts for all 742 OEM functions with no missing groups, stubs, collapses, short functions, or OEM-only symbols; hardware validation is pending. |
-| T20 | Device-tested on T20X with the stock sensor module: the reconstructed driver streams through both stock `libimp.so` and OpenIMP, and also exposes working direct V4L2 capture to Raptor. AE, AWB, denoise, lens shading, and Iridix consume the active IQ calibration rather than sensor-name policy. |
-| T21 | First recovered whole-driver baseline is integrated and builds against the vendor Linux 3.10.14 tree; stock T21/T23/T31 comparison backs the shared math adapter and two IRQ collapse repairs, but hardware validation is pending. |
-| T23 | Device-tested vendor-kernel path with live capture and shared registry, layout, ABI, and tuning primitives; broader sensor and image-quality validation continues. |
-| T30 | Device-tested on a T30X Wyze Video Doorbell v1 with SC4236: open ISP frames, firmware IRQ/statistics, tuning-derived AE/color, and balanced exposure allocation are live; anti-flicker/shutter allocation remains under active comparison with stock. |
-| T31 | Device-tested with SC2336, GC2053, and SC301IOT on vendor Linux 3.10 and compatibility-tested on mainline Linux 7.1; OEM `libimp.so` and OpenIMP both stream, with near-OEM daylight parity demonstrated on SC301IOT. |
-| T40 | Device-tested on T40XP/GC4653 with processed streaming, userspace AE/AWB, denoise/tuning recovery, and stock/open register comparisons; statistics restart stability remains a known limitation. |
-| T41 | Device-tested 2.5K OS04D10 baseline plus V4L2 MMAP and DMA-BUF capture. AWB register writers/selection consume calibration, but other tuning blocks still contain sensor/scene-specific bring-up replays; adaptive TMO and delivered-FPS recovery remain incomplete. See [the IQ audit](docs/T41_STOCK_OPEN_IQ.md). |
+| T10 | Fully open; day/night, reload (5 cycles) and boot guard verified. Image controls partly documented. Module 731 KB. |
+| T20 | Fully open; 1 h 44 min soak without errors, 10x stop/start and reload without an oops, `rmmod` during streaming refused. Module 736 KB. |
+| T21 | First open bring-up, now fully open; AE/ADR/defog/AWB lifted from the vendor module. Module 452 KB (vendor 616). |
+| T23 | Fully open (native encoder in OpenIMP); module 622 KB (vendor 857); vendor AE default. Frequent Helix frame drops fixed (residual interrupt, kernel patch merged upstream); still open: a rare single Helix encode error (errno 5), no real WDR. |
+| T30 | Builds against a real T30 kernel; earlier bring-up on hardware. Not exercised in the latest campaign. |
+| T31 | Reference SoC; SC2336, GC2053, SC301IOT; 2 h 53 min soak without errors; module 711 KB (vendor 829). |
+| T40 | Device-tested earlier (T40XP/GC4653); statistics restart stability is a known limitation. Not in the latest campaign. |
+| T41 | Fully open from a flashed image (H.264, H.265); reload verified (10/10); module 80 KB smaller than before. Open: flip, night column noise. |
 
-### Working today
+Per feature and SoC:
+[FEATURE_MATRIX](https://github.com/opensensor/openimp/blob/aperto/docs/FEATURE_MATRIX.md).
+History: [CHANGELOG.md](CHANGELOG.md).
 
-- kernel module architecture is in place
-- the T10 recovery clean-builds from the reviewed T10/T20 SDK and firmware
-  sources under `CONFIG_SOC_T10`; its audit accounts for the complete OEM
-  function surface with no stub, collapse, short, or missing findings
-- the T20 recovery clean-builds and streams with tracked SDK sources, shared
-  sensor/math adapters, and a structural binary audit with no stub or
-  collapsed findings
-- T20 has passed three non-persistent device gates on the same current driver:
-  stock `libimp.so`, OpenIMP, and direct Raptor V4L2 capture; the open paths
-  deliver clean 640x360 H.264 at 25 fps in the tested daylight scene
-- T20 image control is calibration-driven: the driver contains no camera- or
-  sensor-name branch for AE, AWB, denoise, lens shading, or Iridix policy
-- the T21 recovery baseline builds and links with a stock-backed shared math
-  adapter, current binary audit, and restored public IRQ callback paths
-- the T30 recovery builds, links, and has produced live SC4236 output through
-  the real T30X consumer; compressed histogram AE, tuning target correction,
-  balanced exposure partitioning, and userspace 50/60 Hz control are active
-- major ISP subdevices exist and probe
-- core MMIO mapping and IRQ ownership are understood
-- stream bring-up is functional enough for live video
-- tuning infrastructure and many ISP blocks are implemented
-- the T31 driver has live sensor coverage on SC2336, GC2053, and SC301IOT;
-  three separate SC301IOT doorbells were exercised in the fleet archive
-- the T31/SC301IOT pipeline streams with either OEM `libimp.so` or OpenIMP
-- T31 daylight color and lens-shading behavior on the Wyze Video Doorbell v2
-  are close to the current OEM reference
-- T31 GIB, DMSC, LSC, ADR, AE-statistics preservation, and runtime register
-  sequencing have been aligned with observed OEM behavior on SC301IOT
-- T31 H/V flip controls now update the real MSCA output-arbitration register
-  while preserving channel-enable bits
-- T31 builds on both the vendor 3.10 kernel and the mainline Linux 7.1
-  compatibility path
-- common interpolation/fixed-point primitives are used by T10, T20, T21, T23, T30, T31, and T41
-- T30's pair/scaled/equidistant modulation and legacy Apical scalar math use
-  host-tested common primitives behind an SDK-compatible adapter
-- T23, T31, and T41 share one typed sensor-registry implementation
-- T31 and T41 share a configurable frame-boundary day/night state machine
-- T23 and T31 share ordered register-profile and bypass-mask primitives
-- T23 and T31 share validated ordered callback plans for tuning sequences
-- T23, T31, and T41 share checked proprietary tuning wire layouts, response
-  packers, and scalar-versus-pointer command descriptors
-- T23, T31, and T41 share overflow-checked NV12 stride, private aggregate-line,
-  UV-offset, and sizeimage calculation while retaining per-SoC alignment
-  policy
-- T23 and T31 share checked MDNS working/reference/UV/tiny-plane layout while
-  retaining their distinct allocation ABIs and register ownership
-- T23, T31, and T41 share checked NV12 DMA binding, including allocation
-  length, complete 32-bit address-range, and Y/UV plane validation before QBUF
-  reaches hardware
-- the private frame-channel and future public V4L2 adapters now share an
-  allocation-free queue core for buffer ownership, completion ordering,
-  sequence/timestamp metadata, errors, and deterministic STREAMOFF recovery
-- T23, T30, T31, and T41 share the proven frame-channel event namespace and exact
-  legacy-`V`/T41-`T` private ioctl envelopes without conflating the
-  generation-specific events above buffer completion; the common contract
-  also owns the fixed 20-byte request-buffer wire object and legacy stream
-  command IDs
-- T23, T30, T31, T40, and T41 share checked 32-bit pad and active-link offsets,
-  including the event callback slot used for remote frame-channel dispatch
-- T31 applies evidence-backed SC2336 day/night DMSC correction profiles
-- T10, T20, T21, T23, T30, T40, and T41 link recovered cores with logical shared-library
-  adapter objects
-- reverse-engineered architecture and tuning docs now exist in-tree
+## Better than the vendor driver
 
-### Still incomplete
+- Reload and stop: 10 stop/start and rmmod/insmod cycles without an oops on T20/T21/T23/T31/T41 (T10: 5 cycles).
+- T20/T10 give back about 8 MB RAM (unused 8 MiB V4L2 frame pool off by default); on a T20 the open stack measured 10.5 % streamer CPU against 25.2 % with the vendor stack, snapshots 0.20 s against 0.45 s.
+- Smaller modules than the vendor on T21, T23 and T31.
+- Checked inputs (all user copies, QBUF window, bounded waits), sensor module pinned while streaming.
+- T21 controls and noise reduction act (the vendor ignores them), T10/T20 noise-reduction strength acts.
+- Shortfall logging with a concrete parameter value when reserved memory is too small.
 
-- T10 has not yet passed a device load, stock-`libimp.so`, OpenIMP, IRQ/DMA,
-  image-quality, or unload gate
-- the T31/SC301IOT daylight result is not a claim of universal OEM parity
-- the current T20 result covers one T20X camera, its stock sensor module,
-  linear daylight mode, and bounded smoke cycles; night/IR, WDR, additional
-  sensors, and long-duration stability remain to be validated
-- night/IR, WDR, extreme exposure, and additional sensor combinations still
-  need comparable OEM-versus-open validation
-- some tuning tables on other sensors and SoCs remain synthetic or only
-  partially reconstructed
-- several ISP blocks still need broader parity testing or better OEM-derived
-  calibration data
-- OpenIMP streaming quality, rate control, and long-duration stability need a
-  wider device matrix even though the current T31 path is functional
-
-If you want the detailed status and finish plan, start with `docs/IMAGE_TUNING_PRD.md`.
-
-## Key Documentation
-
-- [`docs/T31_ISP_ARCHITECTURE.md`](docs/T31_ISP_ARCHITECTURE.md) — current hardware / driver architecture notes
-- [`docs/ISP_SOC_ALGORITHM_VARIANCE.md`](docs/ISP_SOC_ALGORITHM_VARIANCE.md) — proven T23/T30/T31/T40/T41 algorithm differences, hardware boundaries, and unification hypotheses; T20/T21 source recoveries remain outside the device-proven matrices
-- [`driver/t10/README.md`](driver/t10/README.md) — T10 provenance, T10/T20 reuse boundary, binary audit, and pending hardware gate
-- [`driver/t20/README.md`](driver/t20/README.md) — T20 recovery provenance, source partition, binary audit, and hardware-validation boundary
-- [`driver/t21/COMPARATIVE_ANALYSIS.md`](driver/t21/COMPARATIVE_ANALYSIS.md) — stock T21/T23/T31 overlap, extraction decisions, and next repair queue
-- [`docs/DRIVER_REUSE_PLAN.md`](docs/DRIVER_REUSE_PLAN.md) — cross-SoC commonality map and staged reuse plan
-- [`docs/SHARED_DRIVER_LIBRARY.md`](docs/SHARED_DRIVER_LIBRARY.md) — landed shared interfaces, adapters, invariants, and device matrix
-- [`driver/t31/README.md`](driver/t31/README.md) — T31 file ownership, validated SC2336 state, tuning ABI, and known gaps
-- [`docs/IMAGE_TUNING_PRD.md`](docs/IMAGE_TUNING_PRD.md) — plan for finishing image tuning and remaining work
-- [`docs/ISP_PERFORMANCE_BENCHMARK.md`](docs/ISP_PERFORMANCE_BENCHMARK.md) — reproducible on-device CPU, memory, throughput, IRQ, and module-size baseline
-- [`docs/T41_OPEN_PERFORMANCE_BASELINE_20260806.md`](docs/T41_OPEN_PERFORMANCE_BASELINE_20260806.md) — first 2.5K open-stack T41 baseline and configured-versus-delivered FPS finding
-- [`docs/V4L2_CAPTURE_PATH.md`](docs/V4L2_CAPTURE_PATH.md) — additive V4L2 capture architecture, landed queue core, and adapter phases
-- [`driver/t31/REGMAP_ADR_YDNS.md`](driver/t31/REGMAP_ADR_YDNS.md) — ADR / YDNS register-map notes
-- [`driver/t31/TX_ISP_VIDEO_S_STREAM_VERIFIED.md`](driver/t31/TX_ISP_VIDEO_S_STREAM_VERIFIED.md) — stream-control verification notes
-
-## Repository Layout
-
-| Path | Purpose |
-|---|---|
-| `driver/` | Per-SoC open-source ISP kernel-driver implementations |
-| `driver/include/tx_isp/` | Reviewed cross-SoC interfaces and primitives |
-| `driver/common/` | Shared kernel implementation with explicit SoC adapters |
-| `driver/t10/` | T10 build wrappers, provenance, and complete binary audit over the shared T10/T20 implementation |
-| `driver/t20/` | T20 recovered whole-driver baseline, SDK partition, shared adapters, and binary audit |
-| `driver/t21/` | T21 recovered whole-driver baseline, math adapter, and binary audit |
-| `driver/t23/` | T23 recovered driver and tuning data |
-| `driver/t30/` | T30 recovered whole-driver baseline and binary audits |
-| `driver/t31/` | T31 ISP kernel-driver implementation |
-| `driver/t31/include/` | T31-local headers and data structures |
-| `driver/t40/` | T40 recovered driver, shared-library adapters, and tuning data |
-| `driver/t41/` | T41 recovered driver and tuning data |
-| `external/ingenic-sdk/` | Sensor and SDK reference material |
-| `docs/` | High-level project documentation and planning |
-| `OEM-tx-isp-t31.ko` | OEM reference kernel module |
-
-Important driver files:
-
-- `driver/common/tx_isp_sinfo.c` — shared sensor registry and procfs lifecycle
-- `driver/common/tx_isp_daynight.c` — configurable day/night transition shell
-- `driver/common/tx_isp_callback_plan.c` — validated ordered callback execution
-- `driver/common/tx_isp_reg_profile.c` — ordered register profiles and bypass-mask merge
-- `driver/common/tx_isp_tuning_abi.c` — checked libimp envelopes, reply packers, and command descriptors
-- `driver/common/tx_isp_frame_layout.c` — checked NV12 and T23/T31 MDNS geometry
-- `driver/common/tx_isp_subdev.c` — checked graph endpoint resolution and
-  generation-neutral pad-link validation, initialization, and connection
-- `driver/common/tx_isp_remote_event.c` — checked pad-to-remote-handler route
-  resolution shared by the recovered T23, T40, and T41 dispatchers
-- `driver/common/tx_isp_state.c` — value-level recovered subdevice readiness
-  policy with generation-local field adapters
-- `driver/include/tx_isp/tx_isp_math.h` — shared fixed-point/interpolation primitives
-- `driver/include/tx_isp/tx_isp_modulation.h` — shared Apical pair and equidistant modulation primitives
-- `driver/include/tx_isp/tx_isp_sinfo.h` — typed registry configuration and lifecycle interface
-- `driver/include/tx_isp/tx_isp_subdev.h` — graph wire records, resolver
-  interface, and shared link-state operations
-- `driver/include/tx_isp/tx_isp_remote_event.h` — remote-event adapter,
-  resolved-target, and failure-status contract
-- `driver/include/tx_isp/tx_isp_state.h` — layout-independent subdevice state
-  evaluation interface
-- `driver/include/tx_isp/tx_isp_tuning_abi.h` — generation-aware proprietary control wire ABI
-- `driver/include/tx_isp/tx_isp_frame_abi.h` — exact 32-bit frame-buffer wire layout and generation-aware state flags
-- `driver/include/tx_isp/tx_isp_frame_channel.h` — shared frame-channel event IDs, generation-qualified ioctl envelopes, and ioctl decoders
-- `driver/include/tx_isp/tx_isp_frame_format.h` — compiler-independent 112/116-byte frame-image format ABI
-- `driver/include/tx_isp/tx_isp_frame_layout.h` — alignment-parametric NV12 and MDNS layout interface
-- `driver/t10/` — T10 module wrappers that compile the reviewed shared
-  T10/T20 implementation under the T10 kernel configuration
-- `driver/t20/tx_isp_t20_firmware.c`, `sdk/`, and adapter objects — T20 whole-driver recovery baseline with reviewed, locally owned SDK-derived replacements and shared sensor/math facilities
-- `driver/t21/tx_isp_t21_recovered.c` and `tx_isp_t21_math.c` — T21 whole-driver recovery baseline with stock-backed shared math entry points
-- `driver/t23/tx_isp_t23_core.c` and adapter objects — T23 recovered core with shared math, registry, and register-profile facilities
-- `driver/t30/tx_isp_t30_recovered.c` and adapter objects — T30 whole-driver
-  recovery baseline with shared math, frame ABI, registry, and subdevice facilities
-- `driver/t31/tx_isp_module.c` — module init/exit, platform resources, shared register helpers
-- `driver/t31/tx_isp_core.c` — core probe, memory mappings, ISR path, first-frame logic
-- `driver/t31/tx_isp_tuning.c` — tuning subsystem, per-block init, parameter handling, image pipeline control
-- `driver/t31/tx_isp_csi.c` / `driver/t31/tx_isp_vic.c` / `driver/t31/tx_isp_vin.c` / `driver/t31/tx_isp_fs.c` — CSI/VIC/VIN/frame-source subdevices
-- `driver/t40/tx_isp_t40_recovered.c` and adapter objects — T40 recovered core
-  with shared subdevice graph, remote-event, link-state, and readiness policy
-- `driver/t41/tx_isp_t41_recovered.c` and adapter objects — T41 recovered core with shared day/night, math, and registry facilities
-
-## Project Goals
-
-1. Replace the proprietary TX-ISP kernel drivers on supported T10/T20/T21/T23/T30/T31/T40/T41 devices
-2. Preserve compatibility with Ingenic's `libimp.so`
-3. Support a fully open kernel-and-userspace path with OpenIMP
-4. Match OEM register sequencing and control behavior closely
-5. Recover or reconstruct enough OEM tuning content for acceptable image quality
-6. Document the hardware and bring-up process so the work is maintainable
-
-## Requirements
-
-- **Active target SoCs:** Ingenic T10, T20, T21, T23, T30, T31, T40, and T41
-- **Kernel focus:** Linux 3.10.14 vendor trees (T10/T20/T21/T23/T30/T31), Linux 4.4.94
-  vendor trees (T40/T41), and the active T31 mainline compatibility path
-- **Userspace ABI targets:** Ingenic `libimp.so` and OpenIMP
-- **Sensor support model:** OEM-style sensor drivers and compatible sensor integrations from the Ingenic SDK ecosystem
+Details and streamer integration notes:
+[OPENIMP_BEYOND_VENDOR](https://github.com/opensensor/openimp/blob/aperto/docs/OPENIMP_BEYOND_VENDOR.md).
 
 ## Build
 
-The local build helper selects a per-SoC driver with `SOC`:
+Out-of-tree kernel modules, built against a Thingino buildroot output (toolchain and vendor
+kernel tree, Linux 3.10.14 for T10-T31, 4.4.94 for T40/T41). The helper picks the SoC with `SOC`:
 
-```bash
-SOC=t10 ./build_local.sh
-SOC=t20 ./build_local.sh
-SOC=t21 ./build_local.sh
-SOC=t23 ./build_local.sh
-SOC=t30 ./build_local.sh
-SOC=t31 ./build_local.sh
-SOC=t40 ./build_local.sh
-SOC=t41 ./build_local.sh
+```sh
+SOC=t31 ./build_local.sh          # t10 t20 t21 t23 t30 t31 t40 t41
+TH=/path/to/thingino-firmware SOC=t23 ./build_local.sh
 ```
 
-`ROOT`, `KDIR`, and `CROSS` can be supplied for the matching vendor kernel and
-toolchain. See the comments in `build_local.sh` for details.
+`TH`, `ROOT`, `KDIR`, `CROSS` and `ARCH` can be overridden (see the comments in `build_local.sh`).
+It builds `driver/<soc>/` into `tx-isp-<soc>.ko` plus the diagnostic `driver/tx_isp_trace.ko`; when no
+module for the SoC was built locally the result is a compile baseline only. The T20 driver expects the
+`external/ingenic-sdk` submodule (`git submodule update --init`). Host tests for kernel-independent
+primitives: `make -C tests check`.
 
-Host-side tests for shared, kernel-independent primitives run with:
+## Integration in Thingino
 
-```bash
-make -C tests check
-```
+The packages `open-tx-isp` (this driver) and `openimp` (userspace) are in the upstream
+[thingino-firmware](https://github.com/themactep/thingino-firmware) branch `aperto`
+([#1756](https://github.com/themactep/thingino-firmware/pull/1756)), selected with
+`BR2_PACKAGE_THINGINO_ISP_OPEN` (menu "ISP stack") and pinned by commit SHA to the `aperto` branches
+of the opensensor repositories. The module is installed as `tx-isp-<soc>.ko` and replaces the proprietary one;
+SDK sensor, audio and AVPU modules stay. The kernel VPU/rmem stability patches
+([#1748](https://github.com/themactep/thingino-firmware/pull/1748),
+[#1752](https://github.com/themactep/thingino-firmware/pull/1752)) are merged there. The optional
+boot guard `BR2_PACKAGE_THINGINO_ISP_GUARD` ([#1749](https://github.com/themactep/thingino-firmware/pull/1749),
+default off; `isp_open=auto|manual|off`) skips the ISP/sensor modules after an unstable load so a bad
+driver cannot boot-loop the camera. Once the first date tag exists on `aperto`, thingino's `aperto` branch will pin that tag instead of a SHA.
 
-## Reverse-Engineering Workflow
+## Branches and releases
 
-The project works best when changes are driven by evidence, not guesswork.
+- `main`: the original author's line (opensensor). It is left untouched and is a strict ancestor of `aperto`.
+- `aperto`: the open stack release line: OpenIMP + open-tx-isp, as used by the thingino `aperto` branch. Fast-forward only; every commit was flashed and checked on cameras. Releases are tagged `vYYYY.MM.DD` on this branch, and thingino pins a tag instead of a SHA.
+- Development and the device-test campaign happen in the [Lu-Fi forks](https://github.com/Lu-Fi/open-tx-isp) (branch `next` = integration, `claude/<topic>` = topic branches); tested work reaches `aperto` from `next` after a clean soak.
+- Companion repository: [opensensor/openimp](https://github.com/opensensor/openimp) (branch `aperto`). Both repositories are released together; use matching tags.
 
-Recommended workflow:
+## Documentation
 
-1. identify the relevant open-source code path in `driver/`
-2. compare against the OEM binary behavior
-3. confirm `libimp.so` expectations when ioctl or struct ABI is involved
-4. make the smallest safe parity change
-5. validate with logs, images, and targeted diffs
+- [Wiki](https://github.com/opensensor/openimp/wiki) (one wiki for both repositories): module parameters, memory (rmem, ispmem, MMAP pool), troubleshooting, install and boot guard, release scheme.
+- [`docs/T31_ISP_ARCHITECTURE.md`](docs/T31_ISP_ARCHITECTURE.md): hardware and driver architecture
+- [`docs/ISP_SOC_ALGORITHM_VARIANCE.md`](docs/ISP_SOC_ALGORITHM_VARIANCE.md): algorithm differences between SoCs
+- [`docs/DRIVER_REUSE_PLAN.md`](docs/DRIVER_REUSE_PLAN.md), [`docs/SHARED_DRIVER_LIBRARY.md`](docs/SHARED_DRIVER_LIBRARY.md): shared code
+- [`docs/IMAGE_TUNING_PRD.md`](docs/IMAGE_TUNING_PRD.md): image tuning plan
+- [`docs/ISP_PERFORMANCE_BENCHMARK.md`](docs/ISP_PERFORMANCE_BENCHMARK.md): on-device CPU/memory baseline
+- [`docs/V4L2_CAPTURE_PATH.md`](docs/V4L2_CAPTURE_PATH.md): V4L2 capture architecture
+- [`docs/INTERRUPT_DEBUG_GUIDE.md`](docs/INTERRUPT_DEBUG_GUIDE.md): interrupt debugging
+- [`docs/re/`](docs/re): reverse-engineering dumps (T31 vendor module HLIL)
+- Per SoC: `driver/t10/README.md`, `driver/t20/README.md`, `driver/t21/README.md` (+ `COMPARATIVE_ANALYSIS.md`), `driver/t23/README.md`, `driver/t30/README.md`, `driver/t31/README.md`, `driver/t40/README.md`, `driver/t41/README.md`
 
-The new architecture and PRD docs capture the current high-level understanding so this work can continue systematically instead of rediscovering the same facts.
+Layout: `driver/<soc>/` per-SoC driver, `driver/common/` and `driver/include/tx_isp/` shared code and
+interfaces, `docs/` notes, `tests/` host tests and oracle checks, `tools/` on-device probes and generators,
+`sensor-src/` sensor sources used by the T10/T20 builds.
 
-## What Makes This Hard
+## Reporting problems
 
-This project is solving several problems at once:
-
-- hardware bring-up and clock/reset ordering
-- platform/subdevice modeling
-- reverse-engineering OEM register sequences
-- reproducing runtime tuning behavior
-- recovering missing calibration/tuning tables
-
-Even when streaming works, image quality can still be wrong if one of the following is off:
-
-- CFA/demosaic phase
-- block enable/bypass state
-- LUT programming path
-- tuning table contents
-- day/night or WDR bank selection
-
-## Limitations
-
-Current limitations are mostly in **coverage and repeatable parity across
-sensors, modes, and lighting**, not basic driver existence. The T31/SC301IOT
-daylight checkpoint above is the first full-open path to reach near-OEM image
-quality.
-
-Known classes of remaining work include:
-
-- remaining color/exposure differences under difficult mixed and backlit light
-- OEM-calibrated table recovery for additional sensors and denoise/WDR banks
-- mode-complete validation for day/night, IR, WDR, and sensor flip combinations
-- long-duration full-open streaming and encoder-quality validation across the
-  supported SoCs
+Open an issue at [opensensor/open-tx-isp](https://github.com/opensensor/open-tx-isp/issues) (kernel driver, ISP, memory) or [opensensor/openimp](https://github.com/opensensor/openimp/issues) when unsure. Please include the SoC and sensor, the revisions of open-tx-isp, OpenIMP and the streamer, `dmesg` (including any shortfall line such as `set ispmem >= N KB`), the streamer log, the stream set and the `rmem`/`ispmem` values. Do not post addresses, credentials or location names. Details: [Troubleshooting](https://github.com/opensensor/openimp/wiki/Troubleshooting#reporting-a-problem).
 
 ## Contributing
 
-Contributions are welcome, especially when they are grounded in one of these:
-
-- OEM binary analysis
-- `libimp.so` ABI validation
-- concrete hardware validation logs/captures
-- recovery of tuning/calibration data
-- improvements to documentation and reproducibility
-
-If you are making behavioral changes, please document:
-
-- what OEM evidence supports the change
-- which files/functions were updated
-- how the change was validated
-- any remaining uncertainty
+Contributions are welcome when grounded in OEM binary analysis, `libimp` ABI validation, hardware
+logs or captures, tuning/calibration recovery or documentation. For behavioural changes state the OEM
+evidence, the files changed, how it was validated and what remains uncertain.
 
 ## Acknowledgments
 
-Thanks to the work and prior art from the broader Ingenic / Thingino / Wyze reverse-engineering community, especially:
-
-- [thingino-firmware](https://github.com/themactep/thingino-firmware)
-- [ingenic-sdk](https://github.com/themactep/ingenic-sdk)
-- [OpenIMP](https://github.com/opensensor/openimp)
+Prior art from the Ingenic / Thingino reverse-engineering community, especially
+[thingino-firmware](https://github.com/themactep/thingino-firmware),
+[ingenic-sdk](https://github.com/themactep/ingenic-sdk) and
+[OpenIMP](https://github.com/opensensor/openimp), and the upstream
+[opensensor/open-tx-isp](https://github.com/opensensor/open-tx-isp).
 
 ## License
 
 This project is licensed under the GNU General Public License (GPLv3).
+
+---
+
+<sub>Not affiliated with or endorsed by Ingenic Semiconductor. "Ingenic" is used only to name the SoCs this project supports.</sub>
