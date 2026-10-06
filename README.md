@@ -53,7 +53,7 @@ State on `aperto` (2026-10-04). "Fully open" = open driver, OpenIMP and streamer
 
 Per feature and SoC:
 [FEATURE_MATRIX](https://github.com/opensensor/openimp/blob/aperto/docs/FEATURE_MATRIX.md).
-History: [CHANGELOG.md](CHANGELOG.md).
+History: [CHANGELOG.md](../../blob/aperto/CHANGELOG.md).
 
 ## Better than the vendor driver
 
@@ -107,14 +107,14 @@ driver cannot boot-loop the camera. Once the first date tag exists on `aperto`, 
 ## Documentation
 
 - [Wiki](https://github.com/opensensor/openimp/wiki) (one wiki for both repositories): module parameters, memory (rmem, ispmem, MMAP pool), troubleshooting, install and boot guard, release scheme.
-- [`docs/T31_ISP_ARCHITECTURE.md`](docs/T31_ISP_ARCHITECTURE.md): hardware and driver architecture
-- [`docs/ISP_SOC_ALGORITHM_VARIANCE.md`](docs/ISP_SOC_ALGORITHM_VARIANCE.md): algorithm differences between SoCs
-- [`docs/DRIVER_REUSE_PLAN.md`](docs/DRIVER_REUSE_PLAN.md), [`docs/SHARED_DRIVER_LIBRARY.md`](docs/SHARED_DRIVER_LIBRARY.md): shared code
-- [`docs/IMAGE_TUNING_PRD.md`](docs/IMAGE_TUNING_PRD.md): image tuning plan
-- [`docs/ISP_PERFORMANCE_BENCHMARK.md`](docs/ISP_PERFORMANCE_BENCHMARK.md): on-device CPU/memory baseline
-- [`docs/V4L2_CAPTURE_PATH.md`](docs/V4L2_CAPTURE_PATH.md): V4L2 capture architecture
-- [`docs/INTERRUPT_DEBUG_GUIDE.md`](docs/INTERRUPT_DEBUG_GUIDE.md): interrupt debugging
-- [`docs/re/`](docs/re): reverse-engineering dumps (T31 vendor module HLIL)
+- [`docs/T31_ISP_ARCHITECTURE.md`](../../blob/aperto/docs/T31_ISP_ARCHITECTURE.md): hardware and driver architecture
+- [`docs/ISP_SOC_ALGORITHM_VARIANCE.md`](../../blob/aperto/docs/ISP_SOC_ALGORITHM_VARIANCE.md): algorithm differences between SoCs
+- [`docs/DRIVER_REUSE_PLAN.md`](../../blob/aperto/docs/DRIVER_REUSE_PLAN.md), [`docs/SHARED_DRIVER_LIBRARY.md`](../../blob/aperto/docs/SHARED_DRIVER_LIBRARY.md): shared code
+- [`docs/IMAGE_TUNING_PRD.md`](../../blob/aperto/docs/IMAGE_TUNING_PRD.md): image tuning plan
+- [`docs/ISP_PERFORMANCE_BENCHMARK.md`](../../blob/aperto/docs/ISP_PERFORMANCE_BENCHMARK.md): on-device CPU/memory baseline
+- [`docs/V4L2_CAPTURE_PATH.md`](../../blob/aperto/docs/V4L2_CAPTURE_PATH.md): V4L2 capture architecture
+- [`docs/INTERRUPT_DEBUG_GUIDE.md`](../../blob/aperto/docs/INTERRUPT_DEBUG_GUIDE.md): interrupt debugging
+- [`docs/re/`](../../blob/aperto/docs/re): reverse-engineering dumps (T31 vendor module HLIL)
 - Per SoC: `driver/t10/README.md`, `driver/t20/README.md`, `driver/t21/README.md` (+ `COMPARATIVE_ANALYSIS.md`), `driver/t23/README.md`, `driver/t30/README.md`, `driver/t31/README.md`, `driver/t40/README.md`, `driver/t41/README.md`
 
 Layout: `driver/<soc>/` per-SoC driver, `driver/common/` and `driver/include/tx_isp/` shared code and
