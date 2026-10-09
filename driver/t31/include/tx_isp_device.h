@@ -297,9 +297,23 @@ struct tx_isp_subdev_pad_ops {
 	int (*streamoff)(struct tx_isp_subdev *sd, void *data);
 };
 
+/*
+ * tx_isp_irq_device sits *inside* the OEM ABI window of tx_isp_subdev (the
+ * `irqdev` member lives between `module` and `chip`), so its size must not
+ * depend on the kernel config.  On the vendor 3.10 UP build sizeof(spinlock_t)
+ * is 0, so the struct was {irq, enable_irq, disable_irq} = 0xc bytes and
+ * tx_isp_subdev.dev_priv landed at 0xd4 (TX_ISP_ABI_LEGACY_SUBDEV_PRIVATE0).
+ * A real spinlock_t is 4 bytes on SMP/modern kernels (e.g. mainline 7.1), which
+ * would push every raw OEM slot in tx_isp_subdev / tx_isp_csi_device by +4 and
+ * fire tx_isp_csi_layout_check().  Per upstream's own rule (see the comment on
+ * struct tx_isp_csi_device) config-dependent locks live *behind* the OEM area,
+ * never in-window.  The T31 IRQ path never takes this lock (it was a 0-size
+ * vestige of the vendor struct), so it is simply dropped here — removing a
+ * 0-size member is a no-op on the legacy ABI and restores the 0xc/0xd4 layout
+ * on modern kernels.  A future user that needs an IRQ lock must add it to the
+ * enclosing struct after host_priv, like tx_isp_csi_device::lock.
+ */
 struct tx_isp_irq_device {
-	spinlock_t slock;
-	/*struct mutex mlock;*/
 	int irq;
 	void (*enable_irq)(struct tx_isp_irq_device *irq_dev);
 	void (*disable_irq)(struct tx_isp_irq_device *irq_dev);
@@ -332,6 +346,34 @@ struct tx_isp_descriptor {
 
 
 /*
+ * OEM stand-in for the miscdevice node embedded at tx_isp_module +0x0c.
+ *
+ * The stock SDK reserves a 0x24-byte struct miscdevice there (its size on the
+ * vendor 3.10 kernel).  A mainline struct miscdevice is 0x28 bytes — it gained
+ * a ->groups pointer — and embedding it by value would push ops/debug_ops/
+ * submods/notify, and ultimately tx_isp_subdev.dev_priv, by +4, firing
+ * tx_isp_csi_layout_check() (dev_priv must stay at 0xd4).  Per upstream's own
+ * rule for the csi struct ("members whose size depends on the kernel config
+ * live behind the OEM area"), a config-dependent-size kernel struct must not
+ * sit inside the OEM window.  The T31 driver never registers this embedded
+ * node (it uses the standalone tx_isp_miscdev and the per-fs/per-channel misc
+ * devices); the only reader is tx_isp_t31_subdev_resolver.c, which treats
+ * ->name as an always-NULL fallback after module.name.  So mirror the vendor
+ * 3.10 miscdevice layout exactly (0x24 bytes, ->name at +0x04) with a stable
+ * stand-in; a real miscdevice, if ever needed, must live behind the OEM area.
+ */
+struct tx_isp_oem_miscdev {
+	int				minor;		/* +0x00 */
+	const char			*name;		/* +0x04 (read by the subdev resolver) */
+	const struct file_operations	*fops;		/* +0x08 */
+	void				*list[2];	/* +0x0c: list_head */
+	void				*parent;	/* +0x14 */
+	void				*this_device;	/* +0x18 */
+	const char			*nodename;	/* +0x1c */
+	unsigned short			mode;		/* +0x20 (pads to 0x24) */
+};
+
+/*
  * tx_isp_module - MUST match stock SDK layout exactly.
  * Stock offset reference (from BN decompilation):
  *   submods[] array at offset after debug_ops, 16 pointers = 64 bytes
@@ -340,7 +382,7 @@ struct tx_isp_module {
 	struct tx_isp_descriptor desc;
 	struct device *dev;
 	const char *name;
-	struct miscdevice miscdev;
+	struct tx_isp_oem_miscdev miscdev;	/* vendor-sized stand-in; see note above */
 	const struct file_operations *ops;
 	const struct file_operations *debug_ops;
 	struct tx_isp_module *submods[TX_ISP_ENTITY_ENUM_MAX_DEPTH];
