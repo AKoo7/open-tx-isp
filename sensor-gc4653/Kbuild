@@ -1,0 +1,6 @@
+ccflags-y += -DMODULE -mlong-calls
+ccflags-y += -I/home/a/thingino/thingino-firmware/output/master/vanhua_djz_t31n_gc4653_k44-4.4.94-uclibc/build/ingenic-sdk-ff16c633c3fb81b24e8b0d7549773ec5232be469/4.4.94/isp/t31/include -I/home/a/thingino/thingino-firmware/output/master/vanhua_djz_t31n_gc4653_k44-4.4.94-uclibc/build/ingenic-sdk-ff16c633c3fb81b24e8b0d7549773ec5232be469/4.4.94/sensor-src/include
+ccflags-y += -I/home/a/vanhua-t31n-camera/openisp/isp/driver/t31/compat -include /home/a/vanhua-t31n-camera/openisp/isp/sensor-gc4653/isp612_compat_sensor.h
+ccflags-y += -Wno-error=incompatible-pointer-types -Wno-error=strict-prototypes -Wno-error=implicit-function-declaration -Wno-error=int-conversion -Wno-error=implicit-int
+obj-m := sensor_gc4653_t31.o
+sensor_gc4653_t31-objs := gc4653.o sensor-info.o
