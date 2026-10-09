@@ -53,12 +53,11 @@ static int tx_isp_proc_w00_open(struct inode *inode, struct file *file)
     return single_open(file, tx_isp_proc_w00_show, PDE_DATA(inode));
 }
 
-static const struct file_operations tx_isp_proc_w00_fops = {
-    .owner = THIS_MODULE,
-    .open = tx_isp_proc_w00_open,
-    .read = seq_read,
-    .llseek = seq_lseek,
-    .release = single_release,
+static const struct proc_ops tx_isp_proc_w00_fops = {
+    .proc_open = tx_isp_proc_w00_open,
+    .proc_read = seq_read,
+    .proc_lseek = seq_lseek,
+    .proc_release = single_release,
 };
 
 /* ISP-W01 file operations - matches reference driver behavior */
@@ -116,13 +115,12 @@ static int tx_isp_proc_w01_open(struct inode *inode, struct file *file)
     return single_open(file, tx_isp_proc_w01_show, PDE_DATA(inode));
 }
 
-static const struct file_operations tx_isp_proc_w01_fops = {
-    .owner = THIS_MODULE,
-    .open = tx_isp_proc_w01_open,
-    .read = seq_read,
-    .write = tx_isp_proc_w01_write,
-    .llseek = seq_lseek,
-    .release = single_release,
+static const struct proc_ops tx_isp_proc_w01_fops = {
+    .proc_open = tx_isp_proc_w01_open,
+    .proc_read = seq_read,
+    .proc_write = tx_isp_proc_w01_write,
+    .proc_lseek = seq_lseek,
+    .proc_release = single_release,
 };
 
 /* ISP-W02 file operations - CRITICAL: Match reference driver output format */
@@ -204,13 +202,12 @@ static int tx_isp_proc_w02_open(struct inode *inode, struct file *file)
     return single_open(file, tx_isp_proc_w02_show, PDE_DATA(inode));
 }
 
-static const struct file_operations tx_isp_proc_w02_fops = {
-    .owner = THIS_MODULE,
-    .open = tx_isp_proc_w02_open,
-    .read = seq_read,
-    .write = tx_isp_proc_w02_write,
-    .llseek = seq_lseek,
-    .release = single_release,
+static const struct proc_ops tx_isp_proc_w02_fops = {
+    .proc_open = tx_isp_proc_w02_open,
+    .proc_read = seq_read,
+    .proc_write = tx_isp_proc_w02_write,
+    .proc_lseek = seq_lseek,
+    .proc_release = single_release,
 };
 
 /* VIC-MDMA proc file: dumps stride/control and first slot Y/UV bases */
@@ -282,12 +279,11 @@ static int tx_isp_proc_vic_mdma_open(struct inode *inode, struct file *file)
     return single_open(file, tx_isp_proc_vic_mdma_show, PDE_DATA(inode));
 }
 
-static const struct file_operations tx_isp_proc_vic_mdma_fops = {
-    .owner = THIS_MODULE,
-    .open = tx_isp_proc_vic_mdma_open,
-    .read = seq_read,
-    .llseek = seq_lseek,
-    .release = single_release,
+static const struct proc_ops tx_isp_proc_vic_mdma_fops = {
+    .proc_open = tx_isp_proc_vic_mdma_open,
+    .proc_read = seq_read,
+    .proc_lseek = seq_lseek,
+    .proc_release = single_release,
 };
 
 
@@ -357,13 +353,12 @@ static int tx_isp_proc_fs_open(struct inode *inode, struct file *file)
     return single_open(file, tx_isp_proc_fs_show, PDE_DATA(inode));
 }
 
-static const struct file_operations tx_isp_proc_fs_fops = {
-    .owner = THIS_MODULE,
-    .open = tx_isp_proc_fs_open,
-    .read = seq_read,
-    .write = tx_isp_proc_fs_write,
-    .llseek = seq_lseek,
-    .release = single_release,
+static const struct proc_ops tx_isp_proc_fs_fops = {
+    .proc_open = tx_isp_proc_fs_open,
+    .proc_read = seq_read,
+    .proc_write = tx_isp_proc_fs_write,
+    .proc_lseek = seq_lseek,
+    .proc_release = single_release,
 };
 
 /* ISP-M0 file operations - CRITICAL MISSING PIECE */
@@ -418,13 +413,12 @@ static int tx_isp_proc_m0_open(struct inode *inode, struct file *file)
     return single_open(file, tx_isp_proc_m0_show, PDE_DATA(inode));
 }
 
-static const struct file_operations tx_isp_proc_m0_fops = {
-    .owner = THIS_MODULE,
-    .open = tx_isp_proc_m0_open,
-    .read = seq_read,
-    .write = tx_isp_proc_m0_write,
-    .llseek = seq_lseek,
-    .release = single_release,
+static const struct proc_ops tx_isp_proc_m0_fops = {
+    .proc_open = tx_isp_proc_m0_open,
+    .proc_read = seq_read,
+    .proc_write = tx_isp_proc_m0_write,
+    .proc_lseek = seq_lseek,
+    .proc_release = single_release,
 };
 
 /* CSI file operations */
@@ -439,12 +433,11 @@ static int tx_isp_proc_csi_open(struct inode *inode, struct file *file)
     return single_open(file, tx_isp_proc_csi_show, PDE_DATA(inode));
 }
 
-static const struct file_operations tx_isp_proc_csi_fops = {
-    .owner = THIS_MODULE,
-    .open = tx_isp_proc_csi_open,
-    .read = seq_read,
-    .llseek = seq_lseek,
-    .release = single_release,
+static const struct proc_ops tx_isp_proc_csi_fops = {
+    .proc_open = tx_isp_proc_csi_open,
+    .proc_read = seq_read,
+    .proc_lseek = seq_lseek,
+    .proc_release = single_release,
 };
 
 /* Clock tracking file operations */
@@ -524,12 +517,11 @@ static int tx_isp_proc_clks_open(struct inode *inode, struct file *file)
     return single_open(file, tx_isp_proc_clks_show, PDE_DATA(inode));
 }
 
-static const struct file_operations tx_isp_proc_clks_fops = {
-    .owner = THIS_MODULE,
-    .open = tx_isp_proc_clks_open,
-    .read = seq_read,
-    .llseek = seq_lseek,
-    .release = single_release,
+static const struct proc_ops tx_isp_proc_clks_fops = {
+    .proc_open = tx_isp_proc_clks_open,
+    .proc_read = seq_read,
+    .proc_lseek = seq_lseek,
+    .proc_release = single_release,
 };
 
 /* VIC file operations */
@@ -544,12 +536,11 @@ static int tx_isp_proc_vic_open(struct inode *inode, struct file *file)
     return single_open(file, tx_isp_proc_vic_show, PDE_DATA(inode));
 }
 
-static const struct file_operations tx_isp_proc_vic_fops = {
-    .owner = THIS_MODULE,
-    .open = tx_isp_proc_vic_open,
-    .read = seq_read,
-    .llseek = seq_lseek,
-    .release = single_release,
+static const struct proc_ops tx_isp_proc_vic_fops = {
+    .proc_open = tx_isp_proc_vic_open,
+    .proc_read = seq_read,
+    .proc_lseek = seq_lseek,
+    .proc_release = single_release,
 };
 
 /* Global proc context */
@@ -615,8 +606,15 @@ int tx_isp_create_proc_entries(struct tx_isp_dev *isp)
     ctx->isp = isp;
     tx_isp_proc_ctx = ctx;
 
-    /* Create /proc/jz/isp directory - we always create this one */
-    ctx->isp_dir = proc_mkdir(TX_ISP_PROC_ISP_DIR, NULL);
+    /* Create /proc/jz/isp directory. 6.12's proc_mkdir rejects slash-containing
+     * names ("jz/isp" -> __xlate_proc_name WARN -> NULL), unlike 3.10 which created
+     * the nested path. Create "jz" then "isp" under it (get-or-create for "jz"
+     * since the sensor driver may make it too). */
+    {
+        bool _c;
+        struct proc_dir_entry *jz_dir = get_or_create_proc_dir("jz", NULL, &_c);
+        ctx->isp_dir = jz_dir ? get_or_create_proc_dir("isp", jz_dir, &_c) : NULL;
+    }
     if (!ctx->isp_dir) {
         pr_err("Failed to create /proc/%s\n", TX_ISP_PROC_ISP_DIR);
         goto error_free_ctx;
@@ -645,7 +643,7 @@ int tx_isp_create_proc_entries(struct tx_isp_dev *isp)
      * the VIC subdev dynamically from isp->vic_dev at access time, since
      * VIC is probed AFTER this proc entry is created. */
     {
-        extern const struct file_operations isp_vic_frd_fops_wrapper;
+        extern const struct proc_ops isp_vic_frd_fops_wrapper;
         ctx->isp_w02_entry = proc_create_data(TX_ISP_PROC_VIC_FILE, 0644, ctx->isp_dir,
                                              &isp_vic_frd_fops_wrapper, isp);
     }
