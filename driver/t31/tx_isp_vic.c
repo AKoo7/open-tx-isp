@@ -425,6 +425,7 @@ static int ispvic_frame_channel_qbuf(void *arg1, void *arg2);
 static int ispvic_frame_channel_clearbuf(void);
 static void vic_pipo_mdma_enable(struct tx_isp_vic_device *vic_dev);
 static void vic_bind_event_dispatch_table(struct tx_isp_vic_device *vic_dev);
+int tx_isp_subdev_pipo(struct tx_isp_subdev *sd, void *arg);  /* fwd: forced pipo-init from REQBUFS */
 
 /* This function creates and links the VIC device structure to the ISP core */
 int tx_isp_create_vic_device(struct tx_isp_dev *isp_dev)
@@ -1146,7 +1147,7 @@ int vic_saveraw(struct tx_isp_subdev *sd, unsigned int savenum)
             continue;
         }
 
-        ret = vfs_write(fp, capture_buf + (i * frame_size), frame_size, &pos);
+        ret = kernel_write(fp, capture_buf + (i * frame_size), frame_size, &pos);
         if (ret != frame_size) {
             pr_err("Failed to write frame %d\n", i);
         }
@@ -1314,7 +1315,7 @@ int vic_snapraw(struct tx_isp_subdev *sd, unsigned int savenum)
             continue;
         }
 
-        ret = vfs_write(fp, capture_buf + (i * frame_size), frame_size, &pos);
+        ret = kernel_write(fp, capture_buf + (i * frame_size), frame_size, &pos);
         if (ret != frame_size) {
             pr_err("Failed to write frame %d\n", i);
     /* Now append a one-line summary (after sampling so stats are valid) */
@@ -1326,7 +1327,7 @@ int vic_snapraw(struct tx_isp_subdev *sd, unsigned int savenum)
             len = snprintf(line, sizeof(line),
                 "dims=%ux%u (reg=0x%08x) stride_used=%u stride_reg=%u frame_size=%u sample(n=%zu sum=%u min=%u max=%u)\n",
                 width, height, dims_reg, stride_used, stride_reg, frame_size, sample_n, sample_sum, sample_min, sample_max);
-            vfs_write(lfp, line, len, &lpos);
+            kernel_write(lfp, line, len, &lpos);
             filp_close(lfp, NULL);
         }
         set_fs(old_fs);
@@ -1358,9 +1359,9 @@ int vic_snapraw(struct tx_isp_subdev *sd, unsigned int savenum)
                 if (sum2 || mx2) {
                     /* Overwrite preview with primary-bank data */
                     struct file *fp2 = filp_open("/tmp/vic_frame_0_pri.raw", O_WRONLY | O_CREAT | O_TRUNC, 0644);
-                    if (!IS_ERR(fp2)) { loff_t p = 0; vfs_write(fp2, capture_buf, frame_size, &p); filp_close(fp2, NULL); }
+                    if (!IS_ERR(fp2)) { loff_t p = 0; kernel_write(fp2, capture_buf, frame_size, &p); filp_close(fp2, NULL); }
                     fp2 = filp_open("/tmp/snap0.raw", O_WRONLY | O_CREAT | O_TRUNC, 0644);
-                    if (!IS_ERR(fp2)) { loff_t p = 0; vfs_write(fp2, capture_buf, frame_size, &p); filp_close(fp2, NULL); }
+                    if (!IS_ERR(fp2)) { loff_t p = 0; kernel_write(fp2, capture_buf, frame_size, &p); filp_close(fp2, NULL); }
                     pr_info("vic_snapraw: primary VIC snapshot produced non-zero data (sum=%u max=%u)\n", sum2, mx2);
                 } else {
                     pr_warn("vic_snapraw: primary VIC snapshot also zero data\n");
@@ -1379,7 +1380,7 @@ int vic_snapraw(struct tx_isp_subdev *sd, unsigned int savenum)
             struct file *fp2 = filp_open("/tmp/snap0.raw", O_WRONLY | O_CREAT | O_TRUNC, 0644);
             if (!IS_ERR(fp2)) {
                 loff_t pos2 = 0;
-                vfs_write(fp2, capture_buf, frame_size, &pos2);
+                kernel_write(fp2, capture_buf, frame_size, &pos2);
                 filp_close(fp2, NULL);
             }
         }
@@ -1460,7 +1461,7 @@ int vic_snapnv12(struct tx_isp_subdev *sd, unsigned int savenum)
         snprintf(filename, sizeof(filename), "/tmp/vic_frame_%d_nv12.yuv", i);
         fp = filp_open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (IS_ERR(fp)) continue;
-        vfs_write(fp, capture_buf + (i * frame_size), frame_size, &pos);
+        kernel_write(fp, capture_buf + (i * frame_size), frame_size, &pos);
         filp_close(fp, NULL); pos = 0;
     }
     set_fs(old_fs);
@@ -1474,7 +1475,7 @@ int vic_snapnv12(struct tx_isp_subdev *sd, unsigned int savenum)
             len = snprintf(line, sizeof(line),
               "NV12 dims=%ux%u stride=%u (reg=%u) total_lines=%u frame_size=%u\n",
               width, height, stride, stride_reg, total_lines, frame_size);
-            vfs_write(lfp, line, len, &lpos); filp_close(lfp, NULL);
+            kernel_write(lfp, line, len, &lpos); filp_close(lfp, NULL);
         }
         set_fs(old_fs);
     } while (0);
@@ -1558,10 +1559,55 @@ int tx_isp_vic_start(struct tx_isp_vic_device *vic_dev)
     if (!sensor_attr)
         return -EINVAL;
 
+    /* 2026-06-28 FIX: the VIC's local sensor_attr copy is incomplete — mipi_sc.sensor_csi_fmt
+     * and mipi.image_twidth come through as 0, so vic_start used bpp=8 (RAW8) and a stale
+     * 1920 width, mis-sizing reg 0x100/0x4 and the VIC never locked a frame (isp-m0 IRQ=0).
+     * The GC4653's real attr (RAW10, 2560x1440, full mipi_sc) lives on the global sensor;
+     * prefer it whenever the local copy is missing the MIPI sizing fields. */
+    if (ourISPdev && ourISPdev->sensor && ourISPdev->sensor->video.attr &&
+        ourISPdev->sensor->video.attr->mipi.image_twidth &&
+        !sensor_attr->mipi.image_twidth) {
+        pr_info("tx_isp_vic_start: using global sensor attr (local copy incomplete: csi_fmt=%u tw=%u)\n",
+                sensor_attr->mipi.mipi_sc.sensor_csi_fmt, sensor_attr->mipi.image_twidth);
+        sensor_attr = ourISPdev->sensor->video.attr;
+    }
+
     interface_type = sensor_attr->dbus_type;
+
+    /* 6.12 (2026-06-27): the synced sensor_attr sometimes carries dbus_type=0 (the
+     * MIPI interface type didn't propagate from the gc4653 attr to the VIC). The
+     * gc4653 is always MIPI 2-lane, so default to MIPI when unset, and report which
+     * attr is stale. */
+    if (interface_type != TX_SENSOR_DATA_INTERFACE_MIPI) {
+        pr_warn("tx_isp_vic_start: dbus_type=%d (ptr=%p->%d emb=%p->%d) — forcing MIPI\n",
+                interface_type, vic_dev->sensor_attr_ptr,
+                vic_dev->sensor_attr_ptr ? vic_dev->sensor_attr_ptr->dbus_type : -1,
+                &vic_dev->sensor_attr, vic_dev->sensor_attr.dbus_type);
+        interface_type = TX_SENSOR_DATA_INTERFACE_MIPI;
+    }
 
     actual_width = vic_raw_width_get(vic_dev);
     actual_height = vic_raw_height_get(vic_dev);
+
+    /* 2026-06-28 FIX: the VIC input geometry MUST equal the sensor's native output
+     * (GC4653 = 2560x1440). vic_dev->width (vic_raw_width_get) was seeded 1920x1080 at
+     * create time and never updated, so the VIC programmed reg 0x4 to expect 1920x1080
+     * frames while the sensor sends 2560x1440 -> the VIC frame never completes and isp-m0
+     * (IRQ 29) stays 0. The whole ISP/tisp/buffer chain is already 2560x1440. Use the
+     * authoritative synced dimensions (ourISPdev->sensor_width/height); fall back to the
+     * VIC attr's image_twidth. */
+    if (ourISPdev && ourISPdev->sensor_width >= 1280 && ourISPdev->sensor_height >= 720) {
+        actual_width  = ourISPdev->sensor_width;
+        actual_height = ourISPdev->sensor_height;
+        vic_raw_dims_set(vic_dev, actual_width, actual_height);
+    } else if (sensor_attr->mipi.image_twidth && sensor_attr->mipi.image_theight) {
+        actual_width  = sensor_attr->mipi.image_twidth;
+        actual_height = sensor_attr->mipi.image_theight;
+        vic_raw_dims_set(vic_dev, actual_width, actual_height);
+    }
+    pr_info("tx_isp_vic_start: GEOMETRY %ux%u (isp_sw=%u img_tw=%u vic_raw=%u)\n",
+            actual_width, actual_height, ourISPdev ? ourISPdev->sensor_width : 0,
+            sensor_attr->mipi.image_twidth, vic_raw_width_get(vic_dev));
 
     vic_regs = vic_stream_regs_resolve(vic_dev);
     if (!vic_regs)
@@ -2126,6 +2172,17 @@ int vic_core_ops_ioctl(struct tx_isp_subdev *sd, unsigned int cmd, void *arg)
             vic_dev->active_buffer_count = 0;
             pr_info("*** vic_core_ops_ioctl: Channel 0 - buffer_count=%u active_buffer_count reset to %u ***\n",
                     vic_dev->buffer_count, vic_dev->active_buffer_count);
+
+            /* FIX (T31N+GC4653/raptor): the libimp/raptor path never sends the
+             * 0x3000009 pipo-init event, so free_head (MDMA bank pool) and the
+             * raw_pipe_global delivery callbacks are never set up. QBUF then
+             * bails "bank no free", DMA bank addrs (0x318+) stay 0, no frame-done
+             * IRQ fires -> no frames. Force pipo-init here if it hasn't run. */
+            if (list_empty(&vic_dev->free_head)) {
+                static void *forced_pipe[8];
+                pr_info("*** FIX: free_head empty (no 0x3000009) -> forcing tx_isp_subdev_pipo ***\n");
+                tx_isp_subdev_pipo(sd, forced_pipe);
+            }
         } else {
             pr_info("*** vic_core_ops_ioctl: Channel %d - VIC active_buffer_count unchanged (%d) ***\n",
                     channel_id, vic_dev->active_buffer_count);
@@ -2347,6 +2404,15 @@ ssize_t isp_vic_cmd_set(struct file *file, const char __user *buf,
 	if (sd && (unsigned long)sd < 0xfffff001)
 		vic_dev = (struct tx_isp_vic_device *)tx_isp_get_subdevdata(sd);
 
+	/* FIX (T31N/raptor): the VIC subdev's subdevdata is never populated on this
+	 * port, so get_subdevdata() returns NULL and snapraw bails.  The streaming
+	 * path uses ourISPdev->vic_dev directly, which is valid — fall back to it. */
+	if ((!vic_dev || (unsigned long)vic_dev >= 0xfffff001) &&
+	    ourISPdev && ourISPdev->vic_dev) {
+		vic_dev = ourISPdev->vic_dev;
+		sd = &vic_dev->sd;
+	}
+
 	pr_info("isp_vic_cmd_set: count=%zu sd=%p vic_dev=%p\n", count, sd, vic_dev);
 
 	if (!vic_dev || (unsigned long)vic_dev >= 0xfffff001) {
@@ -2524,7 +2590,7 @@ ssize_t isp_vic_cmd_set(struct file *file, const char __user *buf,
 					 "/tmp/snap%d.%s", i, ext);
 				fp = filp_open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0666);
 				if (!IS_ERR(fp)) {
-					vfs_write(fp,
+					kernel_write(fp,
 						  (char *)vic_dev->capture_buf_virt + offset,
 						  frame_size, &fpos);
 					filp_close(fp, NULL);
@@ -2569,6 +2635,81 @@ ssize_t isp_vic_cmd_set(struct file *file, const char __user *buf,
 		vic_dev->capture_buf_virt = NULL;
 		vic_dev->capture_buf_size = 0;
 
+	} else if (strncmp(cmdbuf, "rawdiag", 7) == 0) {
+		/* --- RAWDIAG: decisive raw-Bayer per-cell measurement ---
+		 * Captures a 120-line STRIP of raw Bayer via the real VIC MDMA snapshot
+		 * (vic_mdma_enable fmt=0 = pre-ISP/pre-demosaic tap), then computes the
+		 * mean of each 2x2 Bayer cell IN-KERNEL.  Shrinks vic_dev->height for the
+		 * capture so a tiny __get_free_pages buffer suffices (no 4MB OOM, no rmem
+		 * contention).  For GRBG (reg8=1): cell(0,0)=Gr (0,1)=R (1,0)=B (1,1)=Gb.
+		 * Splits "red killed at capture (raw R~0)" from "demosaic kill (raw R~G~B)". */
+		/* Capture the FULL raw frame into channel-0's existing rmem buffer
+		 * (last_done_phys) — known-good, contiguous, big enough. Read back the
+		 * MIDDLE of the frame in-kernel via KSEG0 (skip embedded top lines). */
+		u32 width   = vic_dev->width  ? vic_dev->width  : 1920;
+		u32 height  = vic_dev->height ? vic_dev->height : 1080;
+		u32 stride  = width << 1;               /* RAW: 2 bytes/pixel */
+		u32 cap_lines = (height * 3) / 4;
+		u32 tgt = 0x2900000;                    /* fixed FREE low-rmem scratch */
+		bool was_proc = vic_dev->processing;
+		u32 saved_h = vic_dev->height;
+		long ret;
+
+		/* zero the scratch first (KSEG1) so unwritten lines read as 0 */
+		{ volatile u32 *z=(volatile u32*)(unsigned long)(tgt|0xa0000000);
+		  u32 i, words=(stride*cap_lines)>>2; for(i=0;i<words;i++) z[i]=0; }
+		vic_dev->height = cap_lines;
+		vic_dev->processing = 0;
+		wmb();
+		INIT_COMPLETION(vic_dev->frame_complete);
+		vic_mdma_enable(vic_dev, 0, 0, 1, tgt, 0 /*fmt=raw*/);
+		ret = wait_for_completion_timeout(&vic_dev->frame_complete,
+						  msecs_to_jiffies(250));
+		msleep(150);
+		vic_dev->height = saved_h;
+		vic_dev->processing = was_proc;
+		wmb();
+		if (was_proc && vic_dev->stream_state)
+			ispvic_frame_channel_s_stream(vic_dev, 1);
+
+		{
+			/* KSEG1 (uncached) view of the rmem capture buffer */
+			const volatile u16 *p = (const volatile u16 *)
+				(unsigned long)(tgt | 0xa0000000);
+			u32 px = stride >> 1;
+			u32 c00=0,c01=0,c10=0,c11=0, n=0;
+			u32 y, x, populated=0, firstline=0, lastline=0;
+			for (y=0; y<cap_lines; y++) {
+				u32 s=0; const volatile u16 *r = p + y*px;
+				for (x=0; x<width; x+=32) s += r[x] & 0x3ff;
+				if (s) { if(!populated)firstline=y; populated++; lastline=y; }
+			}
+			/* sample a 200-line strip from the middle of the captured region */
+			{
+				u32 y0 = cap_lines/2 & ~1u;
+				u32 y1 = y0 + 200; if (y1 > cap_lines) y1 = cap_lines;
+				for (y=y0; y+1 < y1; y+=2) {
+					const volatile u16 *r0 = p + y*px;
+					const volatile u16 *r1 = p + (y+1)*px;
+					for (x=0; x+1 < width; x+=2) {
+						c00 += r0[x]   & 0x3ff;
+						c01 += r0[x+1] & 0x3ff;
+						c10 += r1[x]   & 0x3ff;
+						c11 += r1[x+1] & 0x3ff;
+						n++;
+					}
+				}
+			}
+			pr_info("RAWDIAG: reg8=%u tgt=0x%x w=%u caplines=%u populated=%u first=%u last=%u to=%ld  Gr/c00=%u R/c01=%u B/c10=%u Gb/c11=%u\n",
+				system_reg_read(8), tgt, width, cap_lines, populated, firstline, lastline, ret,
+				n?c00/n:0, n?c01/n:0, n?c10/n:0, n?c11/n:0);
+			{ u32 yy=cap_lines/2 & ~1u; const volatile u16 *r=p+yy*px;
+			pr_info("RAWDIAG midline: %04x %04x %04x %04x %04x %04x %04x %04x %04x %04x %04x %04x\n",
+				r[0],r[1],r[2],r[3],r[4],r[5],r[6],r[7],r[8],r[9],r[10],r[11]); }
+			if (seq) seq_printf(seq, "RAWDIAG Gr=%u R=%u B=%u Gb=%u pop=%u\n",
+				n?c00/n:0, n?c01/n:0, n?c10/n:0, n?c11/n:0, populated);
+		}
+
 	} else if (strncmp(cmdbuf, "saveraw", 7) == 0) {
 		/* --- SAVERAW: save latest frame from streaming pipeline --- */
 		/* During streaming, the MSCA continuously writes NV12 frames to
@@ -2605,7 +2746,7 @@ ssize_t isp_vic_cmd_set(struct file *file, const char __user *buf,
 
 			fp = filp_open("/tmp/snap0.raw", O_WRONLY | O_CREAT | O_TRUNC, 0666);
 			if (!IS_ERR(fp)) {
-				vfs_write(fp, (char *)virt, frame_size, &fpos);
+				kernel_write(fp, (char *)virt, frame_size, &fpos);
 				filp_close(fp, NULL);
 				pr_info("saveraw: saved /tmp/snap0.raw (%u bytes)\n", frame_size);
 			} else {
@@ -2887,14 +3028,14 @@ static int vic_pad_event_handler(void *priv, unsigned int cmd, void *data)
         return -EINVAL;
     }
 
-    pr_debug("*** VIC EVENT CALLBACK: cmd=0x%x, data=%p, vic_dev=%p ***\n",
+    pr_info("*** VIC EVENT CALLBACK: cmd=0x%x, data=%p, vic_dev=%p ***\n",
             cmd, data, vic_dev);
 
     switch (cmd) {
         case 0x3000003: {
             /* atomic_inc_return returns value AFTER increment */
             int newval = atomic_inc_return(&vic_dev->stream_refcount);
-            pr_debug("*** VIC EVENT: STREAM_START (0x3000003) refcount→%d ***\n",
+            pr_info("*** VIC EVENT: STREAM_START (0x3000003) refcount=%d ***\n",
                     newval);
             /* Only enable VIC MDMA on the FIRST channel to start streaming.
              * Subsequent channels share the already-running MDMA pipeline. */
@@ -2994,6 +3135,11 @@ int vic_core_s_stream(struct tx_isp_subdev *sd, int enable)
         tx_vic_disable_irq(vic_dev);
         ret = tx_isp_vic_start(vic_dev);
         vic_dev->state = 4;
+        /* 2026-06-27: the streaming datapath is CSI->VIC(RUN)->ISP->0x7820->IRQ29 (the
+         * working 4.4 blob keeps VIC MDMA 0x300/0x308 = 0 while streaming). Do NOT enable
+         * the VIC MDMA here — that is the snapraw path, and turning it on with no DMA banks
+         * stalls the VIC. (Reverted an earlier MDMA-enable attempt that diverged from the
+         * 4.4 reference.) */
         tx_vic_enable_irq(vic_dev);
         return ret;
     }
@@ -3085,13 +3231,15 @@ static ssize_t isp_vic_cmd_set_wrapper(struct file *file, const char __user *buf
     return isp_vic_cmd_set(file, buf, count, ppos);
 }
 
-const struct file_operations isp_vic_frd_fops_wrapper = {
-    .owner = THIS_MODULE,
-    .llseek = seq_lseek,
-    .read = seq_read,
-    .write = isp_vic_cmd_set_wrapper,
-    .open = dump_isp_vic_frd_open_wrapper,
-    .release = single_release,
+/* 6.12: proc_create requires struct proc_ops, not file_operations (different layout —
+ * the mismatch leaves proc_open NULL so the seq_file is never set up and seq_read derefs
+ * a NULL ppos → kernel Oops when the tuning daemon reads /proc/jz/isp/isp-w02). */
+const struct proc_ops isp_vic_frd_fops_wrapper = {
+    .proc_lseek = seq_lseek,
+    .proc_read = seq_read,
+    .proc_write = isp_vic_cmd_set_wrapper,
+    .proc_open = dump_isp_vic_frd_open_wrapper,
+    .proc_release = single_release,
 };
 
 /* VIC W02 proc file operations - FIXED for proper proc interface */
@@ -3189,7 +3337,12 @@ int tx_isp_vic_probe(struct platform_device *pdev)
         pr_err("Failed to init isp module(%d.%d)\n",
                res ? MAJOR(res->start) : 0,
                res ? MINOR(res->start) : 0);
-        kfree(vic_dev);
+        /* DO NOT kfree(vic_dev) here: it is BORROWED from ourISPdev->vic_dev (3180-82),
+         * not allocated by this probe. kfree-ing it left ourISPdev->vic_dev DANGLING;
+         * a later miscdevice kzalloc reused the slab and ispcore_sync_sensor_attr's
+         * 248-byte sensor_attr memcpy then wrote through the stale pointer into the
+         * misc node -> misc_list corruption -> intermittent misc_open crash.
+         * (Was: kfree(vic_dev); — the misc_list-corruptor UAF, fixed 2026-06-27.) */
         return -EFAULT;  /* Binary returns -12 (EFAULT) */
     }
 
@@ -3571,7 +3724,7 @@ EXPORT_SYMBOL(tx_isp_subdev_pipo);
 /* VIC platform driver structure - CRITICAL MISSING PIECE */
 static struct platform_driver tx_isp_vic_platform_driver = {
     .probe = tx_isp_vic_probe,
-    .remove = tx_isp_vic_remove,
+    .remove = (void (*)(struct platform_device *))tx_isp_vic_remove,
     .driver = {
         .name = "tx-isp-vic",
         .owner = THIS_MODULE,

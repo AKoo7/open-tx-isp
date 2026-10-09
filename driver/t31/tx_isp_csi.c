@@ -624,10 +624,21 @@ static struct tx_isp_sensor_attribute **csi_sensor_attr_slot(struct tx_isp_csi_d
 
 static struct tx_isp_sensor_attribute *csi_get_cached_sensor_attr(struct tx_isp_csi_device *csi_dev)
 {
+    struct tx_isp_sensor_attribute *attr;
+
     if (!csi_dev)
         return NULL;
 
-    return *csi_sensor_attr_slot(csi_dev);
+    attr = *csi_sensor_attr_slot(csi_dev);
+    if (!attr && ourISPdev && ourISPdev->sensor && ourISPdev->sensor->video.attr) {
+        /* 2026-06-27 FIX: the CSI-local attr cache was never populated (csi_core_ops_init
+         * reported "sensor cache unavailable"), even though the sensor is attached with
+         * dbus=1/lanes=2. Fall back to the globally-attached sensor's attr so the CSI
+         * DPHY/lane init can proceed. */
+        attr = ourISPdev->sensor->video.attr;
+        *csi_sensor_attr_slot(csi_dev) = attr;
+    }
+    return attr;
 }
 
 /* CSI video streaming control - FIXED: MIPS memory alignment */
@@ -668,6 +679,17 @@ int csi_video_s_stream(struct tx_isp_subdev *sd, int enable)
             pr_info("csi_video_s_stream: derived interface_type=%d from CSI cache\n",
                     interface_type);
         }
+        if (interface_type == 0) {
+            /* 2026-06-27 FIX: GC4653 is a 2-lane MIPI sensor. The sensor attr's
+             * dbus_type didn't propagate to the CSI cache (interface_type stayed 0),
+             * so the CSI bailed here, never advanced to state 4, and csi_core_ops_init
+             * skipped the DPHY/lane init -> CSI regs stay 0 -> no MIPI reaches the VIC
+             * -> no frame ever completes. Default to MIPI (same root as the VIC
+             * interface_type default). */
+            interface_type = 1;
+            csi_dev->interface_type = 1;
+            pr_info("csi_video_s_stream: defaulting interface_type to MIPI(1)\n");
+        }
         if (interface_type != 1) {
             pr_info("csi_video_s_stream: Interface type %d != 1 (MIPI), returning 0\n", interface_type);
             return 0;
@@ -679,7 +701,16 @@ int csi_video_s_stream(struct tx_isp_subdev *sd, int enable)
 
     pr_info("csi_video_s_stream: EXACT Binary Ninja MCP - CSI state set to %d (enable=%d)\n", state, enable);
 
-    /* Binary Ninja: return 0 */
+    /* 2026-06-27/28 FIX: configure the CSI DPHY/lanes here, after state=4 (the OEM's
+     * 0x200000c trigger fires during sensor init, before state>=2, so it always skipped).
+     * 2026-06-28: configure EXACTLY ONCE. csi_video_s_stream(1) is invoked multiple times
+     * in the stream-on path; the first csi_core_ops_init brings the DPHY up correctly
+     * (basic[0x04]=0xE3 — matches the working 4.4 blob), but a second consecutive re-config
+     * COLLAPSES the running DPHY back to 0x01 -> no MIPI -> ISP never completes a frame.
+     * The "configure exactly once" guard lives inside csi_core_ops_init (csi_dev->
+     * hw_configured) so ALL callers (here AND the sensor 0x200000c ioctl) respect it. */
+    csi_core_ops_init(sd, enable);
+
     return 0;
 }
 
@@ -884,6 +915,16 @@ int csi_core_ops_init(struct tx_isp_subdev *sd, int enable)
     pr_info("csi_core_ops_init: sd=%p enable=%d state=%u csi_regs=%p\n",
             sd, enable, csi_raw_state_get(csi_dev), csi_dev->csi_regs);
 
+    /* 2026-06-28: bring the CSI DPHY up EXACTLY ONCE. csi_core_ops_init is invoked by
+     * multiple callers (csi_video_s_stream AND the sensor 0x200000c ioctl), several times
+     * during stream-on. The first run brings the DPHY up correctly (basic[0x04]=0xE3, the
+     * working 4.4 value); a second run on the already-running PHY collapses it back to 0x01
+     * -> no MIPI -> the ISP never completes a frame (isp-m0 IRQ stays 0). Skip re-config. */
+    if (enable && csi_dev->hw_configured) {
+        pr_info("csi_core_ops_init: DPHY already configured (skip re-init)\n");
+        return 0;
+    }
+
     if (csi_raw_state_get(csi_dev) < 2) {
         pr_info("csi_core_ops_init: state %u < 2, skipping hardware init\n",
                 csi_raw_state_get(csi_dev));
@@ -892,15 +933,29 @@ int csi_core_ops_init(struct tx_isp_subdev *sd, int enable)
 
     csi_regs = csi_dev->csi_regs;
     if (!csi_regs) {
+        /* 2026-06-27 FIX: the CSI subdev's sd->base wasn't propagated to
+         * csi_dev->csi_regs (stayed NULL). Fall back to the ISP-global CSI mapping
+         * (0x10022000) so the DPHY/lane init can run. */
+        if (ourISPdev && ourISPdev->csi_regs)
+            csi_regs = ourISPdev->csi_regs;
+        else
+            csi_regs = ioremap(0x10022000, 0x1000);
+        csi_dev->csi_regs = csi_regs;
+        pr_info("csi_core_ops_init: csi_regs was NULL, fell back to %p\n", csi_regs);
+    }
+    if (!csi_regs) {
         pr_err("csi_core_ops_init: csi_regs is NULL\n");
         return -EINVAL;
     }
 
     if (enable == 0) {
-        isp_printf(0, "csi is close!\n");
-        writel(readl(csi_regs + 0x08) & 0xfffffffe, csi_regs + 0x08);
-        writel(readl(csi_regs + 0x0c) & 0xfffffffe, csi_regs + 0x0c);
-        writel(readl(csi_regs + 0x10) & 0xfffffffe, csi_regs + 0x10);
+        /* 2026-06-28: do NOT tear down the DPHY on stream-off. The T31 MIPI DPHY only
+         * brings up cleanly ONCE from a power-on-clean state — the first csi_core_ops_init
+         * settles basic[0x04]=0xE3 (the working 4.4 value), but closing it here (clearing
+         * 0x08/0x0c/0x10) and re-opening on the next stream-on collapses the PHY to 0x01,
+         * so the ISP never receives valid frames (isp-m0 IRQ stays 0). Keep the DPHY up for
+         * the device lifetime; just drop the logical state. (rvd toggles stream off/on.) */
+        isp_printf(0, "csi close: keeping DPHY up (no teardown)\n");
         csi_raw_state_set(csi_dev, 2);
         return 0;
     }
@@ -912,6 +967,8 @@ int csi_core_ops_init(struct tx_isp_subdev *sd, int enable)
     }
 
     interface_type = sensor_attr->dbus_type;
+    if (interface_type == 0)
+        interface_type = 1;  /* GC4653 MIPI default (attr dbus_type may not be populated) */
     csi_dev->interface_type = interface_type;
 
     isp_csi_regs = csi_get_wrapper_regs(csi_dev);
@@ -981,8 +1038,11 @@ int csi_core_ops_init(struct tx_isp_subdev *sd, int enable)
         /* OEM writes 0x7d and lane mask to wrapper regs, always 0x3f */
         writel(0x7d, isp_csi_regs + 0x00);
         writel(0x3f, isp_csi_regs + 0x128);
-        /* OEM only writes csi_regs+0x10, NOT vic 0x10 */
-        writel(1, csi_regs + 0x10);
+        /* OEM only writes csi_regs+0x10, NOT vic 0x10.
+         * 2026-06-28: write 0xFA (the working 4.4 blob's csi_regs[0x10]) instead of 1.
+         * 0x04/0x0c already settle to the blob values (0xE3/0x83); writing 1 to 0x10 left
+         * the data-lane reset/enable half-configured (0x01) so the ISP got no valid frames. */
+        writel(0xFA, csi_regs + 0x10);
 
         private_msleep(10);
         pr_info("csi_core_ops_init: MIPI init programmed lanes=%u rate_sel=%d (adaptive=%d) basic[0x00]=0x%08x basic[0x04]=0x%08x basic[0x0c]=0x%08x basic[0x10]=0x%08x basic[0x128]=0x%08x lanec[0x200]=0x%08x lanec[0x204]=0x%08x lanec[0x210]=0x%08x lanec[0x230]=0x%08x lanec[0x250]=0x%08x lanec[0x254]=0x%08x lanec[0x2f4]=0x%08x slot13c[0x00]=0x%08x slot13c[0x0c]=0x%08x w01[0x14]=0x%08x w01[0x40]=0x%08x slot13c[0x128]=0x%08x\n",
@@ -1017,7 +1077,10 @@ int csi_core_ops_init(struct tx_isp_subdev *sd, int enable)
     }
 
     csi_raw_state_set(csi_dev, v0_17);
-    pr_info("csi_core_ops_init: complete, new state=%u\n", csi_raw_state_get(csi_dev));
+    if (enable)
+        csi_dev->hw_configured = 1;   /* DPHY is up; do not re-init until a disable */
+    pr_info("csi_core_ops_init: complete, new state=%u hw_configured=%d\n",
+            csi_raw_state_get(csi_dev), csi_dev->hw_configured);
     return 0;
 }
 
@@ -1301,7 +1364,7 @@ static void csi_write_file(const char *buf, size_t len)
 #if defined(HAVE_KERNEL_WRITE)
     kernel_write(filp, buf, len, &filp->f_pos);
 #else
-    vfs_write(filp, buf, len, &pos);
+    kernel_write(filp, buf, len, &pos);
 #endif
     set_fs(old_fs);
 
