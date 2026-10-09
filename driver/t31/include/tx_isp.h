@@ -94,6 +94,9 @@ struct tx_isp_csi_device {
     struct clk *clk;
     struct mutex mutex;       // Synchronization
     spinlock_t lock;         // Protect register access
+    struct tx_isp_sensor_attribute *attr_cache;  // sensor-attr cache (was raw +0x110, which gcc15/6.12 places inside device_name[])
+    int hw_configured;        // 1 once the CSI DPHY is up; re-running the DPHY init on an
+                              // already-running PHY collapses it (0x04 0xE3->0x01) -> config once.
 };
 
 /* Core ISP device structure */

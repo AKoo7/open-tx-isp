@@ -10,7 +10,9 @@
 #include <linux/platform_device.h>
 #include <linux/miscdevice.h>
 #include <linux/of.h>
+#include <linux/irqdomain.h>   /* INTC irqdomain mapping for the ISP/VIC hwirqs (6.12) */
 #include <linux/interrupt.h>
+#include <linux/irq.h>         /* irq_get_irq_data / irqd_irq_disabled — drain VIC IRQ depth */
 #include <linux/i2c.h>
 #include <linux/clk.h>
 #include <linux/vmalloc.h>
@@ -21,6 +23,7 @@
 #include <media/v4l2-ctrls.h>
 #include <linux/dma-mapping.h>
 #include <linux/slab.h>
+#include <linux/fs.h>          /* filp_open/kernel_read — read libimp's /tmp/alloc_manager_info VB map (Bug B) */
 
 #include <linux/ktime.h>
 #include <linux/version.h>
@@ -67,6 +70,8 @@ struct sensor_ops_storage {
 };
 static struct sensor_ops_storage stored_sensor_ops;
 
+#include "isp_fixup_regs.h"
+
 /* Deferred sensor I2C write — runs in workqueue context (process context, no locks) */
 static void sensor_expo_work_func(struct work_struct *work);
 DECLARE_WORK(sensor_expo_work, sensor_expo_work_func);
@@ -86,6 +91,22 @@ static void sensor_expo_work_func(struct work_struct *work)
         again = ourISPdev->sensor->attr.again;
         it = ourISPdev->sensor->attr.integration_time;
 
+        /* Bug A fix — driver-side AE override.  The open tisp_ae pins again/it at minimum (its
+         * statistics mis-read the well-lit scene), so the image is ~3x too dark vs the 4.4 blob.
+         * Slew the sensor again LUT index + fix the integration time from a closed loop on the
+         * ACTUAL output luma (g_dae_out_luma, sampled in ispcore_irq_fs_work).  Tunable via
+         * /sys/module/tx_isp_t31/parameters/dae_*. */
+        {
+            extern int dae_enable, dae_target, dae_expo, dae_gain_idx, dae_idx_max, g_dae_out_luma;
+            if (dae_enable) {
+                int err = dae_target - g_dae_out_luma;   /* +ve => too dark => raise gain index */
+                if (err > 12 && dae_gain_idx < dae_idx_max) dae_gain_idx++;
+                else if (err < -12 && dae_gain_idx > 0)    dae_gain_idx--;
+                again = (unsigned int)dae_gain_idx;
+                it = (unsigned int)dae_expo;
+            }
+        }
+
         /* The sensor driver's set_again iterates its own LUT with
          * bounds checking against sensor_attr.max_again — no need
          * to clamp here.  The LUT size is sensor-specific (e.g.,
@@ -97,6 +118,12 @@ static void sensor_expo_work_func(struct work_struct *work)
         }
 
         {
+            /* Write exposure/gain EVERY frame (no skip-if-unchanged).  The bit-banged i2c-gpio is
+             * flaky: a single write of the gain LUT lands only PARTIALLY (regs end up a mix of
+             * indices -> effective analog gain stuck ~9x low).  Re-writing every frame lets the
+             * partial writes self-correct so the full again index actually takes.  (The earlier
+             * "per-frame writes cause banding" theory was wrong — banding was unconfigured ISP
+             * processing blocks, fixed via isp_fixup_regs at stream start.) */
             int packed = ((int)again << 16) | ((int)it & 0xffff);
             pr_info_ratelimited("sensor_expo_work: again=%u it=%u packed=0x%08x\n", again, it, packed);
             ret = stored_sensor_ops.original_ops->sensor->ioctl(
@@ -105,6 +132,56 @@ static void sensor_expo_work_func(struct work_struct *work)
                 pr_err("sensor_expo_work: ioctl returned %d\n", ret);
         }
     }
+
+    /* Striping fix (applied here because this work item provably runs per-frame once streaming):
+     * the open tisp_init leaves the ISP-core processing blocks unconfigured (DPC/DMSC/denoise/
+     * gamma all-zero) and the enable-mask reg 0xc with stages off -> the MSCA scales a
+     * half-processed frame into horizontal banding + a center seam.  Write the 4.4-golden block
+     * values once the pipeline has settled, and keep the enable-mask asserted.  Proven: clean scene. */
+    {
+        extern void system_reg_write(u32 reg, u32 value);
+        extern int dae_reclobber;   /* red-kill bisect: 0 = stop re-clobbering so live devmem pokes stick */
+        static int fixup_calls = 0, fixup_done = 0;
+        if (++fixup_calls > 15) {
+            unsigned int k;
+            /* Re-assert every frame: the tisp refresh path re-zeroes some blocks (notably DMSC
+             * 0x4800, which flips the color base) after a one-shot write — rewriting keeps the
+             * pipeline stable. ~300 MMIO writes/frame is negligible. */
+            if (dae_reclobber || !fixup_done)
+                for (k = 0; k < ARRAY_SIZE(isp_fixup_regs); k++)
+                    system_reg_write(isp_fixup_regs[k].off, isp_fixup_regs[k].val);
+            if (!fixup_done) {
+                fixup_done = 1;
+                pr_info("isp_fixup: writing %u processing-block regs + enable/CCM/WB each frame\n",
+                        (unsigned)ARRAY_SIZE(isp_fixup_regs));
+            }
+        }
+        if (fixup_done) {
+            extern int dae_wb0, dae_wb1, dae_wb2, dae_wb3, dae_ccm, dae_bypass;
+            /* WB hardware reg format (from JZ_Isp_Awb_Awbg2reg): 0x04000000 | (gain_Q8 << 2).
+             * The high 0x04 is a fixed control field — must NOT be overwritten with the gain.
+             * 4 independent Bayer-cell gains so the green-dominant cast can be balanced. */
+            #define WBREG(g) (0x04000000u | (((u32)(g) & 0x3fff) << 2))
+            if (dae_reclobber) {
+            system_reg_write(0x0c, (u32)dae_bypass);   /* block-bypass; live-tunable via dae_bypass param */
+            if (dae_ccm) system_reg_write(0x5000, 1);
+            system_reg_write(0x1804, WBREG(dae_wb0));
+            system_reg_write(0x1808, WBREG(dae_wb1));
+            system_reg_write(0x180c, WBREG(dae_wb2));
+            system_reg_write(0x1810, WBREG(dae_wb3));
+            system_reg_write(0x1800, 1);
+            }
+            #undef WBREG
+        }
+        /* DIAG: periodically dump raw per-channel R/G/B from the AWB stats buffer. */
+        {
+            extern void tisp_diag_awb_raw(void);
+            static unsigned int rawdiag_n;
+            if ((rawdiag_n++ % 120) == 30)
+                tisp_diag_awb_raw();
+        }
+    }
+
     ourISPdev->sensor_update_pending = 0;
 }
 
@@ -197,6 +274,7 @@ struct registered_sensor {
 
 // Simple global device instance
 struct tx_isp_dev *ourISPdev = NULL;
+
 LIST_HEAD(sensor_list);
 DEFINE_MUTEX(sensor_list_mutex);
 int sensor_count = 0;
@@ -394,21 +472,17 @@ long subdev_sensor_ops_ioctl(struct tx_isp_subdev *sd, unsigned int cmd, void *a
             sensor_sd->ops->core->g_chip_ident) {
             ret = sensor_sd->ops->core->g_chip_ident(sensor_sd, &sensor_sd->chip);
             if (ret != 0) {
-                pr_err("g_chip_ident failed for %s: %d\n",
-                       sensor->info.name, ret);
-                /* Stock: cleanup - unregister i2c device on failure */
-                if (reg_info->cbus_type == TX_SENSOR_CONTROL_INTERFACE_I2C) {
-                    struct i2c_client *fail_client =
-                        (struct i2c_client *)tx_isp_get_subdevdata(sensor_sd);
-                    if (fail_client) {
-                        struct i2c_adapter *fail_adapter = fail_client->adapter;
-                        if (fail_adapter)
-                            i2c_put_adapter(fail_adapter);
-                        i2c_unregister_device(fail_client);
-                    }
-                }
-                tx_isp_subdev_deinit(sensor_sd);
-                return -ENODEV;
+                /* NON-FATAL DIAG 2026-06-27: the gc4653 chip-id read via g_chip_ident
+                 * is unreliable on the 6.12 port (MCLK is 26.67MHz, not the exact 27MHz
+                 * the 4.4 build forces via the vpll parent). The i2c probe already bound
+                 * the sensor (registered at slot 5). Do NOT unregister/deinit on a failed
+                 * ID read — keep the sensor so streaming bring-up can proceed and the next
+                 * blocker (s_stream/VIC) becomes visible. Revisit: force exact 27MHz MCLK. */
+                pr_warn("g_chip_ident returned %d for %s — NON-FATAL, keeping sensor registered\n",
+                        ret, sensor->info.name);
+                if (!sensor_sd->chip.name[0])
+                    strncpy(sensor_sd->chip.name, sensor->info.name,
+                            sizeof(sensor_sd->chip.name) - 1);
             }
         }
 
@@ -813,7 +887,7 @@ static int frame_channel_track_buffer(struct frame_channel_device *fcd,
     tracked->bytesused = buffer->bytesused;
     tracked->flags = buffer->flags;
     tracked->field = buffer->field;
-    tracked->timestamp = buffer->timestamp;
+    TS_COPY(tracked->timestamp, buffer->timestamp);
     tracked->sequence = buffer->sequence;
     tracked->memory = buffer->memory;
     tracked->length = buffer->length;
@@ -854,13 +928,13 @@ struct vic_event_callback {
  * the parent tx-isp wrapper device. */
 static struct resource tx_isp_resources[] = {
     [0] = {
-        .start = 37,                   /* T31 ISP IRQ 37 (isp-m0) - PRIMARY ISP PROCESSING */
-        .end   = 37,
+        .start = 29,                   /* T31 ISP IRQ 37 (isp-m0) - PRIMARY ISP PROCESSING */
+        .end   = 29,
         .flags = IORESOURCE_IRQ,
     },
     [1] = {
-        .start = 38,                   /* T31 ISP IRQ 38 (isp-w02) - SECONDARY ISP CHANNEL */
-        .end   = 38,
+        .start = 30,                   /* T31 ISP IRQ 38 (isp-w02) - SECONDARY ISP CHANNEL */
+        .end   = 30,
         .flags = IORESOURCE_IRQ,
     },
 };
@@ -881,8 +955,8 @@ static struct resource tx_isp_vic_resources[] = {
         .flags = IORESOURCE_MEM,
     },
     [1] = {
-        .start = 38,                   /* T31 VIC IRQ 38 - isp-w02 shared VIC line */
-        .end   = 38,
+        .start = 30,                   /* T31 VIC IRQ 38 - isp-w02 shared VIC line */
+        .end   = 30,
         .flags = IORESOURCE_IRQ,
     },
 };
@@ -927,8 +1001,8 @@ static struct resource tx_isp_csi_resources[] = {
         .flags = IORESOURCE_MEM,
     },
     [1] = {
-        .start = 38,                   /* T31 CSI IRQ 38 - MATCHES STOCK DRIVER isp-w02 */
-        .end   = 38,
+        .start = 30,                   /* T31 CSI IRQ 38 - MATCHES STOCK DRIVER isp-w02 */
+        .end   = 30,
         .flags = IORESOURCE_IRQ,
     },
 };
@@ -980,8 +1054,8 @@ struct platform_device tx_isp_csi_platform_device = {
  * base; it does not need to own the 0x13300000 core window. */
 static struct resource tx_isp_vin_resources[] = {
     [0] = {
-        .start = 37,                   /* T31 VIN IRQ 37 - MATCHES STOCK DRIVER isp-m0 */
-        .end   = 37,
+        .start = 29,                   /* T31 VIN IRQ 37 - MATCHES STOCK DRIVER isp-m0 */
+        .end   = 29,
         .flags = IORESOURCE_IRQ,
     },
 };
@@ -1004,8 +1078,8 @@ static struct resource tx_isp_fs_resources[] = {
         .flags = IORESOURCE_MEM,
     },
     [1] = {
-        .start = 38,                   /* T31 FS IRQ 38 - MATCHES STOCK DRIVER isp-w02 */
-        .end   = 38,
+        .start = 30,                   /* T31 FS IRQ 38 - MATCHES STOCK DRIVER isp-w02 */
+        .end   = 30,
         .flags = IORESOURCE_IRQ,
     },
 };
@@ -1068,8 +1142,8 @@ static struct resource tx_isp_core_resources[] = {
         .flags = IORESOURCE_MEM,
     },
     [1] = {
-        .start = 37,                   /* T31 ISP Core IRQ 37 - MATCHES STOCK DRIVER isp-m0 */
-        .end   = 37,
+        .start = 29,                   /* T31 ISP Core IRQ 37 - MATCHES STOCK DRIVER isp-m0 */
+        .end   = 29,
         .flags = IORESOURCE_IRQ,
     },
 };
@@ -1280,7 +1354,11 @@ static inline u32 frame_channel_format_bytesperline(u32 pixfmt, u32 width)
 {
     u32 depth = frame_channel_format_depth(pixfmt);
 
-    if (depth == 0)
+    /* Bug C fix: NV12/NV21 are semi-planar — bytesperline is the Y-plane row STRIDE (= width),
+     * NOT width*12/8.  The 12 is the Y+UV average bpp; using it gave a bogus 1.5x stride (960 for
+     * 640), so libimp/the encoder read the VB with stride 960 while the MSCA writes stride 640 ->
+     * green/sheared frames.  Y stride == width matches the OEM/4.4 reference. */
+    if (pixfmt == V4L2_PIX_FMT_NV12 || pixfmt == V4L2_PIX_FMT_NV21 || depth == 0)
         return nv12_stride(width);
 
     return (width * depth) / 8;
@@ -2248,6 +2326,18 @@ static int tx_isp_ispcore_activate_module_complete(struct tx_isp_dev *isp_dev)
     if (!isp_dev)
         return -EINVAL;
 
+    /* 6.12: the enum/ioctl path (TX_ISP_SENSOR_ENUM_INPUT) passes a stale isp_dev whose
+     * vic_dev/csi_dev/subdevs are NULL, while the fully-populated device is the global
+     * ourISPdev (vic_dev linked, slots filled, sensor attached). Redirect so the whole
+     * bring-up operates on the correct struct. */
+    if (ourISPdev && ourISPdev != isp_dev && ourISPdev->vic_dev)
+        isp_dev = ourISPdev;
+    /* belt-and-suspenders: if vic_dev still missing but the VIC slot is populated, recover it */
+    if (!isp_dev->vic_dev && isp_dev->subdevs[0])
+        isp_dev->vic_dev = (struct tx_isp_vic_device *)isp_dev->subdevs[0];
+    if (!isp_dev->csi_dev && isp_dev->subdevs[1])
+        isp_dev->csi_dev = (struct tx_isp_csi_device *)isp_dev->subdevs[1];
+
     vic_dev = isp_dev->vic_dev;
     if (!vic_dev) {
         pr_warn("*** tx_isp_ispcore_activate_module_complete: VIC unavailable - deferring bring-up ***\n");
@@ -2290,6 +2380,9 @@ static int tx_isp_ispcore_activate_module_complete(struct tx_isp_dev *isp_dev)
         return ret;
     }
 
+    /* (2026-06-27: HANGMARK probes proved the hard wedge is BEFORE this point — the ISP,
+     * once clocked without a working reset, destabilizes the AHB bus ~us after the clock
+     * enable, so the next bus access (even a pr_emerg) hangs. Not the CSI activate.) */
     pr_info("*** CSI_ACTIVATE_DEBUG: isp_dev=%p csi_dev=%p ourISPdev=%p ourISPdev->csi_dev=%p ***\n",
             isp_dev, isp_dev->csi_dev, ourISPdev, ourISPdev ? ourISPdev->csi_dev : NULL);
     csi_sd = isp_dev->csi_dev ? &((struct tx_isp_csi_device *)isp_dev->csi_dev)->sd : NULL;
@@ -2338,6 +2431,19 @@ static int tx_isp_ispcore_activate_module_complete(struct tx_isp_dev *isp_dev)
             pr_warn("*** tx_isp_ispcore_activate_module_complete: CSI core init failed: %d ***\n",
                     ret);
             return ret;
+        }
+    }
+
+    /* TEST 2026-06-27: do NOT release SRBC bit22 here. tisp_init's CPU reg writes only
+     * worked while bit22 was HELD; rvd's later set-buffer (0x7820 ISP frame-DMA reg) writes
+     * hang the bus once bit22 is released — so bit22 gates CPU access to ISP regs. Keep it
+     * held through rvd's config phase and see if set-buffer + streaming proceed. */
+    {
+        void __iomem *cpm = ioremap(0x10000000, 0x1000);
+        if (cpm) {
+            pr_info("*** tx_isp_ispcore_activate_module_complete: keeping SRBC bit22 HELD (c4=0x%08x) ***\n",
+                    readl(cpm + 0xc4));
+            iounmap(cpm);
         }
     }
 
@@ -2401,7 +2507,7 @@ static int tx_isp_sync_sensor_attr(struct tx_isp_dev *isp_dev, struct tx_isp_sen
             actual_width, actual_height);
 
     vic_dev = isp_dev->vic_dev;
-    if (vic_dev) {
+    if (vic_dev && is_valid_kernel_pointer(vic_dev)) {
         ret = tx_isp_handle_sync_sensor_attr_event(&vic_dev->sd, stable_attr);
         if (ret) {
             pr_warn("*** tx_isp_sync_sensor_attr: VIC cache refresh failed: %d ***\n",
@@ -2412,7 +2518,7 @@ static int tx_isp_sync_sensor_attr(struct tx_isp_dev *isp_dev, struct tx_isp_sen
     }
 
     csi_dev = isp_dev->csi_dev;
-    if (csi_dev) {
+    if (csi_dev && is_valid_kernel_pointer(csi_dev)) {
         if (csi_dev->sd.ops && csi_dev->sd.ops->sensor &&
             csi_dev->sd.ops->sensor->sync_sensor_attr) {
             csi_sync_sensor_attr = csi_dev->sd.ops->sensor->sync_sensor_attr;
@@ -2554,8 +2660,8 @@ static int csi_device_probe(struct tx_isp_dev *isp_dev)
         ret = -ENOMEM;
         goto err_free_dev;
     }
-    *((struct tx_isp_sensor_attribute **)((char *)csi_dev + 0x110)) = csi_attr_cache;
-    pr_info("*** CSI +0x110 ATTR CACHE INITIALIZED: %p (%zu bytes) ***\n",
+    csi_dev->attr_cache = csi_attr_cache;
+    pr_info("*** CSI ATTR CACHE INITIALIZED: %p (%zu bytes) ***\n",
             csi_attr_cache, sizeof(*csi_attr_cache));
 
     /*
@@ -2567,26 +2673,21 @@ static int csi_device_probe(struct tx_isp_dev *isp_dev)
      * +0xb8 (basic regs), +0x138 (mem_res), and +0x13c (wrapper regs).
      */
     csi_dev->csi_regs = NULL;
-    *((void **)((char *)csi_dev + 0x13c)) = NULL;
-    *((struct resource **)((char *)csi_dev + 0x138)) = NULL;
-    pr_info("*** CSI BASIC/WRAPPER MAPPINGS DEFERRED TO tx_isp_csi_probe (raw138/raw13c cleared) ***\n");
+    csi_dev->phy_res = NULL;   /* was raw +0x138 (mem_res): gcc places this inside the mutex -> the NULL write clobbered the lock */
+    /* raw +0x13c NULL write removed: gcc places it on the spinlock -> it clobbered the lock */
+    pr_info("*** CSI BASIC/WRAPPER MAPPINGS DEFERRED TO tx_isp_csi_probe ***\n");
 
-    /* Binary Ninja: private_raw_mutex_init($v0 + 0x12c) */
     mutex_init(&csi_dev->mlock);
 
-    /* Binary Ninja: *($v0 + 0x128) = 1 (initial state) */
-    *(u32 *)((char *)csi_dev + 0x128) = 1;
-    csi_dev->state = 1;
+    csi_dev->state = 1;   /* initial state (removed raw +0x128 = phy_regs write) */
 
     /* Binary Ninja: dump_csd = $v0 (global CSI device pointer) */
     /* Store globally for debug access */
 
     pr_info("*** CSI device structure initialized: ***\n");
-    pr_info("  Size: 0x148 bytes\n");
-    pr_info("  Basic regs (+0xb8): %p [deferred]\n", csi_dev->csi_regs);
-    pr_info("  CSI slot (+0x13c): %p [deferred]\n",
-            *((void **)((char *)csi_dev + 0x13c)));
-    pr_info("  State (+0x128): %u\n", *(u32 *)((char *)csi_dev + 0x128));
+    pr_info("  csi_regs: %p [deferred]\n", csi_dev->csi_regs);
+    pr_info("  phy_res:  %p [deferred]\n", csi_dev->phy_res);
+    pr_info("  state:    %u\n", csi_dev->state);
 
     /* *** CRITICAL FIX: LINK CSI DEVICE TO ISP DEVICE *** */
     pr_info("*** CRITICAL: LINKING CSI DEVICE TO ISP DEVICE ***\n");
@@ -2647,9 +2748,8 @@ static int tx_isp_activate_sensor_pipeline(struct tx_isp_dev *isp_dev, const cha
     if (isp_dev->csi_dev) {
         pr_info("Connecting %s sensor to CSI\n", sensor_name);
         // Configure CSI for sensor input
-        if (*(u32 *)((char *)isp_dev->csi_dev + 0x128) < 2) {
-            *(u32 *)((char *)isp_dev->csi_dev + 0x128) = 2;
-            isp_dev->csi_dev->state = 2; // Mark as enabled
+        if (isp_dev->csi_dev->state < 2) {
+            isp_dev->csi_dev->state = 2; // Mark as enabled (was raw +0x128 = phy_regs)
         }
     }
 
@@ -2695,8 +2795,8 @@ void tx_isp_enable_irq(struct tx_isp_dev *isp_dev)
 
     pr_info("*** tx_isp_enable_irq: CORRECTED Binary Ninja implementation ***\n");
 
-    /* Binary Ninja: return private_enable_irq(*arg1) __tailcall
-     * This means: enable_irq(isp_dev->isp_irq) */
+    /* (2026-06-27: proved the stream-on wedge is NOT an IRQ storm — disabling IRQ 29
+     * entirely still hard-wedges. The wedge is the bit22/DMA capture bus.) */
     enable_irq(isp_dev->isp_irq);
 
     pr_info("*** tx_isp_enable_irq: Kernel IRQ %d ENABLED ***\n", isp_dev->isp_irq);
@@ -3169,9 +3269,12 @@ static int tx_isp_video_link_stream(struct tx_isp_dev *isp_dev, int enable)
         struct tx_isp_subdev *subdev = subdevs_ptr[i];
 
         /* Binary Ninja: void* $a0 = *$s4 */
-        if (subdev != 0) {
+        /* Unused subdev slots are 0 (kzalloc), but stale/garbage entries are only
+         * caught by validating the pointer itself before dereferencing ->ops. */
+        if (subdev != 0 && is_valid_kernel_pointer(subdev)) {
             /* Binary Ninja: void* $v0_3 = *(*($a0 + 0xc4) + 4) */
-            if (subdev->ops && subdev->ops->video) {
+            if (is_valid_kernel_pointer(subdev->ops) && subdev->ops &&
+                is_valid_kernel_pointer(subdev->ops->video) && subdev->ops->video) {
                 /* Binary Ninja: int32_t $v0_4 = *($v0_3 + 4) */
                 /* CRITICAL FIX: Binary Ninja shows offset +4 from video_ops = link_stream, NOT s_stream! */
                 if (subdev->ops->video->link_stream != 0) {
@@ -3234,6 +3337,21 @@ static int tx_isp_video_link_stream(struct tx_isp_dev *isp_dev, int enable)
     }
 
     pr_info("*** BINARY NINJA: All 16 subdevices processed successfully ***\n");
+
+    /* 6.12 (2026-06-27): release SRBC bit22 at stream-on so the ISP/VIC can run the capture
+     * (held through all config; see the chicken-and-egg note in tx_isp_core_ensure_powered).
+     * NOTE: the capture still wedges here because the config did not take effect while held —
+     * this is the documented deep wall, not a logic bug. */
+    if (enable) {
+        void __iomem *cpm = ioremap(0x10000000, 0x1000);
+
+        if (cpm) {
+            writel(readl(cpm + 0xc4) & ~0x400000u, cpm + 0xc4);
+            wmb();
+            udelay(20);
+            iounmap(cpm);
+        }
+    }
 
     /* Binary Ninja: return 0 */
     return 0;
@@ -3509,7 +3627,78 @@ EXPORT_SYMBOL(tx_isp_hardware_frame_done_handler);
 
 /* Frame channel implementations removed - handled by FS probe instead */
 
+/* Bug B fix: libimp (rvd) allocates the FrameSource video-buffer pools (VBMPool<N>) from the rmem
+ * pool itself and reads frames from THERE, but QBUFs to us by index only (no address).  Our old
+ * formula dest (0x3000000 + ch*0x400000 + idx*size) lands inside the H264 encoder's ref buffer, so
+ * rvd reads an untouched (zero) VBMPool => black frame.  libimp dumps the exact buffer map (text
+ * "info->owner = ... / info->paddr = 0x... / info->length = ...") to /tmp/alloc_manager_info; find
+ * the VBMPool whose per-buffer size == this channel's buffer size and use its paddr as the MSCA dest
+ * base, so we write exactly where rvd reads. */
+static u32 frame_channel_vbmpool_cache[4];   /* cached VBMPool base per channel (0 = unknown) */
+
+static u32 frame_channel_vbmpool_base(int channel, u32 buf_size)
+{
+	struct file *f;
+	char *buf, *p;
+	loff_t pos = 0;
+	ssize_t n;
+	u32 found = 0;
+
+	if (channel < 0 || channel >= 4 || !buf_size)
+		return 0;
+	if (frame_channel_vbmpool_cache[channel])
+		return frame_channel_vbmpool_cache[channel];
+
+	f = filp_open("/tmp/alloc_manager_info", O_RDONLY, 0);
+	if (IS_ERR(f))
+		return 0;
+	buf = kmalloc(8192, GFP_KERNEL);
+	if (!buf) { filp_close(f, NULL); return 0; }
+	n = kernel_read(f, buf, 8191, &pos);
+	filp_close(f, NULL);
+	if (n <= 0) { kfree(buf); return 0; }
+	buf[n] = '\0';
+
+	/* Walk each "owner = VBMPool..." block; read its paddr+length; match by exact buffer size. */
+	p = buf;
+	while ((p = strstr(p, "owner = VBMPool")) != NULL) {
+		char *padr = strstr(p, "paddr = 0x");
+		char *plen = strstr(p, "length = ");
+		u32 paddr, length;
+		p += 5;
+		if (!padr || !plen)
+			continue;
+		paddr  = (u32)simple_strtoul(padr + 8, NULL, 0);   /* "paddr = " is 8 chars -> "0x..." */
+		length = (u32)simple_strtoul(plen + 9, NULL, 10);  /* "length = " is 9 chars */
+		/* this channel's VB pool = N (<=8) buffers of exactly buf_size, inside rmem */
+		if (paddr >= 0x2000000 && length >= buf_size &&
+		    (length % buf_size) == 0 && (length / buf_size) <= 8) {
+			found = paddr;
+			break;
+		}
+	}
+	kfree(buf);
+	if (found) {
+		frame_channel_vbmpool_cache[channel] = found;
+		pr_info("*** VBMPool ch%d: libimp VB base=0x%x (buf_size=%u) — MSCA dest will target rvd's buffers ***\n",
+			channel, found, buf_size);
+	}
+	return found;
+}
+
+/* TEMP wrapper: checkpoint subdevs[] integrity around each /dev/framechan ioctl */
+int isp_subdev_corrupt(const char *where, unsigned int cmd);   /* fwd decl (defined later) */
+long frame_channel_unlocked_ioctl_real(struct file *file, unsigned int cmd, unsigned long arg);
 long frame_channel_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+    long r;
+    isp_subdev_corrupt("fc-ioctl-IN", cmd);
+    r = frame_channel_unlocked_ioctl_real(file, cmd, arg);
+    isp_subdev_corrupt("fc-ioctl-OUT", cmd);
+    return r;
+}
+
+long frame_channel_unlocked_ioctl_real(struct file *file, unsigned int cmd, unsigned long arg)
 {
     void __user *argp = (void __user *)arg;
     struct frame_channel_device *fcd;
@@ -3830,11 +4019,32 @@ long frame_channel_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned 
         if (buffer.memory == V4L2_MEMORY_USERPTR && buffer.m.userptr != 0) {
             buffer_phys_addr = (uint32_t)buffer.m.userptr;
         } else {
-            buffer_phys_addr = 0x6300000 + (buffer.index * buffer_size);
+            /* Bug B fix: rvd reads frames from libimp's FrameSource VBMPool (in rmem), not from a
+             * formula address.  Point the MSCA dest at libimp's actual VB base (parsed from
+             * /tmp/alloc_manager_info) + idx*size.  Fall back to the old guess only if the libimp
+             * map isn't available yet (then it stays black, as before, but no regression). */
+            extern int dae_single_buf, dae_use_formula;
+            u32 vb_idx = dae_single_buf ? 0 : buffer.index;   /* single-buffer mode: no rotation */
+            u32 vb_base = dae_use_formula ? 0 : frame_channel_vbmpool_base(channel, buffer_size);
+            if (vb_base)
+                buffer_phys_addr = vb_base + (vb_idx * buffer_size);
+            else
+                buffer_phys_addr = 0x3000000 + (channel * 0x400000) + (vb_idx * buffer_size);
+            /* Bug C/striping fix: the MSCA output DMA writes a CLEAN raster only to a sufficiently
+             * aligned dest (proven: clean at 1MB-aligned 0x3400000, sheared at libimp's 256-aligned
+             * VBMPool 0x3b2c300).  Align the dest up within the buffer's slack (sizeimage uses
+             * ALIGN(h,16) rows but the frame is h rows, leaving spare).  dae_dest_align is a power of
+             * two; rvd reads from the buffer base so the top (align offset)/stride rows are slack. */
+            {
+                extern int dae_dest_align;
+                if (dae_dest_align > 1)
+                    buffer_phys_addr = (buffer_phys_addr + (u32)dae_dest_align - 1) & ~((u32)dae_dest_align - 1);
+            }
         }
 
-	        pr_debug("*** Channel %d: QBUF - Buffer %d: phys_addr=0x%x, sizeimage=%u, memory=%d, userptr=0x%lx ***\n",
-                channel, buffer.index, buffer_phys_addr, buffer_size, buffer.memory, buffer.m.userptr);
+	        pr_info("*** QBUF ch%d idx%d: dest_phys=0x%x size=%u mem=%d userptr=0x%lx offset=0x%x len=%u ***\n",
+                channel, buffer.index, buffer_phys_addr, buffer_size, buffer.memory,
+                (unsigned long)buffer.m.userptr, (unsigned)buffer.m.offset, buffer.length);
 
         if (frame_channel_track_buffer(fcd, &buffer) == 0) {
             state->current_buffer.index = buffer.index;
@@ -3842,7 +4052,7 @@ long frame_channel_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned 
             state->current_buffer.bytesused = buffer.bytesused;
             state->current_buffer.flags = buffer.flags;
             state->current_buffer.field = buffer.field;
-            state->current_buffer.timestamp = buffer.timestamp;
+            TS_COPY(state->current_buffer.timestamp, buffer.timestamp);
             state->current_buffer.sequence = buffer.sequence;
             state->current_buffer.memory = buffer.memory;
             state->current_buffer.length = buffer.length;
@@ -3886,8 +4096,11 @@ long frame_channel_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned 
              * the UV plane at the wrong offset → green/magenta corruption. */
             u32 w = state->width ? (u32)state->width : (channel == 0 ? 1920U : 640U);
             u32 h = state->height ? (u32)state->height : (channel == 0 ? 1080U : 360U);
-            u32 aligned_h = (h + 0xf) & ~0xf;
-            u32 uv_addr = buffer_phys_addr + w * aligned_h;
+            /* Bug C fix: NV12 UV plane offset = line_stride * ALIGN(height,16) — the H264/MSCA
+             * 16-line-aligned layout the encoder reads (matches frame_channel_format_sizeimage).
+             * For ch1 640x360: 640 * 368 = 235520.  (w*h=230400 was 8 rows short; sizeimage*2/3 put
+             * it in the over-allocated VB tail = pure green.) */
+            u32 uv_addr = buffer_phys_addr + nv12_stride(w) * ALIGN(h, 16);
 
             /* Auto-configure MSCA scaler for channels > 0 on first QBUF.
              * libimp configures channels through the IMP system API which
@@ -3896,7 +4109,7 @@ long frame_channel_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned 
              * MSCA scaler registers for channel 1+ never get configured.
              * Without this, the scaler outputs full-resolution into a small
              * buffer → diagonal green/magenta corruption. */
-            if (channel > 0 && !state->msca_configured) {
+            if (channel >= 0 && !state->msca_configured) {
                 u32 attr_words[0x34 / sizeof(u32)];
                 memset(attr_words, 0, sizeof(attr_words));
                 /* attr[0] MUST be non-zero so tisp_channel_attr_set uses
@@ -3928,8 +4141,8 @@ long frame_channel_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned 
             writel(uv_addr,
                    ourISPdev->core_regs + (channel << 8) + 0x9984);
 
-            pr_debug("QBUF ch%d: MSCA Y=0x%x UV=0x%x (w=%u h=%u aligned_h=%u)\n",
-                     channel, buffer_phys_addr, uv_addr, w, h, aligned_h);
+            pr_debug("QBUF ch%d: MSCA Y=0x%x UV=0x%x (w=%u h=%u stride=%u)\n",
+                     channel, buffer_phys_addr, uv_addr, w, h, nv12_stride(w));
         }
 
         /* OEM buffer rotation: track state for frame-done requeue.
@@ -4077,6 +4290,11 @@ long frame_channel_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned 
             }
             if (!match_found)
                 delivered_idx = delivered_seq % (state->buffer_count ? state->buffer_count : 3);
+            {
+                extern int dae_single_buf;
+                if (dae_single_buf)
+                    delivered_idx = 0;   /* single-buffer mode: rvd always reads buffer 0 */
+            }
 
             fill_timeval_mono(&delivered_ts);
 
@@ -4095,7 +4313,7 @@ long frame_channel_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned 
             if (tracked && tracked->length && buffer.bytesused > tracked->length)
                 buffer.bytesused = tracked->length;
             buffer.field = tracked ? tracked->field : V4L2_FIELD_NONE;
-            buffer.timestamp = delivered_ts;
+            TS_COPY(buffer.timestamp, delivered_ts);
             buffer.sequence = delivered_seq;
             buffer.memory = tracked ? tracked->memory :
                            (state->current_buffer.memory ? state->current_buffer.memory : V4L2_MEMORY_MMAP);
@@ -4112,9 +4330,21 @@ long frame_channel_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned 
             /* Return REAL physical address from tracked buffer (set during QBUF) */
             if (buffer.memory == V4L2_MEMORY_USERPTR)
                 buffer.m.userptr = tracked ? tracked->m.userptr : state->current_buffer.m.userptr;
-            else
-                buffer.m.offset = (tracked && tracked->memory == V4L2_MEMORY_MMAP && tracked->m.offset) ?
-                                  tracked->m.offset : (delivered_idx * state->sizeimage);
+            else {
+                /* rvd mmaps the whole /dev/rmem pool at phys 0x2800000 and locates each frame at
+                 * mmap_base + m.offset.  MSCA DMA'd the frame to the dest stored in
+                 * oem_bufs[].phys_addr at QBUF, so m.offset MUST be that dest minus the pool base,
+                 * else rvd reads an untouched (zero) region => black frame. */
+                u32 dphys = (delivered_idx < 64 && fcd) ? fcd->oem_bufs[delivered_idx].phys_addr : 0;
+                if (tracked && tracked->memory == V4L2_MEMORY_MMAP && tracked->m.offset)
+                    buffer.m.offset = tracked->m.offset;
+                else if (dphys >= 0x2800000)
+                    buffer.m.offset = dphys - 0x2800000;
+                else
+                    buffer.m.offset = delivered_idx * state->sizeimage;
+                pr_info("*** DQBUF ch%d idx%u: dest_phys=0x%x -> m.offset=0x%x ***\n",
+                        channel, delivered_idx, dphys, buffer.m.offset);
+            }
             spin_unlock_irqrestore(&state->buffer_lock, flags);
 
             /* DMA sync barrier */
@@ -4516,11 +4746,93 @@ static struct tx_isp_subdev_ops sensor_subdev_ops = {
 };
 
 // Basic IOCTL handler matching reference behavior
+/* ===== TEMP subdev-corruption detector (rip out after root found) ===== */
+static int armdelay = 0;
+module_param(armdelay, int, 0);
+unsigned long g_isp_modtext_lo, g_isp_modtext_hi;
+static int g_isp_corrupt_reported;
+static unsigned int g_isp_prev_cmd;
+static inline int isp_fn_in_text(void *p)
+{
+    unsigned long a = (unsigned long)p;
+    if (a >= 0x80100400UL && a < 0x80863410UL) return 1;             /* kernel _stext.._etext (#8) */
+    if (g_isp_modtext_lo && a >= g_isp_modtext_lo && a < g_isp_modtext_hi) return 1; /* this module */
+    if (a >= 0xc0000000UL && a < 0xd0000000UL) return 1;             /* module/vmalloc fallback */
+    return 0;
+}
+static int g_isp_baseline_done;
+static void isp_dump_slots(const char *tag)
+{
+    struct tx_isp_dev *d = ourISPdev;
+    int i;
+    if (!d) return;
+    for (i = 0; i < ISP_MAX_SUBDEVS; i++) {
+        struct tx_isp_subdev *sd = d->subdevs[i];
+        int ok1, ok2;
+        if (!sd) continue;
+        ok1 = tx_isp_sd_ptr_ok(sd) && tx_isp_sd_ptr_ok(sd->ops);
+        ok2 = ok1 && tx_isp_sd_ptr_ok(sd->ops->sensor);
+        pr_emerg("SDCHK %s slot %d sd=%px ops=%px sens=%px io=%px nm=%px\n", tag, i, sd,
+                 ok1 ? sd->ops : (void *)0xdead,
+                 ok2 ? sd->ops->sensor : (void *)0xdead,
+                 ok2 ? (void *)sd->ops->sensor->ioctl : (void *)0xdead,
+                 tx_isp_sd_ptr_ok(sd) ? (void *)sd->module.name : (void *)0xdead);
+    }
+}
+int isp_subdev_corrupt(const char *where, unsigned int cmd)
+{
+    struct tx_isp_dev *d = ourISPdev;
+    int i, garbage = 0;
+    static const int sdchk_enabled = 0;   /* detector neutered for production ship — subdevs[] UAF fixed 2026-06-27 */
+    if (!sdchk_enabled || !d) return 0;
+    if (!g_isp_baseline_done) {
+        g_isp_baseline_done = 1;
+        pr_emerg("SDCHK ===== BASELINE [%s c=0x%x] ourISPdev=%px &subdevs=%px modtext=[%px,%px) =====\n",
+                 where, cmd, d, &d->subdevs[0], (void *)g_isp_modtext_lo, (void *)g_isp_modtext_hi);
+        isp_dump_slots("base");
+    }
+    if (g_isp_corrupt_reported) return 0;
+    for (i = 0; i < ISP_MAX_SUBDEVS; i++) {
+        struct tx_isp_subdev *sd = d->subdevs[i];
+        void *io;
+        if (!sd) continue;
+        if (!tx_isp_sd_ptr_ok(sd)) {                                 /* WILD sd ptr (PLT-stamp: sd=0x03e07825) */
+            garbage++; pr_emerg("SDCHK[%s c=0x%x] slot %d WILD sd=%px\n", where, cmd, i, sd); continue;
+        }
+        if (!sd->ops) continue;                                      /* NULL ops = benign (code guards it) */
+        if (!tx_isp_sd_ptr_ok(sd->ops)) {                            /* non-NULL WILD ops */
+            garbage++; pr_emerg("SDCHK[%s c=0x%x] slot %d sd=%px WILDops=%px\n", where, cmd, i, sd, sd->ops); continue;
+        }
+        if (!sd->ops->sensor) continue;                              /* NULL sensor-ops = benign */
+        if (!tx_isp_sd_ptr_ok(sd->ops->sensor)) {                    /* non-NULL WILD sensor-ops */
+            garbage++; pr_emerg("SDCHK[%s c=0x%x] slot %d sd=%px ops=%px WILDsens=%px\n", where, cmd, i, sd, sd->ops, sd->ops->sensor); continue;
+        }
+        io = (void *)sd->ops->sensor->ioctl;
+        if (io != NULL && !isp_fn_in_text(io)) {                      /* NULL ioctl is benign (code skips it) */
+            garbage++;
+            pr_emerg("SDCHK[%s c=0x%x] slot %d sd=%px ops=%px sens=%px IOCTL-GARBAGE=%px nm=%px\n",
+                     where, cmd, i, sd, sd->ops, sd->ops->sensor, io, sd->module.name);
+        }
+    }
+    if (garbage) {
+        g_isp_corrupt_reported = 1;
+        pr_emerg("SDCHK ===== GARBAGE [%s c=0x%x prev=0x%x] %d; ourISPdev=%px &subdevs=%px modtext=[%px,%px) =====\n",
+                 where, cmd, g_isp_prev_cmd, garbage, d, &d->subdevs[0],
+                 (void*)g_isp_modtext_lo, (void*)g_isp_modtext_hi);
+        isp_dump_slots("bad");
+    }
+    return garbage;
+}
+/* ===== end detector ===== */
+
 static long tx_isp_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
     struct tx_isp_dev *isp_dev = ourISPdev;
     void __user *argp = (void __user *)arg;
     int ret = 0;
+
+    isp_subdev_corrupt("ioctl-entry", cmd);   /* TEMP */
+    g_isp_prev_cmd = cmd;                      /* TEMP */
 
     pr_info("*** tx_isp_unlocked_ioctl: ENTRY - pid=%d comm=%s cmd=0x%x arg=0x%lx ***\n",
             current->pid, current->comm, cmd, arg);
@@ -4528,6 +4840,24 @@ static long tx_isp_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned 
     if (!isp_dev) {
         pr_err("ISP device not initialized\n");
         return -ENODEV;
+    }
+
+    /* 6.12: isp_dev->sensor can be left holding a stale/wild pointer between sensor
+     * registration and these ioctls. Many cases test `if (isp_dev->sensor && ...)`,
+     * which passes on a non-NULL garbage value and then faults on the next deref
+     * (e.g. SET_CONTROL: isp_dev->sensor->sd.ops). Sanitize once here, and
+     * re-resolve from the registered sensor subdev so the sensor stays usable. */
+    if (isp_dev->sensor && !is_valid_kernel_pointer(isp_dev->sensor)) {
+        struct tx_isp_subdev *rsd;
+        struct tx_isp_sensor *rs;
+
+        pr_warn("*** tx_isp_unlocked_ioctl: isp_dev->sensor=%p is not a valid kernel pointer; re-resolving ***\n",
+                isp_dev->sensor);
+        isp_dev->sensor = NULL;
+        rsd = tx_isp_resolve_registered_sensor_subdev(isp_dev);
+        rs = rsd ? tx_isp_wait_for_sensor_attachment(rsd, "ioctl-resanitize") : NULL;
+        if (tx_isp_sensor_has_usable_attachment(rs))
+            tx_isp_refresh_sensor_attachment(isp_dev, rsd, rs, "ioctl-resanitize");
     }
 
     pr_info("ISP IOCTL: cmd=0x%x arg=0x%lx\n", cmd, arg);
@@ -4552,9 +4882,11 @@ static long tx_isp_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned 
 
 	        for (i = 0; i < ISP_MAX_SUBDEVS; i++) {
 	            struct tx_isp_subdev *subdev = isp_dev->subdevs[i];
+            if (!tx_isp_sd_ptr_ok(subdev) || !tx_isp_sd_ptr_ok(subdev->ops) || !tx_isp_sd_ptr_ok(subdev->ops->sensor) || (subdev->ops->sensor->ioctl && !isp_fn_in_text((void*)subdev->ops->sensor->ioctl))) continue;  /* skip wild/garbage subdevs[] slot/ops/sensor + non-text ioctl (2nd-crash guard) */
 	            int ret;
 
-	            if (!subdev || !subdev->ops || !subdev->ops->sensor ||
+	            if (!subdev || !is_valid_kernel_pointer(subdev) ||
+	                !subdev->ops || !subdev->ops->sensor ||
 	                !subdev->ops->sensor->ioctl)
 	                continue;
 
@@ -4674,6 +5006,7 @@ static long tx_isp_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned 
         /* Binary Ninja: Iterate through subdevs at offset 0x2c (isp_dev->subdevs) */
         for (i = 0; i < ISP_MAX_SUBDEVS; i++) {
             struct tx_isp_subdev *subdev = isp_dev->subdevs[i];
+            if (!tx_isp_sd_ptr_ok(subdev) || !tx_isp_sd_ptr_ok(subdev->ops) || !tx_isp_sd_ptr_ok(subdev->ops->sensor) || (subdev->ops->sensor->ioctl && !isp_fn_in_text((void*)subdev->ops->sensor->ioctl))) continue;  /* skip wild/garbage subdevs[] slot/ops/sensor + non-text ioctl (2nd-crash guard) */
 
             if (!subdev)
                 continue;
@@ -4718,6 +5051,7 @@ static long tx_isp_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned 
         /* Binary Ninja: Iterate through subdevs at offset 0x2c (isp_dev->subdevs) */
         for (i = 0; i < ISP_MAX_SUBDEVS; i++) {
             struct tx_isp_subdev *subdev = isp_dev->subdevs[i];
+            if (!tx_isp_sd_ptr_ok(subdev) || !tx_isp_sd_ptr_ok(subdev->ops) || !tx_isp_sd_ptr_ok(subdev->ops->sensor) || (subdev->ops->sensor->ioctl && !isp_fn_in_text((void*)subdev->ops->sensor->ioctl))) continue;  /* skip wild/garbage subdevs[] slot/ops/sensor + non-text ioctl (2nd-crash guard) */
 
             if (!subdev)
                 continue;
@@ -4764,6 +5098,7 @@ static long tx_isp_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned 
         /* Pattern: for (i = isp_dev + 0x2c; i != isp_dev + 0x6c; i += 4) */
         for (i = 0; i < ISP_MAX_SUBDEVS; i++) {
             struct tx_isp_subdev *subdev = isp_dev->subdevs[i];
+            if (!tx_isp_sd_ptr_ok(subdev) || !tx_isp_sd_ptr_ok(subdev->ops) || !tx_isp_sd_ptr_ok(subdev->ops->sensor) || (subdev->ops->sensor->ioctl && !isp_fn_in_text((void*)subdev->ops->sensor->ioctl))) continue;  /* skip wild/garbage subdevs[] slot/ops/sensor + non-text ioctl (2nd-crash guard) */
 
             if (!subdev)
                 continue;
@@ -4807,6 +5142,7 @@ static long tx_isp_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned 
         /* Binary Ninja: Iterate through subdevs at offset 0x2c (isp_dev->subdevs) */
         for (i = 0; i < ISP_MAX_SUBDEVS; i++) {
             struct tx_isp_subdev *subdev = isp_dev->subdevs[i];
+            if (!tx_isp_sd_ptr_ok(subdev) || !tx_isp_sd_ptr_ok(subdev->ops) || !tx_isp_sd_ptr_ok(subdev->ops->sensor) || (subdev->ops->sensor->ioctl && !isp_fn_in_text((void*)subdev->ops->sensor->ioctl))) continue;  /* skip wild/garbage subdevs[] slot/ops/sensor + non-text ioctl (2nd-crash guard) */
 
             if (!subdev)
                 continue;
@@ -5045,6 +5381,8 @@ static long tx_isp_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned 
         }
 
         pr_info("ISP DMA registers 0x7820-0x786c programmed successfully\n");
+        pr_info("*** SET-BUF READBACK: 0x7820=0x%08x 0x7824=0x%08x 0x783c=0x%08x (wrote 0x%08x) ***\n",
+                system_reg_read(0x7820), system_reg_read(0x7824), system_reg_read(0x783c), buf_setup.addr);
 
         /* OEM enables MDNS during tiziano_mdns_init (before DMA setup).
          * No deferred enable needed — MDNS HW waits for data. */
@@ -5439,7 +5777,7 @@ static int tx_isp_platform_remove(struct platform_device *pdev)
 
 static struct platform_driver tx_isp_driver = {
     .probe = tx_isp_platform_probe,
-    .remove = tx_isp_platform_remove,
+    .remove = (void (*)(struct platform_device *))tx_isp_platform_remove,
     .driver = {
         .name = "tx-isp",
         .owner = THIS_MODULE,
@@ -5475,6 +5813,11 @@ static int tx_isp_init(void)
         pr_err("Failed to allocate ISP device\n");
         return -ENOMEM;
     }
+
+    /* Capture this module's text range — used by isp_fn_in_text() in the
+     * tx_isp_sd_ptr_ok() subdev-pointer guards (defensive, kept for production). */
+    g_isp_modtext_lo = (unsigned long)THIS_MODULE->mem[MOD_TEXT].base;
+    g_isp_modtext_hi = g_isp_modtext_lo + THIS_MODULE->mem[MOD_TEXT].size;
 
     /* Initialize device structure */
     spin_lock_init(&ourISPdev->lock);
@@ -5772,22 +6115,44 @@ static int tx_isp_init(void)
     if (ourISPdev->vic_dev) {
         struct tx_isp_vic_device *vic_dev = (struct tx_isp_vic_device *)ourISPdev->vic_dev;
 
-        /* ABI fix: copy IRQ from subdev irqdev to wrapper sd_irq_info */
+        /* The vic_dev finally linked into ourISPdev (via the isp-w02 subdev
+         * hostdata) is a DIFFERENT allocation than the one tx_isp_create_vic_device
+         * mapped + registered the IRQ on — so its vic_regs cache is NULL and its
+         * irq fields are 0 (empirically: vic_dev->vic_regs==NULL forced the ISP-core
+         * ISR to return IRQ_NONE -> isp-m0 storm; sd_irq_info.irq==0 left isp_irq2==0
+         * -> VIC dispatch never matched and tx_vic_seed_irq_slots was skipped).
+         * Repair it in-place from the ISP-owned globals + the INTC virq so the VIC
+         * datapath, the hw IRQ unmask, enable_irq(), and the dispatcher all work. */
+        if (!vic_dev->vic_regs)
+            vic_dev->vic_regs = ourISPdev->vic_regs;          /* global ioremap(0x133e0000) */
+        if (!vic_dev->vic_regs_secondary)
+            vic_dev->vic_regs_secondary = ourISPdev->vic_regs2;
+
         vic_dev->sd_irq_info.irq = vic_dev->sd.irqdev.irq;
+        if (vic_dev->sd_irq_info.irq <= 0) {
+            /* resolve the VIC virq directly from the INTC domain (VIC hwirq = 30),
+             * exactly as tx_isp_request_irq() does for the registration. */
+            struct device_node *intc_np = of_find_compatible_node(NULL, NULL, "ingenic,t31-intc");
+            struct irq_domain *intc_dom = intc_np ? irq_find_host(intc_np) : NULL;
+            if (intc_np)
+                of_node_put(intc_np);
+            if (intc_dom) {
+                unsigned int v = irq_create_mapping(intc_dom, 30);  /* idempotent: existing virq 30 */
+                if (v)
+                    vic_dev->sd_irq_info.irq = v;
+            }
+        }
+        vic_dev->irq = vic_dev->sd_irq_info.irq;
+        vic_dev->irq_number = vic_dev->irq;
         ourISPdev->isp_irq2 = vic_dev->sd_irq_info.irq;
+        pr_info("*** VIC-IRQ-REPAIR: vic_regs=%p (glob=%p) isp_irq2=%d ***\n",
+                vic_dev->vic_regs, ourISPdev->vic_regs, ourISPdev->isp_irq2);
         if (ourISPdev->isp_irq2 > 0) {
             tx_vic_seed_irq_slots(vic_dev, ourISPdev->isp_irq2);
-            /* tx_isp_subdev_init already called tx_isp_request_irq() for
-             * isp-w02, which registered isp_irq_handle for IRQ 38 and
-             * left it disabled (depth=1).  Do NOT register again — a
-             * duplicate request_threaded_irq pushes the disable depth
-             * to 2, and tx_vic_enable_irq only does one enable_irq(),
-             * leaving IRQ 38 permanently masked.
-             */
-            pr_info("*** ADOPTED EXISTING IRQ %d (isp-w02) — already registered by tx_isp_subdev_init (depth=1) ***\n",
+            pr_info("*** ADOPTED VIC IRQ %d (isp-w02) [repaired struct] ***\n",
                     ourISPdev->isp_irq2);
         } else {
-            pr_warn("*** NO EARLY VIC IRQ FOUND TO ADOPT FOR isp-w02 ***\n");
+            pr_warn("*** NO VIC IRQ resolvable for isp-w02 ***\n");
         }
     }
 
@@ -5834,6 +6199,16 @@ static int tx_isp_init(void)
      * the ISP pipeline is running. */
 
     pr_info("TX ISP driver ready with new subdevice management system\n");
+
+    /* 6.12: core_probe's create_proc_entries (line ~4412) is skipped on the
+     * "Using existing ourISPdev" path, so /proc/jz/isp is never made and libimp
+     * can't set up the encoder ring. Create it here where ourISPdev is set and
+     * module-init always runs (idempotent: no-op if already present). */
+    if (ourISPdev) {
+        extern int tx_isp_create_proc_entries(struct tx_isp_dev *isp);
+        tx_isp_create_proc_entries(ourISPdev);
+    }
+    isp_subdev_corrupt("init-end", 0);   /* TEMP */
     return 0;
 
 err_cleanup_platforms:
@@ -6167,10 +6542,23 @@ int private_reset_tx_isp_module(int arg)
         msleep(2);
     }
 
-    pr_warn("[CPM][OEM] private_reset_tx_isp_module: timeout waiting for ready bit, final c4=0x%08x\n",
+    /* 6.12 (2026-06-27): stop-ACK (bit20) didn't assert within the timeout. When this
+     * runs on an UN-CLOCKED ISP (the new pre-clock reset path) the bus is idle, so it
+     * is safe to force the reset pulse: clear stop-request (bit21), pulse soft-reset
+     * (bit22) set→clear. (Forcing this on a CLOCKED ISP hard-hangs the bus — so this
+     * MUST only be reached from the pre-clock reset call.) */
+    pr_warn("[CPM][OEM] private_reset_tx_isp_module: stop-ack timeout (c4=0x%08x); forcing reset pulse\n",
+            readl(cpm_regs + 0xc4));
+    reset_reg = (readl(cpm_regs + 0xc4) & ~0x200000u) | 0x400000u;  /* clr stop-req, set reset */
+    writel(reset_reg, cpm_regs + 0xc4);
+    wmb(); udelay(20);
+    reset_reg &= ~0x400000u;                                        /* clear reset */
+    writel(reset_reg, cpm_regs + 0xc4);
+    wmb(); udelay(20);
+    pr_warn("[CPM][OEM] private_reset_tx_isp_module: forced reset done, c4=0x%08x\n",
             readl(cpm_regs + 0xc4));
     iounmap(cpm_regs);
-    return -ETIMEDOUT; /* Binary Ninja: return 0xffffffff */
+    return 0;
 }
 
 #define VIC_RAW_IRQ_LOCK_OFFSET 0x130
@@ -6277,14 +6665,23 @@ void tx_vic_enable_irq(struct tx_isp_vic_device *vic_dev)
     spin_lock_irqsave(tx_vic_raw_irq_lock(active_vic), flags);
 	tx_isp_vic_restore_interrupts();
 
-    if (tx_vic_raw_irq_flag_get(active_vic) == 0) {
+    irq = active_vic->irq_number ? active_vic->irq_number : active_vic->irq;
+    tx_vic_seed_irq_slots(active_vic, irq);
+    /* Drain-to-enabled: the VIC IRQ is registered with the line left disabled
+     * (depth>=1), and the historical flag-gated single enable_irq() could not
+     * recover from an extra/duplicate disable_irq() — leaving INTC IMR bit 30 set,
+     * so isp-w02 was never delivered despite VIC frame_done firing (status 0x1e0
+     * bit0=1). enable_irq() is depth-counted; loop ONLY while the line is still
+     * disabled, so we converge to depth 0 (enabled) without ever over-enabling
+     * (which would WARN). Not flag-gated: always reassert enabled on stream-on. */
+    {
+        struct irq_data *d = irq_get_irq_data(irq);
+        int guard = 0;
+        while (d && irqd_irq_disabled(d) && guard++ < 16)
+            enable_irq(irq);
         tx_vic_raw_irq_flag_set(active_vic, 1);
-        irq = active_vic->irq_number ? active_vic->irq_number : active_vic->irq;
-        tx_vic_seed_irq_slots(active_vic, irq);
-        pr_info("tx_vic_enable_irq: enabling VIC IRQ %d\n", irq);
-        tx_vic_irq_slot_enable(&active_vic->sd_irq_info);
-    } else {
-	    pr_info("tx_vic_enable_irq: flag already set, VIC regs restored\n");
+        pr_info("tx_vic_enable_irq: VIC IRQ %d drained-to-enabled in %d step(s), disabled_now=%d\n",
+                irq, guard, d ? irqd_irq_disabled(d) : -1);
     }
 
     spin_unlock_irqrestore(tx_vic_raw_irq_lock(active_vic), flags);
@@ -6993,6 +7390,36 @@ void frame_channel_wakeup_waiters(struct frame_channel_device *fcd)
         pr_debug("Channel %d: Frame completion delivered\n", fcd->channel_num);
 }
 
+/* FIX (bug #3): on MSCA frame-done (ISP-core 0x1000 IRQ), the open driver's
+ * fs_work was a stub and never signalled the frame channels, so libimp's DQBUF
+ * blocked forever (frames captured, fc++ , but never delivered). Deliver to every
+ * streaming channel here; called from ispcore_irq_fs_work. */
+void tx_isp_deliver_all_streaming(void)
+{
+    extern struct tx_isp_dev *ourISPdev;
+    int i;
+    for (i = 0; i < num_channels; i++) {
+        struct frame_channel_device *fcd = &frame_channels[i];
+        struct tx_isp_channel_state *st = &fcd->state;
+        if (!(st->streaming || st->queued_count > 0))
+            continue;
+        /* Deliver the buffer MSCA actually wrote this frame: read the channel's
+         * live MSCA Y-output register (single slot per channel) and hand it to
+         * frame_chan_event as last_done_phys, so DQBUF returns the matching
+         * (freshly-written) buffer instead of a rotating/stale index → fixes the
+         * green/stale frames. data[2] (offset +8) = Y phys. */
+        if (ourISPdev && ourISPdev->core_regs) {
+            u32 data[3];
+            data[0] = 0; data[1] = 0;
+            data[2] = readl(ourISPdev->core_regs + (i << 8) + 0x996c);
+            frame_chan_event(fcd, TX_ISP_EVENT_FRAME_DQBUF, data);
+        } else {
+            frame_channel_wakeup_waiters(fcd);
+        }
+    }
+}
+EXPORT_SYMBOL(tx_isp_deliver_all_streaming);
+
 /* Public function to wake up all streaming frame channels.
  * Do not synthesize completions here; only poke waiters so control paths can
  * re-check state without manufacturing a deliverable frame.
@@ -7104,10 +7531,14 @@ static int sensor_subdev_video_s_stream(struct tx_isp_subdev *sd, int enable)
             vin_device = (struct tx_isp_vin_device *)isp_dev->vin_dev;
 
         if (enable) {
+            /* 2026-06-27 FIX: do NOT early-return here. The VIN state is set to RUNNING
+             * during activate BEFORE the sensor is actually streamed, so this skip stopped
+             * the REAL sensor s_stream (below) from ever writing the gc4653 streaming
+             * register (0x3e=0x91 / 0x0100=1) → no MIPI → no frames. The sensor s_stream is
+             * idempotent, so issue it regardless of VIN state. */
             if (vin_device && vin_device->state >= TX_ISP_MODULE_RUNNING) {
-                pr_info("*** SENSOR/VIN ALREADY STREAMING (vin_dev->state=%d global=%d) - SKIPPING DUPLICATE ENABLE ***\n",
-                        vin_device->state, isp_dev->vin_state);
-                return 0;
+                pr_info("*** VIN state=%d (RUNNING) — still issuing sensor s_stream (was wrongly skipped) ***\n",
+                        vin_device->state);
             }
 
             if (vin_device && !vin_init_in_progress) {
@@ -7368,16 +7799,18 @@ int tx_isp_register_sensor_subdev(struct tx_isp_subdev *sd, struct tx_isp_sensor
      * because there was no sensor.  Now that a sensor has been registered,
      * retry the activation so the ISP reaches state 3.
      */
+    /* 2026-06-27: do NOT activate here. This runs INSIDE the i2c probe (via
+     * isp_i2c_new_subdev_board -> i2c_new_client_device -> gc4653 probe ->
+     * tx_isp_subdev_init -> here), i.e. BEFORE g_chip_ident validates the sensor and
+     * BEFORE any sensor streaming. ispcore_activate enables the VIC MIPI receiver,
+     * which then errors ("mipi ch0 hcomp err") on the idle (non-streaming) MIPI lanes
+     * and leaves the MCLK/clock half-configured -> the subsequent g_chip_ident i2c read
+     * fails ("not an gc4653 chip", -5). The 0x805056c1 handler (TX_ISP_SENSOR_REGISTER)
+     * already retries activation AFTER g_chip_ident succeeds, which is the correct order. */
     if (ourISPdev && ourISPdev->sensor &&
         ourISPdev->state >= 1 && ourISPdev->state < 3) {
-        pr_info("*** SENSOR REG RACE FIX: sensor registered, ISP state=%d, retrying activation ***\n",
+        pr_info("*** SENSOR REG: sensor registered (state=%d); activation deferred to post-validation (0x805056c1 handler) ***\n",
                 ourISPdev->state);
-        ret = tx_isp_ispcore_activate_module_complete(ourISPdev);
-        if (ret != 0 && ret != -ENOIOCTLCMD)
-            pr_warn("*** SENSOR REG RACE FIX: deferred activation returned %d ***\n", ret);
-        else
-            pr_info("*** SENSOR REG RACE FIX: ISP now at state=%d ***\n",
-                    ourISPdev->state);
     }
 
     return 0;
@@ -7809,7 +8242,7 @@ static int __fill_v4l2_buffer(struct frame_buffer *buf, struct v4l2_buffer *b)
     b->bytesused = buf->bytesused;
     b->flags     = buf->flags;
     b->field     = buf->field;
-    b->timestamp = buf->timestamp;
+    TS_COPY(b->timestamp, buf->timestamp);
     b->sequence  = buf->sequence;
     b->memory    = buf->memory;
     b->m.userptr = buf->m.userptr;
@@ -8092,7 +8525,6 @@ MODULE_INFO(supported, "T31 ISP Hardware");
 
 /* V4L2 symbol dependencies - declare what we need */
 MODULE_ALIAS("char-major-81-*");  /* V4L2 device major number */
-MODULE_DEVICE_TABLE(platform, tx_isp_platform_device_ids);
 
 /* Platform device ID table for proper device matching */
 static struct platform_device_id tx_isp_platform_device_ids[] = {
@@ -8100,3 +8532,4 @@ static struct platform_device_id tx_isp_platform_device_ids[] = {
     { "tx-isp-t31", 0 },
     { }
 };
+MODULE_DEVICE_TABLE(platform, tx_isp_platform_device_ids);

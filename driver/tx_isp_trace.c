@@ -141,7 +141,7 @@ static void trace_write(const char *fmt, ...)
 		if (trace_file && !IS_ERR(trace_file)) {
 			old_fs = get_fs();
 			set_fs(KERNEL_DS);
-			vfs_write(trace_file, buf, len, &trace_file->f_pos);
+			kernel_write(trace_file, buf, len, &trace_file->f_pos);
 			set_fs(old_fs);
 		}
 		mutex_unlock(&trace_file_mutex);

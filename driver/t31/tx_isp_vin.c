@@ -1073,7 +1073,7 @@ int tx_isp_vin_remove(struct platform_device *pdev)
 
 struct platform_driver tx_isp_vin_driver = {
     .probe = tx_isp_vin_probe,
-    .remove = tx_isp_vin_remove,
+    .remove = (void (*)(struct platform_device *))tx_isp_vin_remove,
     .driver = {
         .name = "tx-isp-vin",
         .owner = THIS_MODULE,

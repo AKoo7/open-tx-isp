@@ -1,3 +1,4 @@
+ccflags-y += -DMODULE -mlong-calls -I$(src)/t31/compat -include $(src)/t31/compat/isp612_compat.h
 # Shared (SoC-agnostic) diagnostics built from the driver/ base.
 #
 # tx_isp_trace.c is a standalone pre-module-load register tracer: it owns its

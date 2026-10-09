@@ -89,6 +89,14 @@ static inline struct tx_isp_subdev_pad *tx_isp_subdev_raw_outpad_get(struct tx_i
 
 /* Helper functions to find subdevices by name instead of hardcoded array indices */
 
+/* A subdevs[] slot may hold a stale/wild value (non-NULL garbage) on 6.12 — a plain
+ * `if (sd)` test passes and the following sd->field deref faults (e.g. BadVA 0x0040011c
+ * in tx_isp_ispcore_activate_module_complete). Require a real kernel pointer first. */
+static inline bool tx_isp_sd_ptr_ok(const void *p)
+{
+    return (unsigned long)p >= 0x80000000UL && (unsigned long)p < 0xfff00000UL;
+}
+
 /**
  * tx_isp_find_subdev_by_name - Find subdevice by platform device name
  * @isp_dev: Main ISP device
@@ -106,7 +114,10 @@ static inline struct tx_isp_subdev *tx_isp_find_subdev_by_name(struct tx_isp_dev
 
     for (i = 0; i < ISP_MAX_SUBDEVS; i++) {
         struct tx_isp_subdev *sd = isp_dev->subdevs[i];
-        if (sd && sd->module.name && strcmp(sd->module.name, name) == 0) {
+        /* sd may be wild (non-NULL garbage) AND a valid sd may have a clobbered
+         * module.name pointer (seen = 0x6c696146 "Fail") — validate both before strcmp. */
+        if (tx_isp_sd_ptr_ok(sd) && tx_isp_sd_ptr_ok(sd->module.name) &&
+            strcmp(sd->module.name, name) == 0) {
             return sd;
         }
     }
@@ -173,9 +184,9 @@ static inline struct tx_isp_subdev *tx_isp_find_sensor_subdev(struct tx_isp_dev 
     /* The sensor can be at any index depending on registration order */
     for (i = 0; i < ISP_MAX_SUBDEVS; i++) {
         struct tx_isp_subdev *sd = isp_dev->subdevs[i];
-        if (sd && sd->ops && sd->ops->sensor) {
+        if (tx_isp_sd_ptr_ok(sd) && tx_isp_sd_ptr_ok(sd->ops) && sd->ops->sensor) {
             /* Additional validation: make sure this is NOT an ISP core device */
-            if (sd->module.name) {
+            if (tx_isp_sd_ptr_ok(sd->module.name)) {
                 /* Exclude all known ISP core device names */
                 if (strcmp(sd->module.name, "isp-m0") != 0 &&
                     strcmp(sd->module.name, "isp-w00") != 0 &&

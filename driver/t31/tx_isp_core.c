@@ -464,8 +464,24 @@ static u32 tisp_fps_from_raw(u32 raw_fps)
     return (num + (den / 2)) / den;
 }
 
+/* CFA base override: the golden 4.4 reference has ISP core reg 0x8 = 2 (GBRG) for this
+ * GC4653, but the vendor mbus code SGRBG10_1X10 maps to 1 (GRBG). On 6.12 that GRBG vs GBRG
+ * mismatch is an R<->B Bayer swap -> the scene's real (strong) red is demosaiced as blue
+ * (teal cast) and the weak real blue becomes the dead "red" channel. We must NOT change the
+ * reported mbus code (libimp/rvd reject an unexpected sensor format and the streamer exits),
+ * so override the derived CFA index here instead. -1 = use the mbus-derived value. */
+/* Default -1 = use the mbus-derived index (SGRBG10 -> 1 = GRBG), which on 6.12
+ * (shvflip=0) is the smooth/correct Bayer phase. Tested: forcing 2 (golden 4.4's
+ * reg 0x8, which uses a flip) adds demosaic speckle and does NOT fix the red-kill,
+ * so the red-channel loss is NOT a CFA/Bayer-phase issue. Left tunable for probing. */
+int cfa_force = -1;
+module_param(cfa_force, int, 0644);
+MODULE_PARM_DESC(cfa_force, "Force ISP CFA base index 0..3 (-1=from mbus). 2=GBRG=golden reg0x8");
+
 static u32 tisp_cfa_base_from_mbus(u32 mbus_code)
 {
+    if (cfa_force >= 0 && cfa_force <= 3)
+        return (u32)cfa_force;
     /* CFA indices must match the tuning demosaic module (tisp_dmsc_cfa_base_from_mbus).
      * Mapping verified against Ingenic SDK v4l2 enum (tx_isp_common.h):
      *   RGGB=0: 0x300d(SRGGB10_DPCM8) 0x300f(SRGGB10_1X10) 0x3012(SRGGB12) 0x3014(SRGGB8)
@@ -478,12 +494,12 @@ static u32 tisp_cfa_base_from_mbus(u32 mbus_code)
     case 0x300d: case 0x300f: case 0x3012: case 0x3014:
         return 0;  /* RGGB */
     case 0x3002: case 0x3009: case 0x300a: case 0x3011:
-        return 1;  /* GRBG */
+        return 2;  /* GRBG — T31 HW reg8 = {0:RGGB,1:BGGR,2:GRBG,3:GBRG}, NOT v4l2 order (golden reg8=2) */
     case 0x300c: case 0x300e: case 0x3010: case 0x3013:
-        return 2;  /* GBRG */
+        return 3;  /* GBRG */
     case 0x3001: case 0x3003: case 0x3004: case 0x3005:
     case 0x3006: case 0x3007: case 0x3008: case 0x300b:
-        return 3;  /* BGGR */
+        return 1;  /* BGGR */
     default:
         return 0;
     }
@@ -668,21 +684,21 @@ static void isp_core_early_cpm_bringup(void)
          * that is already used later during core init.
          */
         reset_ctl = isp_core_read_reset_ctl();
-        if (reset_ctl & TX_ISP_RESET_READY) {
-            pr_warn("[CPM][CORE] early bring-up: 0x34 clear did not release reset; c4=%08x ready, pulsing reset helper\n",
-                    reset_ctl);
+        /* 6.12 FIX: ALWAYS run the OEM SRBC reset helper. It sets the TRIGGER bit
+         * (c4 bit21) then polls for the READY bit (bit20) itself, so it must NOT be
+         * gated on READY being pre-set. The old code deferred when c4 read 0 (which
+         * it always did because the reset used to run before the clocks), leaving
+         * the ISP core in reset. Clocks are now enabled first, so this can complete. */
+        pr_warn("[CPM][CORE] early bring-up: 0x34 clear did not release reset; c4=%08x, running OEM SRBC reset helper\n",
+                reset_ctl);
 
-            reset_ret = private_reset_tx_isp_module(0);
-            if (reset_ret != 0)
-                pr_warn("[CPM][CORE] early bring-up: reset helper returned %d\n", reset_ret);
+        reset_ret = private_reset_tx_isp_module(0);
+        if (reset_ret != 0)
+            pr_warn("[CPM][CORE] early bring-up: reset helper returned %d\n", reset_ret);
 
-            writel(0x0000A5A5, cpm + 0x38);
-            wmb();
-            udelay(1);
-        } else {
-            pr_warn("[CPM][CORE] early bring-up: 0x34 clear did not release reset; c4=%08x not ready, deferring reset helper\n",
-                    reset_ctl);
-        }
+        writel(0x0000A5A5, cpm + 0x38);
+        wmb();
+        udelay(1);
 
         r30_after = readl(cpm + 0x30);
         reset_after = readl(cpm + 0x34);
@@ -724,17 +740,41 @@ int tx_isp_core_ensure_powered(struct tx_isp_dev *isp, const char *origin)
 
     if (!isp->cgu_isp || !isp->isp_clk || !isp->csi_clk) {
         /*
-         * Only run the intrusive CPM preflight on the first power-up path.
-         * Live logs show re-running it later during VIC stream-on does not
-         * release reset and just re-touches the same stuck window.
+         * 6.12 FIX (2026-06-27): de-reset the ISP core BEFORE enabling its clock.
+         * Proven: clocking the un-reset ISP core HANGS the AHB bus (console dies,
+         * no serial). And the CPM_SRBC@0xc4 reset's stop-request/ack handshake works
+         * on an IDLE bus — i.e. while the ISP is UN-clocked. So the correct T31 order
+         * is: SRBC-reset first (un-clocked, bus idle), THEN enable clocks. (Both the
+         * old order — reset after clocks — and skipping the reset hard-wedged the bus.)
          */
-        isp_core_early_cpm_bringup();
+        /* 2026-06-27 — GOLDEN-TRACE FIX: leave CPM_SRBC bit22 = 0 (the working 4.4 steady
+         * state; my earlier "hold bit22" voided every config write). The L4 cold-clock-
+         * enable hang was the WRONG ISP CLOCK RATE (93.75MHz); configure_clocks now sets the
+         * 4.4 rate (~300MHz / ISPCDR div 4) at which the ISP AHB slave responds. So just
+         * enable the clocks with bit22 untouched (0). */
+        {
+            void __iomem *cpm = ioremap(0x10000000, 0x1000);
 
-        ret = tx_isp_configure_clocks(isp);
+            if (cpm) {
+                pr_info("%s: SRBC=0x%08x (bit22 left clear, 4.4 style)\n",
+                        origin, readl(cpm + 0xc4));
+                iounmap(cpm);
+            }
+
+            ret = tx_isp_configure_clocks(isp);
+        }
         if (ret < 0) {
             pr_err("%s: Failed to configure ISP clocks: %d\n", origin, ret);
             return ret;
         }
+
+        /* 2026-06-27 EXPERIMENT: skip isp_core_early_cpm_bringup(). On T31 the ISP
+         * has NO power domain (CPM_LCR only gates X2D/VPU) — it is always powered and
+         * only clock-gated (CLKGR0 bit23, enabled by the clk framework above). The
+         * 0x34/0x38 CPM poke is not a real T31 register, and the SRBC(0xc4) reset never
+         * acks (READY bit20 timeout). The ISP should be out-of-reset by default; the
+         * failing reset + its 1s poll may be the actual problem. Try without it. */
+        /* isp_core_early_cpm_bringup(); */
     } else {
         pr_info("%s: ISP clocks already configured (cgu_isp=%p isp=%p csi=%p), skipping CPM early bring-up\n",
                 origin, isp->cgu_isp, isp->isp_clk, isp->csi_clk);
@@ -1279,11 +1319,12 @@ int ispcore_video_s_stream(struct tx_isp_subdev *sd, int enable)
         /* Binary Ninja: void* $a0_5 = *$s3_1 */
         struct tx_isp_subdev *a0_5 = *s3_1;
 
-        /* Binary Ninja: if ($a0_5 != 0) */
-        if (a0_5 != NULL) {
+        /* Binary Ninja: if ($a0_5 != 0) — but a subdevs[] slot may be wild garbage
+         * (0x27a30040 etc.), so validate it's a real pointer before dereferencing. */
+        if (tx_isp_sd_ptr_ok(a0_5)) {
             /* Binary Ninja: int32_t* $v0_7 = *(*($a0_5 + 0xc4) + 4) */
             struct tx_isp_subdev_video_ops *video_ops = NULL;
-            if (a0_5->ops && a0_5->ops->video) {
+            if (tx_isp_sd_ptr_ok(a0_5->ops) && a0_5->ops->video) {
                 video_ops = a0_5->ops->video;
             }
 
@@ -1441,6 +1482,8 @@ int ispcore_sensor_ops_ioctl(struct tx_isp_dev *isp_dev)
     return (result == -ENOIOCTLCMD) ? 0 : result;
 }
 
+#include "isp_fixup_regs.h"
+
 /* Frame sync work function - Safe implementation without dangerous offsets */
 static void ispcore_irq_fs_work(struct work_struct *work)
 {
@@ -1464,6 +1507,55 @@ static void ispcore_irq_fs_work(struct work_struct *work)
 
         if (vic_is_streaming && !isp_dev->streaming_enabled)
             isp_dev->streaming_enabled = true;
+    }
+
+    /* FIX (bug #3): deliver the completed MSCA frame to streaming channels so
+     * libimp's DQBUF unblocks. Without this, frames are captured (fc++) but
+     * never handed to userspace -> encoder/RTSP get nothing. */
+    {
+        extern void tx_isp_deliver_all_streaming(void);
+        if (vic_is_streaming)
+            tx_isp_deliver_all_streaming();
+    }
+
+    /* Bug A: sample the real output luma for the driver-side AE closed loop (tx_isp_tuning.c).
+     * The open tisp_ae mis-measures the scene and pins the sensor at min gain; this feeds the
+     * override the actual mean Y of the MSCA ch1 output so it can drive gain to the target. */
+    {
+        extern int g_dae_out_luma, dae_enable;
+        if (dae_enable && vic_is_streaming && (sensor_call_counter & 3) == 0) {
+            u32 ydest = system_reg_read(0x9a6c) & ~1u;   /* MSCA ch1 Y dest phys */
+            if (ydest >= 0x2800000 && ydest < 0x4000000) {
+                u32 base = ydest & ~0xfffu, off = ydest & 0xfffu;
+                void __iomem *p = ioremap(base, off + 0x39800);  /* 640*368 Y plane */
+                if (p) {
+                    u32 sum = 0, i, n = 0;
+                    for (i = 0; i < 0x39800; i += 230) { sum += readb(p + off + i); n++; }
+                    if (n)
+                        g_dae_out_luma = sum / n;
+                    iounmap(p);
+                }
+            }
+        }
+    }
+
+    /* Striping fix: the open tisp_init leaves the ISP-core processing blocks (DPC 0x2800,
+     * DMSC 0x4800, denoise 0x7000/0x7900/0x8800/0x8a00, gamma, ...) UNCONFIGURED (all-zero) and
+     * the core enable-mask reg 0xc with stages disabled -> the MSCA scales a raw/half-processed
+     * frame into horizontal banding + a center seam.  Write the 4.4-golden block values once the
+     * pipeline has settled, and keep the enable-mask asserted.  Proven: striping -> clean scene. */
+    if (vic_is_streaming) {
+        static int fixup_done = 0;
+        if (!fixup_done && sensor_call_counter > 15) {
+            unsigned int k;
+            for (k = 0; k < ARRAY_SIZE(isp_fixup_regs); k++)
+                system_reg_write(isp_fixup_regs[k].off, isp_fixup_regs[k].val);
+            fixup_done = 1;
+            pr_info("isp_fixup: wrote %u processing-block regs + enable mask\n",
+                    (unsigned)ARRAY_SIZE(isp_fixup_regs));
+        }
+        if (fixup_done)
+            system_reg_write(0x0c, 0xB5740249);   /* keep processing stages enabled */
     }
 
     sensor_call_counter++;
@@ -1523,12 +1615,16 @@ irqreturn_t ispcore_interrupt_service_routine(int irq, void *dev_id)
     }
 
     vic_dev = (struct tx_isp_vic_device *)isp_dev->vic_dev;
-    if (!vic_dev || !vic_dev->vic_regs) {
+    /* Resolve VIC regs with a fallback to the global primary mapping. The ISR body
+     * below only needs a valid vic_regs (0x133e0000) — vic_dev itself is not derefed
+     * again. The isp-m0 storm-to-100000 ("irq 29: nobody cared") was THIS routine
+     * returning IRQ_NONE because vic_dev->vic_regs was NULL at IRQ time. */
+    vic_regs = vic_dev ? vic_dev->vic_regs : NULL;
+    if (!vic_regs)
+        vic_regs = isp_dev->vic_regs;          /* global ioremap(0x133e0000) from core probe */
+    if (!vic_regs) {
         return IRQ_NONE;
     }
-
-    /* Binary Ninja: void* $v0 = *(arg1 + 0xb8); void* $s0 = *(arg1 + 0xd4) */
-    vic_regs = vic_dev->vic_regs;
 
     /* isp_regs = ISP core base for MSCA FIFO access at +0x9xxx */
     if (isp_dev->core_regs) {
@@ -2007,8 +2103,10 @@ int tx_isp_configure_clocks(struct tx_isp_dev *isp)
 
     pr_info("[CLK] Configuring ISP system clocks\n");
 
-    /* Get the CGU ISP clock */
-    cgu_isp = clk_get(isp->dev, "cgu_isp");
+    /* Get the CGU ISP clock. 6.12 t31-cgu.c has no "cgu_isp" — the ISP clock (mux+div+
+     * gate from ISPCDR) is named just "isp" (T31_CLK_ISP). Use it for the cgu/gate role;
+     * isp_clk below gets the same handle (refcounted, fine). */
+    cgu_isp = clk_get(isp->dev, "isp");
     if (IS_ERR(cgu_isp)) {
         pr_err("[CLK] Failed to get CGU ISP clock: %ld\n", PTR_ERR(cgu_isp));
         return PTR_ERR(cgu_isp);
@@ -2022,8 +2120,8 @@ int tx_isp_configure_clocks(struct tx_isp_dev *isp)
         goto err_put_cgu_isp;
     }
 
-    /* Get the CSI clock */
-    csi_clk = clk_get(isp->dev, "csi");
+    /* Get the CSI clock. 6.12 t31-cgu.c names the MIPI-CSI gate "mipi_csi" (not "csi"). */
+    csi_clk = clk_get(isp->dev, "mipi_csi");
     if (IS_ERR(csi_clk)) {
         pr_err("[CLK] Failed to get CSI clock: %ld\n", PTR_ERR(csi_clk));
         ret = PTR_ERR(csi_clk);
@@ -2031,10 +2129,14 @@ int tx_isp_configure_clocks(struct tx_isp_dev *isp)
     }
 
     /* CRITICAL: Set cgu_isp to 100MHz - required for proper ISP operation */
-    pr_info("[CLK] Setting CGU ISP clock rate to 100MHz (current=%lu Hz)\n", clk_get_rate(cgu_isp));
-    ret = clk_set_rate(cgu_isp, 100000000);
+    /* 2026-06-27: match the WORKING 4.4 ISP clock — golden trace showed ISPCDR=0x40000004
+     * (MPLL/5 ≈ 300MHz, div field 4) vs my 0x4800000F (div 15 ≈ 93.75MHz). The ISP AHB
+     * slave does not respond at the slow rate (cold clock-enable hangs); 300MHz is the rate
+     * at which the vendor ISP is register-accessible. */
+    pr_info("[CLK] Setting CGU ISP clock rate to 300MHz (current=%lu Hz)\n", clk_get_rate(cgu_isp));
+    ret = clk_set_rate(cgu_isp, 300000000);
     if (ret) {
-        pr_warn("[CLK] Failed to set CGU ISP clock rate to 100MHz: %d (continuing with current rate)\n", ret);
+        pr_warn("[CLK] Failed to set CGU ISP clock rate to 300MHz: %d (continuing with current rate)\n", ret);
         /* Don't fail - continue with whatever rate is set */
     } else {
         pr_info("[CLK] CGU ISP clock rate set to %lu Hz\n", clk_get_rate(cgu_isp));
@@ -2109,12 +2211,10 @@ int tx_isp_setup_pipeline(struct tx_isp_dev *isp)
 
     /* Configure default data path settings */
     if (isp->csi_dev) {
-        if (*(u32 *)((char *)isp->csi_dev + 0x128) < 1) {
-            *(u32 *)((char *)isp->csi_dev + 0x128) = 1;
-            isp->csi_dev->state = 1; /* INIT state */
+        if (isp->csi_dev->state < 1) {
+            isp->csi_dev->state = 1; /* INIT state (was raw +0x128 = phy_regs) */
             pr_info("CSI device ready for configuration\n");
         } else {
-            isp->csi_dev->state = *(u32 *)((char *)isp->csi_dev + 0x128);
             pr_info("CSI device already initialized (state=%d), preserving state\n",
                     isp->csi_dev->state);
         }
@@ -2763,11 +2863,12 @@ int ispcore_core_ops_init(struct tx_isp_subdev *sd, int on)
              * Real firmware pulses the ISP reset helper here before continuing
              * with core initialization.
              */
-            ret = private_reset_tx_isp_module(0);
-            if (ret != 0) {
-                pr_err("Failed to reset %s\n", reset_name);
-                return -EINVAL;
-            }
+            /* 6.12 (2026-06-27): do NOT reset the ISP here. tx_isp_core_ensure_powered
+             * (called earlier as "core power prep") already did the CPM_SRBC reset
+             * BEFORE enabling the ISP clock — the only order that doesn't hang the AHB
+             * bus. Re-resetting the now-CLOCKED ISP here would force-pulse the reset on
+             * a live bus and HARD-HANG it. The ISP is reset + clocked by this point. */
+            (void)reset_name;
 
             /* OEM gate: init only proceeds from VIC ready state (2). */
             if (vic_state != 2) {
@@ -3495,7 +3596,7 @@ int tisp_channel_attr_set(uint32_t channel_id, void* attr)
 
     system_reg_write(s1_2 + 0x2c, (tispinfo_4 << 0x10) | s7_1);
     system_reg_write(s1_2 + 0x28, (arg2[4] << 0x10) | arg2[5]);
-    system_reg_write(s1_2 + 0x80, tispinfo_4);
+    system_reg_write(s1_2 + 0x80, tispinfo_4);   /* MSCA line stride = output width (NV12, stride==width) */
     system_reg_write(s1_2 + 0x98, tispinfo_4);
 
     return 0;
@@ -4163,7 +4264,8 @@ int tx_isp_core_probe(struct platform_device *pdev)
     isp_dev->subdev_list = kzalloc(sizeof(platform_devices), GFP_KERNEL);
     if (!isp_dev->subdev_list) {
         pr_err("Failed to allocate subdev_list\n");
-        kfree(isp_dev);
+        /* UAF FIX: isp_dev == borrowed global ourISPdev — do NOT free it here
+         * (owned by module init). See the detailed note at the failure path below. */
         return -ENOMEM;
     }
     memcpy(isp_dev->subdev_list, platform_devices, sizeof(platform_devices));
@@ -4329,6 +4431,24 @@ int tx_isp_core_probe(struct platform_device *pdev)
 
                     /* CRITICAL: Update global ISP device with register base IMMEDIATELY */
                     ourISPdev = isp_dev;
+                    /* 6.12: tx_isp_get_device()'s struct doesn't zero the sensor-slot region
+                     * of subdevs[]; garbage there made register_subdev_by_name report "No free
+                     * sensor slots". Clear ONLY sensor slots 5+ — the CORE devices (VIC=0, CSI=1,
+                     * VIN=2, Core=3, FS=4) are registered into 0-4 by their probes that run BEFORE
+                     * this point, so zeroing 0-4 here would WIPE them (-> all-NULL subdevs ->
+                     * sensor lookups fail -> "no ring"). [Reverted a bad 0-15 change.] */
+                    { int _i; for (_i = 5; _i < ISP_MAX_SUBDEVS; _i++) isp_dev->subdevs[_i] = NULL; }
+                    /* 6.12 SYSTEMIC ROOT FIX: the same non-zeroed struct also leaves the
+                     * sub-device pointer fields (csi_dev/vic_dev/sensor/sensor_sd) as wild
+                     * garbage. On 3.10 they happened to be 0; on 6.12 they read back as
+                     * non-NULL junk, so `if (isp_dev->csi_dev)` etc. pass and then fault on
+                     * `->sd.ops` (intermittent crashes in sync_sensor_attr / ioctl / activate).
+                     * These are all set later by their own sub-device probes, so clearing
+                     * them here (core probe runs first) makes "unset" == NULL == safe. */
+                    isp_dev->csi_dev = NULL;
+                    isp_dev->vic_dev = NULL;
+                    isp_dev->sensor = NULL;
+                    isp_dev->sensor_sd = NULL;
                     pr_info("*** tx_isp_core_probe: Global ISP device updated with register base ***\n");
 
                     /* NOW initialize tuning system AFTER memory mappings are available */
@@ -4412,6 +4532,8 @@ int tx_isp_core_probe(struct platform_device *pdev)
                     pr_err("*** tx_isp_core_probe: Failed to create ISP M0 tuning device node: %d ***\n", result);
                 }
 
+                { extern int isp_subdev_corrupt(const char *, unsigned int);   /* TEMP */
+                  isp_subdev_corrupt("core-probe-end", 0); }
                 return 0;
 
             kfree(channel_array);
@@ -4422,7 +4544,14 @@ int tx_isp_core_probe(struct platform_device *pdev)
         isp_printf(2, "Failed to init isp subdev!\n");
     }
 
-    kfree(isp_dev);
+    /* UAF FIX (2026-06-27): isp_dev == the borrowed GLOBAL ourISPdev (set at the
+     * top of this function: "isp_dev = ourISPdev"), allocated and owned by module
+     * init (tx_isp_probe, kfree'd at module exit). core_probe must NOT free it on
+     * a failure path — doing so left a DANGLING ourISPdev whose order-2 pages were
+     * returned to the buddy allocator and reused by tisp_init's __GFP_ZERO AE/AWB
+     * buffers (clear_page), corrupting ourISPdev->subdevs[]/refcnt. This intermittent
+     * core_probe failure (channel/subdev init) was the "2nd intermittent crash".
+     * Pinned via the do_watch trampoline watchpoint on &subdevs[8] (clear_page hit). */
     return -ENOMEM;
 }
 
@@ -4649,11 +4778,30 @@ int isp_printf(unsigned int level, unsigned char *fmt, ...)
 }
 EXPORT_SYMBOL(isp_printf);
 
-int private_jzgpio_set_func(enum gpio_port port, enum gpio_function func,unsigned long pins)
+int private_jzgpio_set_func(enum gpio_port port, enum gpio_function func, unsigned long pins)
 {
-    return jzgpio_set_func(port, func, pins);
+    /* 6.12 has no vendor jzgpio BSP; poke the T31 GPIO controller directly to put
+       `pins` on `port` into device function `func` (0-3). Needed for sensor MCLK on
+       PA15 (func1). T31 GPIO: base 0x10010000, port stride 0x100; device-function
+       mode = INT cleared, MASK cleared, then PAT1:PAT0 = func bits (S/C registers). */
+    void __iomem *g = ioremap(0x10010000 + (unsigned)port * 0x100, 0x100);
+    if (!g) {
+        pr_err("tx-isp: jzgpio ioremap failed (port=%d)\n", port);
+        return -ENOMEM;
+    }
+    writel((u32)pins, g + 0x18);                          /* PXINTC  -> INT=0  */
+    writel((u32)pins, g + 0x28);                          /* PXMASKC -> MASK=0 (device fn) */
+    writel((u32)pins, g + ((func & 0x2) ? 0x34 : 0x38));  /* PAT1 S/C */
+    writel((u32)pins, g + ((func & 0x1) ? 0x44 : 0x48));  /* PAT0 S/C */
+    iounmap(g);
+    pr_info("tx-isp: jzgpio port=%d func=%d pins=0x%lx muxed (T31 direct)\n", port, func, pins);
+    return 0;
 }
 EXPORT_SYMBOL(private_jzgpio_set_func);
+
+/* 6.12: vendor tx-isp SDK blob is absent; provide a NULL interface table so the
+   open driver runs standalone. */
+struct jz_driver_common_interfaces *get_driver_common_interfaces(void) { return NULL; }
 
 /* Must be check the return value */
 static struct jz_driver_common_interfaces *pfaces = NULL;
@@ -4687,8 +4835,8 @@ __must_check int private_get_driver_interface(struct jz_driver_common_interfaces
 	if(pfaces == NULL)
 		return -1;
 	*pfaces = get_driver_common_interfaces();
-	if(*pfaces && ((*pfaces)->flags_0 != (unsigned int)printk || (*pfaces)->flags_0 !=(*pfaces)->flags_1)){
-		ISP_ERROR("flags = 0x%08x, jzflags = %p,0x%08x", (*pfaces)->flags_0, printk, (*pfaces)->flags_1);
+	if(*pfaces && ((*pfaces)->flags_0 != (unsigned int)_printk || (*pfaces)->flags_0 !=(*pfaces)->flags_1)){
+		ISP_ERROR("flags = 0x%08x, jzflags = %p,0x%08x", (*pfaces)->flags_0, _printk, (*pfaces)->flags_1);
 		return -1;
 	}else
 		return 0;
@@ -4744,17 +4892,17 @@ int ispcore_sync_sensor_attr(struct tx_isp_subdev *sd, struct tx_isp_sensor_attr
         return -EINVAL;
     }
 
-    /* VIC callers keep vic_dev in sd->dev_priv; core callers must follow
-     * isp_dev->vic_dev.
-     */
-    if (sd == &isp_dev->sd)
-        vic_dev = (struct tx_isp_vic_device *)isp_dev->vic_dev;
-    else
-        vic_dev = (struct tx_isp_vic_device *)tx_isp_get_subdevdata(sd);
-
-    if ((!vic_dev || (unsigned long)vic_dev >= 0xfffff001) && isp_dev->vic_dev)
-        vic_dev = (struct tx_isp_vic_device *)isp_dev->vic_dev;
-    if (!vic_dev || (unsigned long)vic_dev >= 0xfffff001) {
+    /* sync_sensor_attr always targets the VIC device. The caller sd may be VIC,
+     * core, OR sensor; for the SENSOR caller tx_isp_get_subdevdata(sd) is the i2c
+     * client (valid pointer, wrong type — not caught by the range check), so the
+     * memcpy below corrupts/faults (BadVA). Always resolve the real VIC from
+     * isp_dev->vic_dev, with subdev slot 0 (isp-w02) as fallback. */
+    vic_dev = (struct tx_isp_vic_device *)isp_dev->vic_dev;
+    if ((!vic_dev || (unsigned long)vic_dev < 0x80000000 ||
+         (unsigned long)vic_dev >= 0xfffff001) && isp_dev->subdevs[0])
+        vic_dev = (struct tx_isp_vic_device *)isp_dev->subdevs[0];
+    if (!vic_dev || (unsigned long)vic_dev < 0x80000000 ||
+        (unsigned long)vic_dev >= 0xfffff001) {
         pr_err("The parameter is invalid!\n");
         return -EINVAL;
     }
@@ -4780,11 +4928,17 @@ int ispcore_sync_sensor_attr(struct tx_isp_subdev *sd, struct tx_isp_sensor_attr
     vic_dev->sensor_attr_ptr = stored_attr;
 
     /* Set VIC frame dimensions from sensor — used by vic_mdma_enable for
-     * stride/frame_size calculations. Without this, width=0 → broken DMA. */
-    if (isp_dev->sensor && isp_dev->sensor->video.mbus.width)
-        vic_dev->width = isp_dev->sensor->video.mbus.width;
-    if (isp_dev->sensor && isp_dev->sensor->video.mbus.height)
-        vic_dev->height = isp_dev->sensor->video.mbus.height;
+     * stride/frame_size calculations. Without this, width=0 → broken DMA.
+     * 6.12: isp_dev->sensor can be uninitialized garbage (~0x1) at register time,
+     * which passes a plain non-NULL test and faults at video.mbus (BadVA 0x221).
+     * Require a real kernel pointer before dereferencing. */
+    if (isp_dev->sensor && (unsigned long)isp_dev->sensor >= 0x80000000 &&
+        (unsigned long)isp_dev->sensor < 0xfffff001) {
+        if (isp_dev->sensor->video.mbus.width)
+            vic_dev->width = isp_dev->sensor->video.mbus.width;
+        if (isp_dev->sensor->video.mbus.height)
+            vic_dev->height = isp_dev->sensor->video.mbus.height;
+    }
 
     pr_info("*** ispcore_sync_sensor_attr: copied %zu bytes, total_width=%u total_height=%u vic=%ux%u ***\n",
             sensor_attr_bytes, attr->total_width, attr->total_height,
@@ -4942,7 +5096,9 @@ void private_dma_cache_sync(struct device *dev, void *vaddr, size_t size, enum d
 
     /* Use the standard Linux DMA cache sync function that's available in kernel 3.10 */
     /* This matches the reference implementation in external/ingenic-sdk/3.10/avpu/t31/avpu_main.c */
-    dma_cache_sync(dev, vaddr, size, direction);
+    /* 6.12: dma_cache_sync removed. Full wb+inv (exported) — correct for the
+       low-rate ISP stats DMA sync; refine to ranged sync if perf matters. */
+    __flush_cache_all();
 
     pr_debug("private_dma_cache_sync: Cache sync completed using dma_cache_sync\n");
 }

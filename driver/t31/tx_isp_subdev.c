@@ -1,6 +1,7 @@
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/of.h>
+#include <linux/irqdomain.h>   /* INTC irqdomain mapping for ISP/VIC hwirqs (6.12) */
 #include <linux/clk.h>
 #include "include/tx_isp.h"
 #include "include/tx_isp_csi.h"
@@ -562,11 +563,21 @@ int isp_subdev_init_clks(struct tx_isp_subdev *sd, int clk_count)
                     goto cleanup_clocks;
                 }
             } else {
-                /* Binary Ninja: isp_printf(2, "Can not support this frame mode!!!\n", *$s6_1) */
-                pr_warn("Failed to get clock %s\n", clk_name);
-                /* Binary Ninja: result = *$s4_1; $s0_3 = $s0_2 << 2 - goto cleanup */
-                error = IS_ERR(clk) ? PTR_ERR(clk) : -ENODEV;
-                goto cleanup_clocks;
+                /* 2026-06-27: a missing clock is OPTIONAL on this kernel, not fatal.
+                 * The 6.12 clk provider doesn't register the "csi" clock the platform
+                 * data lists (clk_get -> -ENOENT). Failing here aborted the whole
+                 * CSI/core tx_isp_subdev_init -> tx_isp_core_probe failed ("Failed to
+                 * init isp subdev") -> the channel-init loop never ran -> isp_dev->
+                 * channels[].state stayed 0 -> ispcore_activate_module failed (printing
+                 * the misleading "mipi ch0 hcomp err" on channel->state != 1) -> rvd
+                 * "no ring". (It was ALSO the intermittent tx_isp_core_probe failure that
+                 * triggered the ourISPdev UAF.) Treat absent clocks as optional: NULL the
+                 * slot (downstream loops already guard `if (clk_array[i])`) and continue. */
+                pr_warn("isp_subdev_init_clks: clock '%s' not available on this kernel — optional, skipping\n",
+                        clk_name);
+                clk_array[i] = NULL;
+                i++;
+                continue;
             }
         }
 
@@ -675,14 +686,48 @@ int tx_isp_request_irq(struct platform_device *pdev, struct tx_isp_irq_info *irq
 		return -EINVAL;
 	}
 
-	irq_num = platform_get_irq(pdev, 0);
-	if (irq_num < 0) {
-		irq_info->irq = 0;
-		irq_info->handler = NULL;
-		irq_info->data = NULL;
-		return 0;
+	/* 6.12 IRQ mapping: the platform-device IORESOURCE_IRQ now carries the real T31
+	 * INTC HWIRQ (IRQ_ISP=29 for isp-m0/core, IRQ_VIC=30 for isp-w02/VIC; the old
+	 * hardcoded 37/38 were wrong — 37 is MSC0/mmc on T31). The Ingenic INTC is a LINEAR
+	 * irqdomain that only creates a Linux virq for hwirqs referenced by a DT node, and
+	 * there is NO isp/vic DT node, so we must create the mapping ourselves. */
+	{
+		struct resource *irq_res = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
+		struct device_node *intc_np;
+		struct irq_domain *intc_dom;
+		int hwirq;
+
+		if (!irq_res) {            /* device has no IRQ resource (CSI/VIN/FS) — fine */
+			irq_info->irq = 0;
+			irq_info->handler = NULL;
+			irq_info->data = NULL;
+			return 0;
+		}
+		hwirq = (int)irq_res->start;
+
+		intc_np = of_find_compatible_node(NULL, NULL, "ingenic,t31-intc");
+		intc_dom = intc_np ? irq_find_host(intc_np) : NULL;
+		if (intc_np)
+			of_node_put(intc_np);
+
+		if (intc_dom) {
+			irq_num = irq_create_mapping(intc_dom, hwirq);
+			if (!irq_num) {
+				pr_err("tx_isp_request_irq: irq_create_mapping(hwirq=%d) failed for %s\n",
+				       hwirq, dev_name(&pdev->dev));
+				irq_info->irq = 0; irq_info->handler = NULL; irq_info->data = NULL;
+				return 0;
+			}
+			pr_info("tx_isp_request_irq: %s hwirq %d -> virq %d (via INTC domain)\n",
+				dev_name(&pdev->dev), hwirq, irq_num);
+		} else {
+			pr_warn("tx_isp_request_irq: INTC domain not found; using hwirq %d as-is\n", hwirq);
+			irq_num = hwirq;
+		}
 	}
 
+	/* (2026-06-27: tested skipping the request entirely — the box STILL hard-wedges right
+	 * after the ISP clock enable, so the wedge is NOT an enabled error-IRQ storm.) */
 	ret = request_threaded_irq(irq_num,
 					   isp_irq_handle,
 					   isp_irq_thread_handle,
@@ -1034,7 +1079,7 @@ static int read_sensor_dimensions(u32 *width, u32 *height)
     if (!IS_ERR(width_file)) {
         pos = 0;
         memset(width_buf, 0, sizeof(width_buf));
-        if (vfs_read(width_file, width_buf, sizeof(width_buf)-1, &pos) > 0) {
+        if (kernel_read(width_file, width_buf, sizeof(width_buf)-1, &pos) > 0) {
             width_buf[sizeof(width_buf)-1] = '\0';
             *width = simple_strtol(width_buf, NULL, 10);
         }
@@ -1049,7 +1094,7 @@ static int read_sensor_dimensions(u32 *width, u32 *height)
     if (!IS_ERR(height_file)) {
         pos = 0;
         memset(height_buf, 0, sizeof(height_buf));
-        if (vfs_read(height_file, height_buf, sizeof(height_buf)-1, &pos) > 0) {
+        if (kernel_read(height_file, height_buf, sizeof(height_buf)-1, &pos) > 0) {
             height_buf[sizeof(height_buf)-1] = '\0';
             *height = simple_strtol(height_buf, NULL, 10);
         }
@@ -1287,6 +1332,8 @@ void tx_isp_subdev_auto_link(struct platform_device *pdev, struct tx_isp_subdev 
 
             if (sensor_index != -1) {
                 ourISPdev->subdevs[sensor_index] = sd;
+                { extern int isp_subdev_corrupt(const char *, unsigned int);   /* TEMP */
+                  isp_subdev_corrupt("post-register", sensor_index); }
                 /* sensor subdev references ISP dev via ourISPdev global */
                 pr_info("*** SENSOR '%s' registered at subdev index %d ***\n", dev_name, sensor_index);
                 pr_info("*** SENSOR subdev: %p, ops: %p ***\n", sd, sd->ops);
@@ -1381,7 +1428,7 @@ extern int tx_isp_vic_remove(struct platform_device *pdev);
 /* Platform driver structures */
 static struct platform_driver tx_isp_csi_driver = {
     .probe = tx_isp_csi_probe,
-    .remove = tx_isp_csi_remove,
+    .remove = (void (*)(struct platform_device *))tx_isp_csi_remove,
     .driver = {
         .name = "isp-w01",  /* Match platform device name */
         .owner = THIS_MODULE,
@@ -1390,7 +1437,7 @@ static struct platform_driver tx_isp_csi_driver = {
 
 static struct platform_driver tx_isp_vin_driver = {
     .probe = tx_isp_vin_probe,
-    .remove = tx_isp_vin_remove,
+    .remove = (void (*)(struct platform_device *))tx_isp_vin_remove,
     .driver = {
         .name = "isp-w00",  /* Match platform device name */
         .owner = THIS_MODULE,
@@ -1399,7 +1446,7 @@ static struct platform_driver tx_isp_vin_driver = {
 
 static struct platform_driver tx_isp_core_driver = {
     .probe = tx_isp_core_probe,
-    .remove = tx_isp_core_remove,
+    .remove = (void (*)(struct platform_device *))tx_isp_core_remove,
     .driver = {
         .name = "isp-m0",  /* Match platform device name */
         .owner = THIS_MODULE,
@@ -1408,7 +1455,7 @@ static struct platform_driver tx_isp_core_driver = {
 
 static struct platform_driver tx_isp_vic_driver = {
     .probe = tx_isp_vic_probe,
-    .remove = tx_isp_vic_remove,
+    .remove = (void (*)(struct platform_device *))tx_isp_vic_remove,
     .driver = {
         .name = "isp-w02",
         .owner = THIS_MODULE,

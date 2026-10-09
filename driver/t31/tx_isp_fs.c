@@ -357,8 +357,10 @@ int tx_isp_fs_probe(struct platform_device *pdev)
         /* Note: Removed unsafe offset access - use proper channel enable logic */
         if (i < 4) {  /* Enable first 4 channels by default */
             /* Binary Ninja: sprintf(&$s0_2[0xab], "Err [VIC_INT] : mipi fid asfifo ovf!!!\n") */
+            /* misc_register needs a BARE name; "/dev/..." makes sysfs mangle it to
+             * "!dev!framechanN" so /dev/framechanN is never created (6.12). */
             snprintf(current_channel->name, sizeof(current_channel->name),
-                     "/dev/framechan%d", i);
+                     "framechan%d", i);
 
             /* Binary Ninja: *$s0_2 = 0xff */
             current_channel->misc.minor = MISC_DYNAMIC_MINOR;
@@ -494,7 +496,7 @@ int tx_isp_fs_remove(struct platform_device *pdev)
 /* FS platform driver structure */
 struct platform_driver tx_isp_fs_platform_driver = {
     .probe = tx_isp_fs_probe,
-    .remove = tx_isp_fs_remove,
+    .remove = (void (*)(struct platform_device *))tx_isp_fs_remove,
     .driver = {
         .name = "isp-fs",  /* Match platform device name */
         .owner = THIS_MODULE,
