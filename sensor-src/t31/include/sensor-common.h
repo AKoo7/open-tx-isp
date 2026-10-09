@@ -39,6 +39,9 @@
 #ifndef V4L2_MBUS_FMT_SRGGB10_1X10
 #define V4L2_MBUS_FMT_SRGGB10_1X10 MEDIA_BUS_FMT_SRGGB10_1X10
 #endif
+#ifndef V4L2_MBUS_FMT_SGRBG10_1X10
+#define V4L2_MBUS_FMT_SGRBG10_1X10 MEDIA_BUS_FMT_SGRBG10_1X10
+#endif
 
 static inline int set_sensor_gpio_function(int func_set)
 {

@@ -7,3 +7,6 @@ KBUILD_EXTRA_SYMBOLS := $(src)/../../driver/t31/Module.symvers
 
 sensor_gc2053_t31-objs := gc2053.o
 obj-m += sensor_gc2053_t31.o
+
+sensor_gc4653_t31-objs := gc4653.o
+obj-m += sensor_gc4653_t31.o
