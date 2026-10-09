@@ -5174,7 +5174,7 @@ static int tisp_ae1_get_statistics(void *buffer, uint32_t flags)
     (void)flags;
     if (!buffer)
         return -EINVAL;
-    if (!ACCESS_ONCE(wdr_ready))
+    if (!READ_ONCE(wdr_ready))
         return 0;
     spin_lock_irqsave(&wdr_stats_lock, irq_flags);
     ret = t31_wdr_ae_blocks(wdr_block_mean1, buffer, 0x1000, _ae_parameter.data);
@@ -5295,7 +5295,7 @@ static int tisp_ae1_get_hist(void *buffer)
     u32 i;
     if (!buffer)
         return -EINVAL;
-    if (!ACCESS_ONCE(wdr_ready))
+    if (!READ_ONCE(wdr_ready))
         return 0;
     spin_lock_irqsave(&wdr_stats_lock, flags);
     for (i = 0; i < 256; ++i)
@@ -20389,7 +20389,7 @@ int tiziano_wdr_interrupt_static(void)
     struct tisp_event_record event = {0};
     unsigned long flags;
     u32 address, offset;
-    if (!ACCESS_ONCE(wdr_ready) || !wdr_dma_buffer || !wdr_buf)
+    if (!READ_ONCE(wdr_ready) || !wdr_dma_buffer || !wdr_buf)
         return 0;
     address = system_reg_read(0x2680);
     if (address < wdr_dma_phys || address >= wdr_dma_phys + 0x8000)
@@ -31366,7 +31366,7 @@ int tisp_event_drain(unsigned int timeout_ms)
 {
     unsigned long deadline = jiffies + msecs_to_jiffies(timeout_ms);
 
-    while (ACCESS_ONCE(tisp_event_count) != 0) {
+    while (READ_ONCE(tisp_event_count) != 0) {
         if (time_after(jiffies, deadline))
             return -ETIMEDOUT;
         msleep(5);
@@ -35350,7 +35350,7 @@ int ae1_interrupt_static(void)
 
     /* AE1 statistics feed only the WDR engine; without wdr_ready
      * tisp_ae1_get_statistics() ignores the bank, so do not sync it. */
-    if (ACCESS_ONCE(wdr_ready)) {
+    if (READ_ONCE(wdr_ready)) {
         /* OEM invalidates the selected DMA bank before reading it. */
         private_dma_cache_sync(NULL, buffer_addr, 0x1000, DMA_BIDIRECTIONAL);
 
@@ -35388,7 +35388,7 @@ int ae1_interrupt_hist(void)
     /* AE1 histogram feeds only the WDR engine (tisp_ae1_get_hist() ignores
      * it without wdr_ready) and the event 6 callback, tisp_ae1_process(),
      * is empty. In linear mode skip the sync and the event thread wakeup. */
-    if (!ACCESS_ONCE(wdr_ready))
+    if (!READ_ONCE(wdr_ready))
         return 2;
 
     /* Binary Ninja: private_dma_cache_sync(0, $s0 + data_b2f60, 0x800, 0) */

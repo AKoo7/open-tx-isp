@@ -386,7 +386,7 @@ int tisp_wdr_process(void)
 {
 	/* The ISP event dispatcher holds IRQs off. Histogram matching belongs
 	 * on a worker: no allocation, mutex, or long calculation in that context. */
-	if (ACCESS_ONCE(wdr_ready))
+	if (READ_ONCE(wdr_ready))
 		schedule_work(&wdr_work);
 	return 0;
 }

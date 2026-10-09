@@ -1437,11 +1437,11 @@ int tx_isp_core_wait_quiet(u32 frame_ms)
     u32 quiet_ms, waited = 0, seq, now;
 
     quiet_ms = clamp_t(u32, frame_ms, 10, 500) * 2;
-    seq = ACCESS_ONCE(isp_core_irq_seq);
+    seq = READ_ONCE(isp_core_irq_seq);
     while (waited < 1000) {
         msleep(quiet_ms);
         waited += quiet_ms;
-        now = ACCESS_ONCE(isp_core_irq_seq);
+        now = READ_ONCE(isp_core_irq_seq);
         if (now == seq)
             return waited;
         seq = now;

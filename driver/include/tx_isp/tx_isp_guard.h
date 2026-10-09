@@ -231,11 +231,17 @@ static inline int tx_isp_i2c_add_sensor_driver(struct i2c_driver *driver)
 {
 	struct module *owner;
 
-	preempt_disable();
-	owner = __module_address((unsigned long)driver);
-	preempt_enable();
-	if (!owner)
-		owner = driver->driver.owner;	/* built in: NULL */
+	/*
+	 * The i2c_driver is static data of the sensor module, whose initializer
+	 * sets .driver.owner = THIS_MODULE, so owner already identifies the
+	 * sensor (NULL when the sensor is built in).  The reference port
+	 * recovered it with __module_address((unsigned long)driver), but that
+	 * symbol is not exported to modules on mainline (7.1).  .driver.owner is
+	 * the exported-API equivalent and is not clobbered here: we call
+	 * i2c_register_driver() directly rather than the i2c_add_driver() macro
+	 * that would overwrite owner with the ISP's THIS_MODULE.
+	 */
+	owner = driver->driver.owner;
 	driver->driver.suppress_bind_attrs = true;
 	return i2c_register_driver(owner, driver);
 }
