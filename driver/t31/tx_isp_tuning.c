@@ -2485,7 +2485,7 @@ static int tisp_read_file_into_buffer(const char *path, void **out_buf, int *out
 
 	old_fs = get_fs();
 	set_fs(KERNEL_DS);
-	ret = vfs_read(fp, (char *)buf, size, &pos);
+	ret = kernel_read(fp, (char *)buf, size, &pos);
 	set_fs(old_fs);
 	filp_close(fp, NULL);
 
@@ -5003,6 +5003,13 @@ static void ae0_weight_mean2(
  *
  * Returns: interpolated AE target brightness
  */
+/* Bug A: the AE normalizes the output to its target (_lum_list); on 6.12 the scene ends up ~3x too
+ * dark vs the 4.4 blob (YAVG ~40 vs ~114).  Expose a runtime scale (Q8, 256=1.0x) on the AE target so
+ * it can be tuned live via /sys/module/tx_isp_t31/parameters/ae_target_scale without rebuilding. */
+int ae_target_scale = 256;
+module_param(ae_target_scale, int, 0644);
+MODULE_PARM_DESC(ae_target_scale, "AE brightness-target scale, Q8 (256=1.0x)");
+
 static uint32_t tisp_ae_target(uint32_t cur_ev_q, uint32_t q)
 {
     uint32_t qm = q & 31;
@@ -5011,12 +5018,11 @@ static uint32_t tisp_ae_target(uint32_t cur_ev_q, uint32_t q)
     const uint32_t *lum_list = ae_wdr_mode ? _lum_list_wdr.data : _lum_list.data;
     int i, idx;
     uint32_t x0, x1, y0, y1, dx, num;
+    uint32_t target;
 
     /* Edge cases: below first threshold or above last */
-    if (cur_ev <= ev_list[0])
-        return lum_list[0];
-    if (cur_ev >= ev_list[9])
-        return lum_list[9];
+    if (cur_ev <= ev_list[0]) { target = lum_list[0]; goto scale_out; }
+    if (cur_ev >= ev_list[9]) { target = lum_list[9]; goto scale_out; }
 
     /* Find bracketing interval */
     idx = 0;
@@ -5036,19 +5042,18 @@ static uint32_t tisp_ae_target(uint32_t cur_ev_q, uint32_t q)
     y1 = lum_list[idx + 1];
 
     /* Linear interpolation between y0 and y1 */
-    if (x1 == x0)
-        return y0;
+    if (x1 == x0) { target = y0; goto scale_out; }
 
     dx = (x1 > x0) ? (x1 - x0) : 1;
     num = (cur_ev > x0) ? (cur_ev - x0) : 0;
 
-    if (y1 >= y0) {
-        /* Ascending: y0 + (y1-y0)*num/dx */
-        return y0 + (y1 - y0) * num / dx;
-    } else {
-        /* Descending: y0 - (y0-y1)*num/dx */
-        return y0 - (y0 - y1) * num / dx;
-    }
+    if (y1 >= y0)
+        target = y0 + (y1 - y0) * num / dx;   /* ascending */
+    else
+        target = y0 - (y0 - y1) * num / dx;   /* descending */
+
+scale_out:
+    return (uint32_t)(((uint64_t)target * (uint32_t)ae_target_scale) >> 8);
 }
 
 /* tisp_ae_target_ex — OEM EXACT variant with explicit array pointers.
@@ -9377,8 +9382,11 @@ int isp_core_tunning_unlocked_ioctl(struct file *file, unsigned int cmd, void __
 EXPORT_SYMBOL(isp_core_tunning_unlocked_ioctl);
 
 /* tisp_code_tuning_open - Binary Ninja EXACT implementation */
+extern int isp_subdev_corrupt(const char *, unsigned int);   /* TEMP detector */
+
 int tisp_code_tuning_open(struct inode *inode, struct file *file)
 {
+    isp_subdev_corrupt("tisp-open-IN", 0);   /* TEMP */
     pr_info("ISP M0 device open called from pid %d\n", current->pid);
 
     /* FIXED: Use regular kmalloc instead of precious rmem - tuning buffer doesn't need DMA */
@@ -9411,6 +9419,7 @@ int tisp_code_tuning_open(struct inode *inode, struct file *file)
     file->private_data = tuning_buffer;
 
     /* return 0 */
+    isp_subdev_corrupt("tisp-open-OUT", 0);   /* TEMP */
     return 0;
 }
 EXPORT_SYMBOL(tisp_code_tuning_open);
@@ -9424,8 +9433,19 @@ EXPORT_SYMBOL(tisp_code_tuning_open);
 
 
 
-/* tisp_code_tuning_ioctl - EXACT Binary Ninja reference implementation */
+/* TEMP wrapper: checkpoint subdevs[] integrity around each tuning ioctl to pin the corruptor */
+long tisp_code_tuning_ioctl_real(struct file *file, unsigned int cmd, unsigned long arg);
 long tisp_code_tuning_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+    long r;
+    isp_subdev_corrupt("tisp-ioctl-IN", cmd);
+    r = tisp_code_tuning_ioctl_real(file, cmd, arg);
+    isp_subdev_corrupt("tisp-ioctl-OUT", cmd);
+    return r;
+}
+
+/* tisp_code_tuning_ioctl - EXACT Binary Ninja reference implementation */
+long tisp_code_tuning_ioctl_real(struct file *file, unsigned int cmd, unsigned long arg)
 {
     /* Binary Ninja: Complete IOCTL handler with all parameter operations */
 
@@ -19581,12 +19601,81 @@ int awb_interrupt_static(void)
 		awb_irq_last_raw[3] = buf[3];
 	}
 
+	/* DIAG: periodic global raw per-channel R:G:B from the AWB stats (post-BLC,
+	 * pre-WB-gain, pre-demosaic). Localizes the red-channel kill: if raw R≈G≈B the
+	 * loss is downstream (demosaic/CCM); if raw R≈0 it is upstream (capture/CFA/BLC). */
+	{
+		static unsigned diag_n;
+		if ((diag_n++ % 60) == 0) {
+			/* u32 sums: per-zone R<2^21, x225 zones < 2^29 -> fits u32.
+			 * Avoid 64-bit division (no __udivdi3 in modules on mips32). */
+			u32 R = 0, G = 0, B = 0, P = 0;
+			int i, nz = 0;
+			for (i = 0; i < AWB_STATS_ZONES; i++) {
+				R += awb_shadow_r[i] >> 6;   /* >>6 keeps headroom */
+				G += awb_shadow_g[i] >> 6;
+				B += awb_shadow_b[i] >> 6;
+				P += awb_shadow_p[i];
+				if (awb_shadow_p[i])
+					nz++;
+			}
+			if (P) {
+				u32 rr = R / P, gg = G / P, bb = B / P;
+				pr_info("AWB_RAW_DIAG: cfa(reg8)=%u nz=%d/%d perpix R=%u G=%u B=%u (x1000 R/G=%u B/G=%u)\n",
+					system_reg_read(8), nz, AWB_STATS_ZONES,
+					rr, gg, bb,
+					gg ? (rr * 1000 / gg) : 0,
+					gg ? (bb * 1000 / gg) : 0);
+			} else {
+				pr_info("AWB_RAW_DIAG: cfa(reg8)=%u P=0 (no AWB stats)\n",
+					system_reg_read(8));
+			}
+		}
+	}
+
 	/* OEM EXACT: push event 10 → triggers JZ_Isp_Awb */
 	event_data.event_id = 0xa;
 	if (tisp_event_push(&event_data) != 0)
 		awb_shadow_ready = 0;
 	return 1;
 }
+
+/* DIAG: read the AWB stats DMA buffer IN-KERNEL (bypasses STRICT_DEVMEM that blocks
+ * /dev/mem) and print global raw per-channel R/G/B. The AWB stat-ready IRQ does not
+ * fire on this 6.12 port (bank cycling dead), but the DMA wrote at least one bank, so
+ * this samples the raw Bayer channel balance. Decisive for: does red die at capture
+ * (raw R~0) or post-demosaic (raw R~G~B). Callable from the per-frame work context. */
+void tisp_diag_awb_raw(void)
+{
+	u32 bank, offset, R = 0, G = 0, B = 0, P = 0;
+	u32 *buf;
+	int i, nz = 0, zp = -1;
+
+	if (data_a2f5c == 0) {
+		pr_info("AWB_RAW_DIAG: no AWB buffer (data_a2f5c=0)\n");
+		return;
+	}
+	bank = system_reg_read(0xb050) & 0xff;
+	offset = bank << 12;
+	buf = (u32 *)(unsigned long)(data_a2f5c + offset);
+	private_dma_cache_sync(NULL, buf, 0x1000, 0);
+	for (i = 0; i < AWB_STATS_ZONES; i++) {
+		u32 w0 = buf[i * 4 + 0], w1 = buf[i * 4 + 1];
+		u32 w2 = buf[i * 4 + 2], w3 = buf[i * 4 + 3];
+		u32 r = (w0 & 0x1fffff);          /* raw zone sum, NO >>6 crush */
+		u32 g = (((w1 & 0x3ff) << 11) | (w0 >> 21));
+		u32 b = ((w1 >> 10) & 0x1fffff);
+		u32 p = ((w3 & 1) << 12) | (w2 >> 20);
+		R += r; G += g; B += b; P += p;
+		if (p) { nz++; if (zp < 0) zp = i; }
+	}
+	/* print raw R/G/B sums (u32); compute R/G on the host from dmesg */
+	pr_info("AWB_RAW_DIAG: bank=%u nz=%d/%d reg8=%u P=%u R=%u G=%u B=%u zp%d=[%08x %08x %08x %08x]\n",
+		bank, nz, AWB_STATS_ZONES, system_reg_read(8), P, R, G, B,
+		zp, zp >= 0 ? buf[zp * 4] : 0, zp >= 0 ? buf[zp * 4 + 1] : 0,
+		zp >= 0 ? buf[zp * 4 + 2] : 0, zp >= 0 ? buf[zp * 4 + 3] : 0);
+}
+EXPORT_SYMBOL(tisp_diag_awb_raw);
 
 /* OEM EXACT: tisp_af_get_statistics — unpack AF DMA buffer into stat arrays.
  * Decompiled from OEM at 0x56240. Extracts fird0/fird1/iird0/iird1/y_sum/high_luma_cnt
@@ -21544,7 +21633,7 @@ static u32 tisp_dmsc_cfa_base_from_mbus(u32 mbus_code)
 #ifdef V4L2_MBUS_FMT_SGRBG12_1X12
 	case V4L2_MBUS_FMT_SGRBG12_1X12:
 #endif
-		return 1;
+		return 2;  /* GRBG — T31 HW reg8=2 (not v4l2 order) */
 #ifdef V4L2_MBUS_FMT_SGBRG8_1X8
 	case V4L2_MBUS_FMT_SGBRG8_1X8:
 #endif
@@ -21554,7 +21643,7 @@ static u32 tisp_dmsc_cfa_base_from_mbus(u32 mbus_code)
 #ifdef V4L2_MBUS_FMT_SGBRG12_1X12
 	case V4L2_MBUS_FMT_SGBRG12_1X12:
 #endif
-		return 2;
+		return 3;  /* GBRG */
 #ifdef V4L2_MBUS_FMT_SBGGR8_1X8
 	case V4L2_MBUS_FMT_SBGGR8_1X8:
 #endif
@@ -21564,7 +21653,7 @@ static u32 tisp_dmsc_cfa_base_from_mbus(u32 mbus_code)
 #ifdef V4L2_MBUS_FMT_SBGGR12_1X12
 	case V4L2_MBUS_FMT_SBGGR12_1X12:
 #endif
-		return 3;
+		return 1;  /* BGGR */
 	default:
 		return 0;
 	}
@@ -21600,7 +21689,8 @@ static u32 tisp_dmsc_live_out_opt_word(void)
 	}
 
 	idx = tisp_dmsc_apply_flip_to_cfa(tisp_dmsc_cfa_base_from_mbus(mbus_code), shvflip);
-	return (out_opt & ~0x3u) | idx;
+	(void)idx;  /* OEM writes 0x4800[1:0]=0 (golden); CFA phase comes from core reg8 only */
+	return out_opt & ~0x3u;
 }
 
 int tisp_dmsc_reprogram_sensor_cfa(void)
@@ -32246,7 +32336,7 @@ int tisp_code_create_tuning_node(void)
     }
 
     /* Binary Ninja: tuning_class = __class_create(&__this_module, "isp-m0", 0) */
-    tuning_class = class_create(THIS_MODULE, "isp-m0");
+    tuning_class = class_create("isp-m0");
     if (IS_ERR(tuning_class)) {
         ret = PTR_ERR(tuning_class);
         pr_err("tisp_code_create_tuning_node: Failed to create class: %d\n", ret);
@@ -35532,9 +35622,66 @@ int apical_isp_ae_hist_origin_g_attr(void *ctrl)
 }
 
 /* Sensor control functions - Safe structure-based implementations */
+/* Bug A fix — driver-side AE override.  The open tisp_ae computes MINIMUM gain (its statistics read
+ * the well-lit scene as over-bright), so the sensor sits at init min-gain and the image is ~3x too dark
+ * vs the 4.4 blob (YAVG ~25 vs ~114).  Override the AE's per-frame sensor exposure+gain with a simple
+ * closed loop on the ACTUAL output luma (g_dae_out_luma, sampled from the MSCA output in
+ * ispcore_irq_fs_work).  Tunable live via /sys/module/tx_isp_t31/parameters/dae_*. */
+int dae_enable   = 1;     module_param(dae_enable, int, 0644);     /* 1 = driver AE drives sensor */
+int dae_target   = 108;   module_param(dae_target, int, 0644);    /* target output Y mean (0..255) */
+int dae_expo     = 1500;  module_param(dae_expo, int, 0644);      /* fixed integration time, lines */
+int dae_gain_q10 = 4096;  module_param(dae_gain_q10, int, 0644);  /* current analog gain, Q10 (1024=1x) */
+int dae_kp       = 24;    module_param(dae_kp, int, 0644);        /* P gain (gain-step per luma error) */
+int dae_gain_idx = 8;     module_param(dae_gain_idx, int, 0644);  /* current sensor again LUT index */
+int dae_idx_max  = 25;    module_param(dae_idx_max, int, 0644);   /* gc4653 again_lut max index (0x19) */
+int dae_dest_align = 4096; module_param(dae_dest_align, int, 0644); /* MSCA dest alignment (pow2; 0/1=off) */
+EXPORT_SYMBOL(dae_dest_align);
+/* Manual white balance (the open AWB never applies gains -> the image keeps the sensor's
+ * green/blue cast).  Written into the WB hardware regs (0x1804/0x180c = R-axis, 0x1808/0x1810 =
+ * B-axis, 0x1800=1 latch) by the stream-start fixup.  Q10 where 0x400 = 1.0x. */
+int dae_wb_r = 0x100;  module_param(dae_wb_r, int, 0644);  /* legacy (unused when dae_wb0..3 set) */
+int dae_wb_b = 0x100;  module_param(dae_wb_b, int, 0644);
+/* 4 independent WB Bayer-cell gains (Q8, 0x100=1.0): 0x1804/0x1808/0x180c/0x1810. */
+int dae_wb0 = 0x180;   module_param(dae_wb0, int, 0644);  /* 0x1804: red gain — slight boost vs green cast */
+int dae_wb1 = 0x0F0;   module_param(dae_wb1, int, 0644);  /* 0x1808: blue gain — slight trim */
+int dae_wb2 = 0x100;   module_param(dae_wb2, int, 0644);  /* 0x180c: (no observed effect) */
+int dae_wb3 = 0x100;   module_param(dae_wb3, int, 0644);  /* 0x1810: (no observed effect) */
+EXPORT_SYMBOL(dae_wb0); EXPORT_SYMBOL(dae_wb1); EXPORT_SYMBOL(dae_wb2); EXPORT_SYMBOL(dae_wb3);
+int dae_ccm  = 1;      module_param(dae_ccm, int, 0644);   /* 1 = enable CCM stage (reg 0x5000) */
+EXPORT_SYMBOL(dae_wb_r); EXPORT_SYMBOL(dae_wb_b); EXPORT_SYMBOL(dae_ccm);
+/* Per-frame block-bypass value written to reg 0x0c by the fixup. Default = the
+ * working "all OEM blocks" value. Live-tunable for stage isolation: set bit to
+ * BYPASS a block. bit8(0x100)=DMSC, bit4(0x10)=LSC, bit5(0x20)=GIB, bit10(0x400)=Gamma,
+ * bit12(0x1000)=CLM/BCSH, bit14(0x4000)=Sharpen. e.g. 0xB5740349 bypasses DMSC. */
+int dae_bypass = 0xB5740249;  module_param(dae_bypass, int, 0644);
+EXPORT_SYMBOL(dae_bypass);
+int dae_reclobber = 1;  module_param(dae_reclobber, int, 0644);  /* 0 = fixup stops re-writing demosaic/color/WB/0xc every frame so live devmem pokes stick (red-kill bisect) */
+EXPORT_SYMBOL(dae_reclobber);
+int dae_single_buf = 1;   module_param(dae_single_buf, int, 0644); /* 1 = single VB (no rotation) */
+EXPORT_SYMBOL(dae_single_buf);
+int dae_use_formula = 0;  module_param(dae_use_formula, int, 0644); /* 1 = old formula dest (test) */
+EXPORT_SYMBOL(dae_use_formula);
+int g_dae_out_luma = 0;   /* set each frame by ispcore_irq_fs_work (tx_isp_core.c) */
+EXPORT_SYMBOL(g_dae_out_luma);
+EXPORT_SYMBOL(dae_enable);
+EXPORT_SYMBOL(dae_target);
+EXPORT_SYMBOL(dae_expo);
+EXPORT_SYMBOL(dae_gain_idx);
+EXPORT_SYMBOL(dae_idx_max);
+
 static void tisp_set_sensor_integration_time(uint32_t time)
 {
     pr_debug("tisp_set_sensor_integration_time: Setting integration time to %u\n", time);
+
+    /* Bug A: force a fixed near-max integration time; the closed loop drives brightness via gain. */
+    if (dae_enable) {
+        void *vp = NULL;
+        int32_t s3 = data_b2eec((uint32_t)dae_expo, &vp);
+        _ae_reg.data[0] = s3;
+        data_b2ef4(s3, 0);
+        data_c46a8 = s3;
+        return;
+    }
 
     /* OEM EXACT (0x4e5f0): Branch on tisp_ae_ctrls[0], NOT WDR mode.
      * When ctrls[0] != 0: use cached IT (data_c46a8), update cache+AG
@@ -35582,6 +35729,15 @@ static uint32_t tisp_set_sensor_analog_gain(uint32_t requested_gain)
 {
     unsigned int var_28;
     uint32_t log_result, gain_param, v0_2, final_gain;
+
+    /* Bug A: replace the AE's (broken, always-minimum) gain with a closed loop on real output luma. */
+    if (dae_enable) {
+        int err = dae_target - g_dae_out_luma;   /* +ve => too dark => raise gain */
+        dae_gain_q10 += err * dae_kp;
+        if (dae_gain_q10 < 1024)  dae_gain_q10 = 1024;    /* >= 1.0x */
+        if (dae_gain_q10 > 262144) dae_gain_q10 = 262144; /* <= 256x (sensor alloc clips to real max) */
+        requested_gain = (uint32_t)dae_gain_q10;
+    }
 
     pr_debug("tisp_set_sensor_analog_gain: requested gain=0x%x\n", requested_gain);
 
