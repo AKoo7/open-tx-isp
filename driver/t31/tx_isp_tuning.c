@@ -29904,7 +29904,7 @@ int tisp_hv_flip_get(void)
 /* OEM EXACT: tisp_deinit_free — free ISP DMA buffers on deinit */
 void tx_isp_t31_wdr_stop(void)
 {
-    ACCESS_ONCE(wdr_ready) = false;
+    WRITE_ONCE(wdr_ready, false);
     if (ourISPdev && ourISPdev->isp_irq > 0)
         synchronize_irq(ourISPdev->isp_irq);
     cancel_work_sync(&wdr_work);

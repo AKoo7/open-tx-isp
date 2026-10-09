@@ -75,3 +75,66 @@ static inline void getrawmonotonic(struct timespec *ts)
 #endif
 
 #endif
+
+/* The legacy V4L2_MBUS_FMT_* spellings of the packed-YUV bus formats were
+ * dropped from linux/v4l2-mediabus.h; map them onto MEDIA_BUS_FMT_*. */
+#ifndef V4L2_MBUS_FMT_UYVY8_2X8
+#define V4L2_MBUS_FMT_UYVY8_2X8 MEDIA_BUS_FMT_UYVY8_2X8
+#endif
+#ifndef V4L2_MBUS_FMT_UYVY8_1_5X8
+#define V4L2_MBUS_FMT_UYVY8_1_5X8 MEDIA_BUS_FMT_UYVY8_1_5X8
+#endif
+#ifndef V4L2_MBUS_FMT_UYVY8_1X16
+#define V4L2_MBUS_FMT_UYVY8_1X16 MEDIA_BUS_FMT_UYVY8_1X16
+#endif
+#ifndef V4L2_MBUS_FMT_VYUY8_2X8
+#define V4L2_MBUS_FMT_VYUY8_2X8 MEDIA_BUS_FMT_VYUY8_2X8
+#endif
+#ifndef V4L2_MBUS_FMT_VYUY8_1_5X8
+#define V4L2_MBUS_FMT_VYUY8_1_5X8 MEDIA_BUS_FMT_VYUY8_1_5X8
+#endif
+#ifndef V4L2_MBUS_FMT_VYUY8_1X16
+#define V4L2_MBUS_FMT_VYUY8_1X16 MEDIA_BUS_FMT_VYUY8_1X16
+#endif
+#ifndef V4L2_MBUS_FMT_YUYV8_2X8
+#define V4L2_MBUS_FMT_YUYV8_2X8 MEDIA_BUS_FMT_YUYV8_2X8
+#endif
+#ifndef V4L2_MBUS_FMT_YUYV8_1_5X8
+#define V4L2_MBUS_FMT_YUYV8_1_5X8 MEDIA_BUS_FMT_YUYV8_1_5X8
+#endif
+#ifndef V4L2_MBUS_FMT_YUYV8_1X16
+#define V4L2_MBUS_FMT_YUYV8_1X16 MEDIA_BUS_FMT_YUYV8_1X16
+#endif
+#ifndef V4L2_MBUS_FMT_YUYV10_2X10
+#define V4L2_MBUS_FMT_YUYV10_2X10 MEDIA_BUS_FMT_YUYV10_2X10
+#endif
+#ifndef V4L2_MBUS_FMT_YUYV10_1X20
+#define V4L2_MBUS_FMT_YUYV10_1X20 MEDIA_BUS_FMT_YUYV10_1X20
+#endif
+#ifndef V4L2_MBUS_FMT_YVYU8_2X8
+#define V4L2_MBUS_FMT_YVYU8_2X8 MEDIA_BUS_FMT_YVYU8_2X8
+#endif
+#ifndef V4L2_MBUS_FMT_YVYU8_1_5X8
+#define V4L2_MBUS_FMT_YVYU8_1_5X8 MEDIA_BUS_FMT_YVYU8_1_5X8
+#endif
+#ifndef V4L2_MBUS_FMT_YVYU8_1X16
+#define V4L2_MBUS_FMT_YVYU8_1X16 MEDIA_BUS_FMT_YVYU8_1X16
+#endif
+#ifndef V4L2_MBUS_FMT_YVYU10_2X10
+#define V4L2_MBUS_FMT_YVYU10_2X10 MEDIA_BUS_FMT_YVYU10_2X10
+#endif
+#ifndef V4L2_MBUS_FMT_YVYU10_1X20
+#define V4L2_MBUS_FMT_YVYU10_1X20 MEDIA_BUS_FMT_YVYU10_1X20
+#endif
+
+/* strlcpy() was removed from the kernel in 6.8; strscpy() is the replacement.
+ * Return value semantics differ (strscpy returns -E2BIG on truncation) but every
+ * call site here ignores it. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+#include <linux/string.h>
+static inline size_t strlcpy(char *dst, const char *src, size_t size)
+{
+	int ret = strscpy(dst, src, size);
+	return ret < 0 ? size : (size_t)ret;
+}
+#endif

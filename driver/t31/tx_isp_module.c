@@ -5611,7 +5611,7 @@ static void tx_isp_last_close_teardown(struct tx_isp_dev *isp)
          * module init (frame_channel_init_sync). A NULL list head here
          * would oops in __wake_up_common. */
         if (WARN_ON_ONCE(!state->frame_done.wait.task_list.next ||
-                         !state->frame_wait.task_list.next))
+                         !state->frame_wait.head.next))
             continue;
 
         mutex_lock(&fcd->buffer_mutex);
@@ -5623,7 +5623,7 @@ static void tx_isp_last_close_teardown(struct tx_isp_dev *isp)
             frame_channel_streamoff_locked(fcd, "last close");
             did = true;
         } else if (fcd->open_count > 0 &&
-                   waitqueue_active(&state->frame_done.wait)) {
+                   swait_active(&state->frame_done.wait)) {
             /* A 0x400456bf caller waiting for a first STREAMON that will
              * not come from this ISP setup any more. Only an open channel
              * can have one. */
@@ -6445,7 +6445,7 @@ static int tx_isp_platform_remove(struct platform_device *pdev)
 
 static struct platform_driver tx_isp_driver = {
     .probe = tx_isp_platform_probe,
-    .remove = tx_isp_platform_remove,
+    .remove = (void (*)(struct platform_device *))tx_isp_platform_remove,
     .driver = {
         .name = "tx-isp",
         .owner = THIS_MODULE,

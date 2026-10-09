@@ -428,7 +428,7 @@ int tiziano_wdr_init(u32 width, u32 height)
 	if (!bw || !bh || width > 4095 || height > 4095 ||
 	    15 * bw >= width || 9 * bh >= height || !wdr_dma_buffer)
 		return -EINVAL;
-	ACCESS_ONCE(wdr_ready) = false;
+	WRITE_ONCE(wdr_ready, false);
 	cancel_work_sync(&wdr_work);
 	mutex_lock(&wdr_control_lock);
 	ret = t31_wdr_buffers_get();
@@ -492,7 +492,7 @@ int tiziano_wdr_init(u32 width, u32 height)
 	system_irq_func_set(11, wdr_interrupt_wrapper);
 	tisp_event_set_cb(11, tisp_wdr_process);
 	t31_wdr_ev_update(&wdr_ev, data_9a454, 0);
-	ACCESS_ONCE(wdr_ready) = true;
+	WRITE_ONCE(wdr_ready, true);
 done:
 	mutex_unlock(&wdr_control_lock);
 	return ret;
