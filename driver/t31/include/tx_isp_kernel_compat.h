@@ -138,3 +138,22 @@ static inline size_t strlcpy(char *dst, const char *src, size_t size)
 	return ret < 0 ? size : (size_t)ret;
 }
 #endif
+
+/* strncpy() was removed from the kernel in 7.2 (no declaration, no export).
+ * The recovered OEM code relies on its exact semantics (NUL-pad to count, no
+ * guaranteed terminator), so keep the old lib/string.c implementation. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 2, 0)
+static inline char *tx_isp_strncpy(char *dest, const char *src, size_t count)
+{
+	char *tmp = dest;
+
+	while (count) {
+		if ((*tmp = *src) != 0)
+			src++;
+		tmp++;
+		count--;
+	}
+	return dest;
+}
+#define strncpy tx_isp_strncpy
+#endif
