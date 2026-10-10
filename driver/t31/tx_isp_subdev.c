@@ -591,7 +591,7 @@ int isp_subdev_init_clks(struct tx_isp_subdev *sd, int clk_count)
             }
 
             /* Binary Ninja: int32_t $v0_3 = private_clk_get(*(arg1 + 4), *$s6_1) */
-            clk = clk_get(sd->module.dev, clk_name);
+            clk = private_clk_get(sd->module.dev, clk_name);
             clk_array[i] = clk;
 
             /* Binary Ninja: if ($v0_3 u< 0xfffff001) */
