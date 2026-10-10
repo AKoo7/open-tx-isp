@@ -590,6 +590,45 @@ static const TX_ISP_PROC_OPS tx_isp_sinfo_events_fops = {
 
 static void tx_isp_sinfo_slot_sync_compat(int index);
 
+/*
+ * Single-sensor userspace (raptor rvd, the webui, the `sensor` script) and the
+ * per-sensor sensor-info modules read the first sensor flat, as
+ * /proc/jz/sensor/<key>.  Mirror slot 0 there as symlinks into sensor0/; rvd
+ * otherwise takes the sensor size from its stream0 config and leaves the main
+ * channel unscaled.  Both are called under tx_isp_sinfo_publish_lock.
+ */
+static bool tx_isp_sinfo_flat_published;
+
+static void tx_isp_sinfo_flat_publish(void)
+{
+	char target[32];
+	int key;
+
+	if (tx_isp_sinfo_flat_published || !tx_isp_sinfo_root)
+		return;
+	for (key = 0; key < TX_ISP_SINFO_NKEYS; ++key) {
+		if (!tx_isp_sinfo_key_supported(key))
+			continue;
+		snprintf(target, sizeof(target), "sensor0/%s",
+			 tx_isp_sinfo_key_name[key]);
+		proc_symlink(tx_isp_sinfo_key_name[key], tx_isp_sinfo_root,
+			     target);
+	}
+	tx_isp_sinfo_flat_published = true;
+}
+
+static void tx_isp_sinfo_flat_unpublish(struct proc_dir_entry *root)
+{
+	int key;
+
+	if (!tx_isp_sinfo_flat_published || !root)
+		return;
+	for (key = 0; key < TX_ISP_SINFO_NKEYS; ++key)
+		if (tx_isp_sinfo_key_supported(key))
+			remove_proc_entry(tx_isp_sinfo_key_name[key], root);
+	tx_isp_sinfo_flat_published = false;
+}
+
 #ifdef TX_ISP_SINFO_STABLE_PROC_SNAPSHOT
 #define TX_ISP_SINFO_LAYOUT_OPT	__attribute__((optimize("Os")))
 #else
@@ -636,6 +675,8 @@ tx_isp_sinfo_slot_publish(struct tx_isp_sinfo_slot *slot, int index)
 				 &slot->files[key]);
 #endif
 	}
+	if (index == 0)
+		tx_isp_sinfo_flat_publish();
 }
 #undef TX_ISP_SINFO_LAYOUT_OPT
 
@@ -839,6 +880,8 @@ static int tx_isp_sinfo_del_slots(struct i2c_driver *drv, struct module *mod)
 		tx_isp_sinfo_stats.driver_del_slots++;
 	}
 	mutex_unlock(&tx_isp_sinfo_lock);
+	if (had_dir[0])
+		tx_isp_sinfo_flat_unpublish(root);
 	for (i = 0; i < TX_ISP_SINFO_MAX_SENSORS; ++i)
 		if (had_dir[i] && root)
 			remove_proc_subtree(dirnames[i], root);
@@ -1110,6 +1153,8 @@ void tx_isp_sinfo_exit(void)
 	}
 	mutex_unlock(&tx_isp_sinfo_lock);
 	if (root) {
+		/* remove_proc_subtree() below takes the flat symlinks too. */
+		tx_isp_sinfo_flat_published = false;
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 17, 0)
 		remove_proc_subtree("sensor", jz_root);
 #else
