@@ -788,6 +788,7 @@ int tx_isp_subdev_init(struct platform_device *pdev, struct tx_isp_subdev *sd,
     struct resource *mem_res = NULL;
     const char *dev_name_str;
     struct tx_isp_subdev_platform_data *pdata;
+    struct tx_isp_irq_info *irq_owner = NULL;	/* dev_id of the IRQ we requested */
     void __iomem *regs;
     int ret;
     int i;
@@ -882,6 +883,7 @@ int tx_isp_subdev_init(struct platform_device *pdev, struct tx_isp_subdev *sd,
 					ret = tx_isp_request_irq(pdev, irq_dst);
 					if (ret != 0)
 						goto cleanup_irq;
+					irq_owner = irq_dst;
 					sd->irqdev.irq = irq_dst->irq;
 				} else {
 					struct tx_isp_irq_info irq_tmp = {0};
@@ -974,14 +976,15 @@ int tx_isp_subdev_init(struct platform_device *pdev, struct tx_isp_subdev *sd,
                 ret = isp_subdev_init_clks(sd, pdata->clk_num);
                 if (ret != 0) {
                     pr_err("*** tx_isp_subdev_init: Clock initialization failed: %d ***\n", ret);
-                    return ret;
+                    goto cleanup_regs;
                 }
                 pr_info("*** tx_isp_subdev_init: Clock initialization complete ***\n");
 
                 ret = tx_isp_subdev_init_pads(sd, pdata);
                 if (ret != 0) {
                     pr_err("*** tx_isp_subdev_init: Pad initialization failed: %d ***\n", ret);
-                    return ret;
+                    isp_subdev_release_clks(sd);
+                    goto cleanup_regs;
                 }
             } else {
                 /* Binary Ninja: isp_printf(0, tiziano_wdr_params_refresh, result_4) */
@@ -1009,10 +1012,13 @@ cleanup_mem:
     }
 
 cleanup_irq:
-    if (sd->irqdev.irq > 0) {
-        free_irq(sd->irqdev.irq, &sd->irqdev);
-        sd->irqdev.irq = 0;
-    }
+    /* Clock/pad failures used to return straight out of here, leaving the
+     * IRQ installed after the module was gone.  Free it with the dev_id it
+     * was requested with (irq_dst), not &sd->irqdev: free_irq() with the wrong
+     * dev_id only WARNs and frees nothing. */
+    if (irq_owner && irq_owner->irq > 0)
+        tx_isp_free_irq(irq_owner);
+    sd->irqdev.irq = 0;
     tx_isp_module_deinit(sd);
     return ret;
 }

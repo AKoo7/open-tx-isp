@@ -4508,7 +4508,10 @@ int tx_isp_core_probe(struct platform_device *pdev)
         isp_printf(2, "Failed to init isp subdev!\n");
     }
 
-    kfree(isp_dev);
+    /* The OEM probe kzalloc()s its own device and frees it here.  This one
+     * adopts the global ourISPdev (tx_isp_init allocates it, tx_isp_exit frees
+     * it), so freeing it left ourISPdev dangling with isp-m0's IRQ dev_id
+     * inside it: the IRQ was never freed and tx_isp_exit freed it twice. */
     return -ENOMEM;
 }
 
